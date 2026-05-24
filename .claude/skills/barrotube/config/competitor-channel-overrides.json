@@ -1,0 +1,6 @@
+{
+  "version": "1.0",
+  "description": "운영자 수동 매핑 — 마케팅 리포트의 채널명 → YouTube UC ID. YouTube search.list가 잘못된 채널을 가리킬 때 강제 매핑. 비어있어도 OK.",
+  "overrides": {
+  }
+}

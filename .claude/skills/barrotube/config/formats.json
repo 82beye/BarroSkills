@@ -1,0 +1,99 @@
+{
+  "version": "1.0",
+  "description": "영상 포맷 정의. channel=econ-daily는 shorts + long-3min 듀얼 라인 운영.",
+  "formats": [
+    {
+      "id": "shorts",
+      "display_name": "Shorts 60s",
+      "description": "데일리 경제 이슈 + 롱폼 파생본. 9:16 세로, Shorts 피드 진입 최적화.",
+      "default_persona": "barro-alert",
+      "duration": {
+        "target_seconds": 60,
+        "tolerance_seconds": 2,
+        "qa_accept_range": [58, 62]
+      },
+      "scene_count": 5,
+      "scene_length_seconds": { "min": 10, "max": 14 },
+      "canvas": {
+        "width": 1080,
+        "height": 1920,
+        "ratio": "9:16"
+      },
+      "style_guide_path": "workspace/channels/{channel}/style-guide-shorts.md",
+      "metadata": {
+        "shorts_tag": true,
+        "description_suffix": "#Shorts",
+        "auto_hashtags": ["#Shorts", "#경제", "#경제기초", "#3분경제", "#투자", "#BarroTube", "#경제공부"],
+        "auto_hashtags_note": "S9 Metadata 단계에서 자동 적용. 에피소드별 시리즈 키워드는 series.json source.blue_ocean_keywords에서 추가 병합."
+      },
+      "pipeline": {
+        "skip_stages": ["S2_market_research", "S3_strategy"],
+        "script_prompt_variant": "shorts_5scene_60s",
+        "asset_generation_count": 5
+      },
+      "budget_profile_ref": "shorts"
+    },
+    {
+      "id": "long-3min",
+      "display_name": "롱폼 3분 시리즈",
+      "description": "체계적 교육 커리큘럼 (S&P500 입문 등). 16:9 가로, 시청 지속시간 최적화.",
+      "default_persona": "barro-teacher",
+      "duration": {
+        "target_seconds": 180,
+        "tolerance_seconds": 10,
+        "qa_accept_range": [170, 190]
+      },
+      "scene_count": 7,
+      "scene_length_seconds": { "min": 10, "max": 40 },
+      "canvas": {
+        "width": 1920,
+        "height": 1080,
+        "ratio": "16:9"
+      },
+      "style_guide_path": "workspace/channels/{channel}/style-guide-long.md",
+      "metadata": {
+        "shorts_tag": false,
+        "description_suffix": ""
+      },
+      "pipeline": {
+        "skip_stages": [],
+        "script_prompt_variant": "long_7scene_180s",
+        "asset_generation_count": 7,
+        "mid_hook_required_at_seconds": 75,
+        "series_context_loading": true
+      },
+      "budget_profile_ref": "long-3min"
+    }
+  ],
+  "derivation_policy": {
+    "enabled": true,
+    "auto_derive_from": "long-3min",
+    "auto_derive_to": "shorts",
+    "auto_derive_count_per_parent": 1,
+    "max_derive_count_per_parent": 2,
+    "derive_timing": "parent_publish_plus_3_hours",
+    "persona_switch_required": true,
+    "parent_tracking_field": "parent_ticket_id",
+    "budget_reuse": true,
+    "description": "롱폼 발행 +3시간 후 파생 Shorts 1편 자동 생성. 톤은 barro-alert로 전환. 이미지 재활용으로 비용 절감."
+  },
+  "channel_format_mapping": {
+    "econ-daily": {
+      "enabled_formats": ["shorts", "long-3min"],
+      "weekly_schedule": {
+        "shorts": {
+          "cadence": "daily",
+          "slots_per_week": 7,
+          "time_kst": "11:30",
+          "note": "매일 오전 11:30 업로드 (재고 있을 때). 롱폼 파생 + 전용 Shorts 혼합. CMO 확정 2026-04-28 YOU-103 기반."
+        },
+        "long-3min": {
+          "cadence": "tue_thu",
+          "slots_per_week": 2,
+          "time_kst": "07:00",
+          "note": "화·목 오전 07:00 업로드. CMO 확정 2026-04-28 YOU-103 기반."
+        }
+      }
+    }
+  }
+}

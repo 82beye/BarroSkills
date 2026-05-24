@@ -1,0 +1,30 @@
+{
+  "name": "barrotube-youtube-studio-co",
+  "version": "1.0.0",
+  "description": "YouTube Studio Co. — Multi-agent YouTube automation system powered by Claude Code CLI + Paperclip",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "bootstrap": "node scripts/automation/bootstrap.js",
+    "episode:create": "node scripts/automation/create-episode.js",
+    "episode:run": "node scripts/automation/run-episode.js",
+    "episode:status": "node scripts/automation/episode-status.js",
+    "schedule:install": "node scripts/automation/install-schedule.js",
+    "schedule:remove": "node scripts/automation/remove-schedule.js",
+    "budget:report": "node scripts/automation/budget-report.js",
+    "secrets:audit": "node scripts/automation/config-loader.js audit",
+    "notify:test": "node scripts/automation/notify.js episode_complete '{\"episode_id\":\"EP-TEST\",\"channel_id\":\"econ-daily\"}'",
+    "capcut-builder": "node tools/capcut-builder/bin/capcut-builder.js",
+    "sync:agents": "node scripts/automation/sync-agents.js",
+    "sync:agents:dry": "node scripts/automation/sync-agents.js --dry-run"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "ajv": "^8.17.0",
+    "ajv-formats": "^3.0.0",
+    "sharp": "^0.34.5",
+    "yaml": "^2.6.0"
+  }
+}

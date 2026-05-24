@@ -1,0 +1,75 @@
+# channel-config.yaml
+# 채널별 운영 설정 — workspace/channels/<channel>/channel.yaml에 저장
+#
+# 새 채널 추가 시 본 템플릿 복사 후 수정:
+#   cp templates/channel-config.yaml workspace/channels/<new-channel>/channel.yaml
+#   vi workspace/channels/<new-channel>/channel.yaml
+
+channel:
+  id: <channel-id>                    # 예: econ-daily, ai-investing 등
+  name: <한국어 채널명>
+  description: <한 줄 설명>
+  language: ko
+  target_country: KR
+
+youtube:
+  channel_id: UC...                   # YouTube Studio에서 확인
+  default_privacy: unlisted           # public | unlisted | private
+  category_id: 22                     # YouTube category ID (22=People & Blogs)
+  upload_quota_daily: 6               # 일일 업로드 상한 (10,000 unit / 1600/영상)
+
+formats:                              # 이 채널에서 활성화된 포맷 (formats.json id 참조)
+  - shorts
+  - long-3min
+
+default_persona:
+  shorts: barro-alert
+  long-3min: barro-teacher
+
+cadence:
+  long-3min:
+    target_per_week: 3                # 주당 발행 목표
+    days: [Mon, Wed, Fri]             # 발행 요일
+    time: "12:00"                     # 발행 시각 (KST)
+  shorts:
+    target_per_week: 7                # 일 1편
+    days: [Mon, Tue, Wed, Thu, Fri, Sat, Sun]
+    time: "18:00"
+
+branding:
+  intro_card:
+    template_path: workspace/channels/<channel-id>/intro-template.png
+    duration_seconds: 2
+    audio: silent
+  thumbnail:
+    style_guide_path: workspace/channels/<channel-id>/style-guide-thumbnail.md
+    max_korean_chars: 6
+    color_palette:
+      barro-teacher: "#F4A261"       # 오렌지
+      barro-alert: "#E63946"          # 빨강
+  brand_dna_path: workspace/channels/<channel-id>/brand-dna.md
+
+style_guides:
+  shorts: workspace/channels/<channel-id>/style-guide-shorts.md
+  long-3min: workspace/channels/<channel-id>/style-guide-long.md
+
+playlists:
+  auto_register_for_series: true      # 시리즈 마지막 EP 후 자동 등록
+  default_privacy: unlisted
+
+budget_override:                      # 채널별 예산 한도 override (선택)
+  # producer: 80                      # 기본 budget-policy.json $60 → 채널별 $80
+  # 미설정 시 budget-policy.json의 글로벌 한도 적용
+
+competitor_channels:                  # 마케팅 분석 대상 (config/competitor-channels.json 외 추가)
+  # - UC1234567
+  # - UC7890123
+
+seo:
+  blue_ocean_keywords:
+    - 키워드1
+    - 키워드2
+  default_hashtags:
+    - "#경제"
+    - "#투자"
+    - "#BarroTube"

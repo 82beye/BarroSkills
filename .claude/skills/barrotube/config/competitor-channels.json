@@ -1,0 +1,35 @@
+{
+  "version": "2.0",
+  "description": "경쟁사 채널 동적 추출 정책 (v2.0, 2026-05-01). 정적 채널 목록을 두지 않고 Marketing Analyst가 PaperClip에 작성한 마케팅 리포트(workspace/intel/marketing/*.json)에서 자동 추출. 채널명 → YouTube UC ID는 search.list로 자동 해석 후 cache. v1.0 정적 channels[] 목록은 제거됨.",
+  "extraction": {
+    "source_dir": "workspace/intel/marketing",
+    "max_reports": 3,
+    "max_age_days": 30,
+    "channel_name_patterns": [
+      { "type": "h3_section", "regex": "^###\\s*채널\\s*\\d+\\s*:\\s*([^\\n(]+?)\\s*(?:\\(|$)", "comment": "예: ### 채널 1: 슈카월드 (대표 벤치마크)" },
+      { "type": "h2_section", "regex": "^##\\s*채널\\s*\\d+\\s*:\\s*([^\\n(]+?)\\s*(?:\\(|$)" },
+      { "type": "table_row", "regex": "^\\|\\s*\\d+\\s*\\|\\s*([^|]+?)\\s*\\|", "comment": "예: | 1 | 슈카월드 | 360만 |" }
+    ],
+    "exclude_names": ["채널명", "구독자", "비고", "BarroTube"],
+    "min_name_length": 2,
+    "max_name_length": 30
+  },
+  "channel_id_resolution": {
+    "cache_file": "workspace/intel/competitors/channel-id-cache.json",
+    "manual_overrides_file": "paperclip/config/competitor-channel-overrides.json",
+    "youtube_search_when_miss": true,
+    "search_max_results": 3,
+    "search_region_code": "KR",
+    "search_relevance_language": "ko"
+  },
+  "tracking": {
+    "fields": ["subscriberCount", "videoCount", "viewCount"],
+    "recent_videos_per_channel": 10,
+    "recent_videos_window_days": 7
+  },
+  "operator_notes": {
+    "manual_overrides": "YouTube search 결과가 잘못된 채널을 가리킬 경우(동명이인·공식 채널 vs 클립 채널 등), paperclip/config/competitor-channel-overrides.json에 {\"<채널명>\": \"UC...\"}를 추가하면 search 결과 무시하고 강제 매핑.",
+    "cache_invalidation": "채널이 이름을 바꿨거나 매핑이 잘못된 경우 channel-id-cache.json에서 해당 entry 삭제 → 다음 fetch 시 재해석.",
+    "report_format_change": "Marketing Analyst가 새로운 마크다운 형식을 사용할 경우 위 channel_name_patterns 배열에 정규식 추가."
+  }
+}

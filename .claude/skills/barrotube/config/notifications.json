@@ -1,0 +1,32 @@
+{
+  "notifications": {
+    "version": "1.1",
+    "telegram": {
+      "enabled": true,
+      "bot_username": "@BarroTubeBot",
+      "bot_token": null,
+      "chat_id": null,
+      "parse_mode": "HTML"
+    },
+    "email": {
+      "enabled": false,
+      "smtp_host": "smtp.gmail.com",
+      "smtp_port": 587,
+      "from": null,
+      "to": [],
+      "use_keychain_password": true
+    },
+    "macos_notification": {
+      "enabled": true,
+      "fallback": true
+    },
+    "triggers": {
+      "episode_complete": ["telegram", "macos_notification"],
+      "episode_failed": ["telegram", "macos_notification"],
+      "board_approval_needed": ["telegram", "macos_notification"],
+      "budget_alert": ["telegram"],
+      "daily_report": ["telegram"],
+      "agent_timeout": ["telegram", "macos_notification"]
+    }
+  }
+}

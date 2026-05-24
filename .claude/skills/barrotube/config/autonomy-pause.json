@@ -1,0 +1,24 @@
+{
+  "status": "active",
+  "version": 1,
+  "updated_at": "2026-05-24T00:00:00+09:00",
+  "updated_by": "barroskills-init",
+  "note": "BarroSkills 자율 운영 마스터 스위치. status=paused 시 auto-pipeline + 모든 routine cron 즉시 종료. 운영자가 수동 편집 또는 Telegram /pause·/resume으로 토글.",
+  "guards": {
+    "max_episodes_per_day": 1,
+    "max_publish_per_day": 3,
+    "max_new_series_per_day": 1,
+    "publish_remains_human_only": false,
+    "publish_requires_telegram_window": true,
+    "publish_reject_window_minutes": 30,
+    "publish_telegram_notify": true,
+    "auto_pipeline_enabled": true,
+    "budget_alert_threshold_pct": 80,
+    "budget_block_threshold_pct": 90,
+    "factcheck_max_rewrites": 2,
+    "qa_min_score": 60,
+    "serial_processing_enforced": true,
+    "accept_new_issues": true
+  },
+  "history": []
+}

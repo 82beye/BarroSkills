@@ -1,0 +1,85 @@
+{
+  "company": {
+    "name": "YouTube Studio Co.",
+    "codename": "BarroTube",
+    "mission": "한 명의 운영자가 Board 역할만 수행하면, Claude Code 기반의 전문 에이전트 팀이 기획·자료조사·집필·팩트체크·자산 생성·인트로/썸네일 브랜딩·CapCut 프로젝트 합성·QA·업로드·재생목록 등록까지 수행하는 편당 5천 원 수준의 무인 콘텐츠 라인을 가동한다.",
+    "target_os": "macOS 14+",
+    "created_at": "2026-04-16",
+    "version": "1.1",
+    "version_notes": {
+      "1.1": "2026-04-25 — Intro card + YouTube thumbnail + Playlist 자동화 단계(S6d/S6e/S12) 추가. OAuth scope 확장(youtube.upload + youtube)."
+    }
+  },
+  "governance": {
+    "board_approval_required": ["S10_publish"],
+    "auto_approval_stages": ["S1", "S2", "S3", "S4", "S5", "S6", "S6a", "S6b", "S6c", "S6d", "S6e", "S7", "S7b", "S8", "S9", "S12"],
+    "escalation_policy": {
+      "max_rewrites_per_episode": 2,
+      "heartbeat_timeout_minutes": 90,
+      "budget_alert_threshold_pct": 80
+    }
+  },
+  "pipeline_stages": {
+    "S0": "brief",
+    "S1": "ticket",
+    "S2": "research",
+    "S3": "strategy",
+    "S4": "script",
+    "S5": "factcheck",
+    "S6a": "tts",
+    "S6b": "duration_sync",
+    "S6c": "scene_images",
+    "S6d": "intro_card",
+    "S6e": "thumbnail",
+    "S7": "render",
+    "S7b": "capcut_draft",
+    "S8": "qa",
+    "S9": "metadata",
+    "S10": "board_approval",
+    "S11": "publish",
+    "S12": "playlist_register"
+  },
+  "branding_rules": {
+    "intro_card": {
+      "required": true,
+      "duration_seconds": 2,
+      "audio": "silent",
+      "filename": "45_intro.png",
+      "format_aspect": { "shorts": "9:16", "long-3min": "16:9" },
+      "regenerate_on_dna_change": true
+    },
+    "thumbnail": {
+      "required": true,
+      "filename": "47_thumbnail.png",
+      "format_aspect": { "shorts": "9:16", "long-3min": "16:9 (1280x720)" },
+      "text_exception": ["series_badge", "main_hook", "tagline"],
+      "auto_palette_from_role": true,
+      "max_korean_chars": 6
+    },
+    "playlist": {
+      "required_for_series": true,
+      "auto_register_after_last_episode": true,
+      "default_privacy": "unlisted",
+      "metadata_record_path": "workspace/channels/{channel}/{series_id}-playlist.json"
+    }
+  },
+  "auth_requirements": {
+    "youtube_oauth_scopes": [
+      "https://www.googleapis.com/auth/youtube.upload",
+      "https://www.googleapis.com/auth/youtube"
+    ],
+    "youtube_scope_rationale": "youtube.upload 단독으로는 playlists.insert/update 호출 시 ACCESS_TOKEN_SCOPE_INSUFFICIENT(403). 재생목록·썸네일 일괄 갱신을 위해 youtube 전체 scope 필요.",
+    "phone_verification_required_for": ["thumbnails.set"],
+    "phone_verification_note": "한 전화번호당 12개월 내 2개 채널 인증 한도. 채널별 별도 번호 필요할 수 있음."
+  },
+  "defaults": {
+    "target_video_length_seconds": 480,
+    "language": "ko",
+    "canvas": {
+      "width": 1920,
+      "height": 1080,
+      "ratio": "16:9"
+    },
+    "monthly_target_episodes_per_channel": 25
+  }
+}

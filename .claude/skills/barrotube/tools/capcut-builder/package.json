@@ -1,0 +1,16 @@
+{
+  "name": "@barrotube/capcut-builder",
+  "version": "1.0.0",
+  "description": "CapCut PC draft_content.json builder CLI for BarroTube",
+  "type": "module",
+  "bin": {
+    "capcut-builder": "./bin/capcut-builder.js"
+  },
+  "scripts": {
+    "build": "echo 'No build step needed'",
+    "test": "node --test src/*.test.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

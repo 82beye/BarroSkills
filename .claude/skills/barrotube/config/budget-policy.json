@@ -1,0 +1,168 @@
+{
+  "budget_policy": {
+    "version": "1.2",
+    "changelog": [
+      { "version": "1.0", "date": "2026-04-16", "change": "초기 role별 쿼터" },
+      { "version": "1.1", "date": "2026-04-22", "change": "format별 per-episode 쿼터 + derivation_type 재활용 정책 추가" },
+      { "version": "1.2", "date": "2026-05-13", "change": "ORG_CHART v2.0 4개 role 정본화 — cmo($0), content-manager($20), marketing-analyst($0), producer-shorts($60). 운영자 결정 (agent-audit-2026-05-13 결함 #3)." }
+    ],
+    "currency": "USD",
+    "billing_cycle": "monthly",
+    "alert_threshold_pct": 80,
+    "roles": {
+      "ceo": {
+        "monthly_limit": 20,
+        "on_limit": "pause_new_episodes",
+        "notify": ["board"],
+        "tracking": ["llm_tokens"]
+      },
+      "producer": {
+        "monthly_limit": 60,
+        "on_limit": "pause_episode",
+        "notify": ["board"],
+        "tracking": ["llm_tokens"]
+      },
+      "strategist": {
+        "monthly_limit": 40,
+        "on_limit": "defer_next_episode",
+        "notify": ["producer", "board"],
+        "tracking": ["llm_tokens"]
+      },
+      "writer": {
+        "monthly_limit": 120,
+        "on_limit": "defer_next_episode",
+        "notify": ["producer", "board"],
+        "tracking": ["llm_tokens"]
+      },
+      "fact-checker": {
+        "monthly_limit": 60,
+        "on_limit": "pause_episode",
+        "notify": ["producer", "board"],
+        "tracking": ["llm_tokens", "web_search_calls"]
+      },
+      "image-generator": {
+        "monthly_limit": 150,
+        "on_limit": "defer_next_episode",
+        "notify": ["asset-pm", "producer"],
+        "tracking": ["image_gen_calls", "llm_tokens"]
+      },
+      "voice-engineer": {
+        "monthly_limit": 120,
+        "on_limit": "defer_next_episode",
+        "notify": ["asset-pm", "producer"],
+        "tracking": ["tts_characters", "llm_tokens"]
+      },
+      "capcut-composer": {
+        "monthly_limit": 20,
+        "on_limit": "pause_episode",
+        "notify": ["producer"],
+        "tracking": ["llm_tokens"]
+      },
+      "qa-reviewer": {
+        "monthly_limit": 60,
+        "on_limit": "pause_episode",
+        "notify": ["producer", "board"],
+        "tracking": ["llm_tokens", "web_search_calls"]
+      },
+      "metadata-writer": {
+        "monthly_limit": 30,
+        "on_limit": "defer_next_episode",
+        "notify": ["producer"],
+        "tracking": ["llm_tokens"]
+      },
+      "publisher": {
+        "monthly_limit": 10,
+        "on_limit": "fallback_manual_upload",
+        "notify": ["producer", "board"],
+        "tracking": ["api_calls"]
+      },
+      "cmo": {
+        "monthly_limit": 0,
+        "on_limit": "halt",
+        "notify": ["board"],
+        "tracking": ["llm_tokens"]
+      },
+      "content-manager": {
+        "monthly_limit": 20,
+        "on_limit": "defer_next_episode",
+        "notify": ["ceo", "board"],
+        "tracking": ["llm_tokens"]
+      },
+      "marketing-analyst": {
+        "monthly_limit": 0,
+        "on_limit": "halt",
+        "notify": ["cmo", "board"],
+        "tracking": ["llm_tokens", "web_search_calls"]
+      },
+      "producer-shorts": {
+        "monthly_limit": 60,
+        "on_limit": "pause_episode",
+        "notify": ["ceo", "board"],
+        "tracking": ["llm_tokens"]
+      }
+    },
+    "daily_alerts": {
+      "enabled": true,
+      "time": "09:00",
+      "timezone": "Asia/Seoul",
+      "include_cost_breakdown": true
+    },
+    "format_profiles": {
+      "description": "포맷별 편당 예상 비용 캡. role별 limit과 독립적으로 체크 — 포맷 단가 이상 지출 시 producer 알림.",
+      "shorts": {
+        "per_episode_cap_usd": 4.0,
+        "monthly_episode_target": 28,
+        "monthly_cap_usd": 112,
+        "on_limit": "pause_shorts_line_notify_producer",
+        "cost_breakdown_estimate": {
+          "tts_characters_usd": 0.3,
+          "image_generation_usd": 2.0,
+          "llm_tokens_usd": 1.2,
+          "misc_usd": 0.5
+        }
+      },
+      "long-3min": {
+        "per_episode_cap_usd": 9.0,
+        "monthly_episode_target": 12,
+        "monthly_cap_usd": 108,
+        "on_limit": "pause_long_line_notify_board",
+        "cost_breakdown_estimate": {
+          "tts_characters_usd": 0.9,
+          "image_generation_usd": 2.8,
+          "llm_tokens_usd": 4.3,
+          "misc_usd": 1.0
+        }
+      }
+    },
+    "derivation_policy": {
+      "description": "롱폼 → 파생 Shorts 생성 시 자산 재활용으로 비용 대폭 절감.",
+      "derived_shorts": {
+        "reuse_assets": ["images", "voice_profile", "bgm"],
+        "new_assets_required": ["script_rewrite_alert_tone", "selected_scenes_tts"],
+        "per_episode_cap_usd": 1.5,
+        "monthly_derived_count_target": 12,
+        "monthly_cap_usd": 18,
+        "cost_breakdown_estimate": {
+          "tts_characters_usd": 0.2,
+          "llm_tokens_usd": 1.0,
+          "misc_usd": 0.3
+        },
+        "parent_budget_chargeback": false,
+        "separate_tracking": true
+      }
+    },
+    "channel_budget_summary": {
+      "econ-daily": {
+        "monthly_episodes_total": 52,
+        "breakdown": {
+          "shorts_new": { "count": 28, "usd": 112 },
+          "long_3min": { "count": 12, "usd": 108 },
+          "derived_shorts": { "count": 12, "usd": 18 }
+        },
+        "monthly_total_usd_cap": 238,
+        "monthly_total_krw_estimate": 321300,
+        "notes": "USD 1 = KRW 1350 추정. 실제 발행 편수·단가 변동 반영 필요."
+      }
+    }
+  }
+}

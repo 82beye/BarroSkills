@@ -1,0 +1,75 @@
+{
+  "domain_whitelist": {
+    "version": "1.0",
+    "description": "Paperclip extension 레이어에서 강제하는 도메인 화이트리스트. 목록 외 fetch 호출은 거부.",
+    "allowed_domains": {
+      "llm_providers": [
+        "api.anthropic.com",
+        "generativelanguage.googleapis.com",
+        "api.openai.com"
+      ],
+      "image_generation": [
+        "fal.run",
+        "api.fal.ai",
+        "api.replicate.com",
+        "api.openai.com"
+      ],
+      "tts": [
+        "api.elevenlabs.io",
+        "api.openai.com"
+      ],
+      "youtube": [
+        "www.googleapis.com",
+        "youtube.googleapis.com",
+        "oauth2.googleapis.com",
+        "accounts.google.com"
+      ],
+      "search_and_verify": [
+        "www.google.com",
+        "scholar.google.com",
+        "news.google.com",
+        "search.naver.com",
+        "kostat.go.kr",
+        "www.bok.or.kr",
+        "data.imf.org",
+        "data.worldbank.org",
+        "www.reuters.com",
+        "apnews.com",
+        "www.bbc.com",
+        "www.yonhapnews.co.kr"
+      ],
+      "bgm_library": [
+        "studio.youtube.com",
+        "pixabay.com",
+        "cdn.pixabay.com",
+        "archive.org",
+        "ia800100.us.archive.org",
+        "ia801000.us.archive.org",
+        "ia903005.us.archive.org"
+      ],
+      "asset_library": [
+        "en.wikipedia.org",
+        "ko.wikipedia.org",
+        "commons.wikimedia.org",
+        "upload.wikimedia.org",
+        "cdn.simpleicons.org",
+        "cdn.jsdelivr.net",
+        "raw.githubusercontent.com"
+      ],
+      "notifications": [
+        "api.telegram.org",
+        "smtp.gmail.com"
+      ],
+      "internal_services": [
+        "127.0.0.1",
+        "localhost"
+      ]
+    },
+    "blocked_patterns": [
+      "*.onion",
+      "*.tor2web.*",
+      "pastebin.com",
+      "hastebin.com"
+    ]
+  }
+}

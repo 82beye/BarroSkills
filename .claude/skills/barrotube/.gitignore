@@ -1,0 +1,26 @@
+# Secrets (데이터 영역 ~/BarroTubeData/에 있음)
+.env
+.env.local
+.env.*.local
+*.key
+secrets/
+
+# Data symlinks (외부 ~/BarroTubeData/ 가리킴 — 다른 환경에서는 운영자가 직접 생성)
+workspace
+logs
+
+# 단 .env.example은 commit 대상 (셋업 가이드)
+!.env.example
+
+# Backup
+*.bak
+*.bak.*
+config/*.bak.*
+
+# macOS
+.DS_Store
+
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log

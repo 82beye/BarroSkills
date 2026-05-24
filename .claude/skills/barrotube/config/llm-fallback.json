@@ -1,0 +1,54 @@
+{
+  "llm_fallback_chain": {
+    "version": "1.0",
+    "description": "LLM 폴백 체인 - 1차 Anthropic → 2차 Google Gemini → 3차 OpenAI",
+    "max_fallback_time_seconds": 2,
+    "providers": [
+      {
+        "priority": 1,
+        "name": "anthropic",
+        "models": {
+          "opus": "claude-opus-4-6",
+          "sonnet": "claude-sonnet-4-6",
+          "haiku": "claude-haiku-4-5"
+        },
+        "api_base": "https://api.anthropic.com",
+        "key_source": "keychain:ANTHROPIC_API_KEY",
+        "timeout_ms": 30000,
+        "retry_count": 1
+      },
+      {
+        "priority": 2,
+        "name": "google",
+        "models": {
+          "opus": "gemini-2.5-pro",
+          "sonnet": "gemini-2.5-flash",
+          "haiku": "gemini-2.5-flash"
+        },
+        "api_base": "https://generativelanguage.googleapis.com",
+        "key_source": "keychain:GOOGLE_AI_API_KEY",
+        "timeout_ms": 30000,
+        "retry_count": 1
+      },
+      {
+        "priority": 3,
+        "name": "openai",
+        "models": {
+          "opus": "gpt-4.1",
+          "sonnet": "gpt-4.1-mini",
+          "haiku": "gpt-4.1-nano"
+        },
+        "api_base": "https://api.openai.com",
+        "key_source": "keychain:OPENAI_API_KEY",
+        "timeout_ms": 30000,
+        "retry_count": 1
+      }
+    ],
+    "fallback_behavior": {
+      "trigger": "api_error OR timeout",
+      "log_fallback": true,
+      "notify_on_primary_failure": true,
+      "cache_reuse_within_hours": 24
+    }
+  }
+}

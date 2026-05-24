@@ -1,0 +1,92 @@
+{
+  "version": "1.0",
+  "description": "채널 내 이중 페르소나 정의. 단일 채널(econ-daily)에서 Shorts(경고·공포)와 Long-form(친근·신뢰)을 분리 운영. 위반 시 reject가 아닌 WARNING 발행 (producer 판단 맡김).",
+  "validation_mode": "warning_only",
+  "personas": [
+    {
+      "id": "barro-teacher",
+      "display_name": "Barro 경제수업",
+      "intro_card_text": "📚 Barro 경제수업",
+      "description": "차근차근 가르쳐주는 경제 선생님. 롱폼 시리즈 전용. 친근·신뢰·교육적 톤.",
+      "applied_to_formats": ["long-3min"],
+      "voice_settings": {
+        "provider": "elevenlabs",
+        "voice_id": "4JJwo477JUAx3HV0T7n7",
+        "stability": 0.65,
+        "similarity_boost": 0.78,
+        "style": 0.2,
+        "speed": 1.0
+      },
+      "bgm_palette": ["calm_explain", "hopeful_outro", "neutral_bg"],
+      "color_emphasis": "#F4A261",
+      "hook_patterns_recommended": [
+        "오늘은 ~을 알아봅니다",
+        "처음 들으면 어렵지만",
+        "딱 3분이면 이해됩니다",
+        "~의 진짜 이유"
+      ],
+      "forbidden_patterns": [
+        "당장",
+        "사라집니다",
+        "끝났습니다",
+        "놓치면 후회",
+        "지금 안 하면",
+        "충격"
+      ],
+      "required_elements": {
+        "voice_disclaimer_seconds": 5,
+        "disclaimer_text": "본 영상은 투자 조언이 아닙니다. 투자 결정은 본인의 판단과 책임 하에 이루어져야 합니다."
+      }
+    },
+    {
+      "id": "barro-alert",
+      "display_name": "BarroAlert 경제 신호",
+      "intro_card_text": "🚨 BarroAlert · 경제 위기 신호",
+      "description": "위기 신호를 먼저 알려주는 친구. Shorts 전용. 경고·긴장·행동 유발 톤. 단, 사실 기반 엄수.",
+      "applied_to_formats": ["shorts"],
+      "voice_settings": {
+        "provider": "elevenlabs",
+        "voice_id": "4JJwo477JUAx3HV0T7n7",
+        "stability": 0.5,
+        "similarity_boost": 0.75,
+        "style": 0.4,
+        "speed": 1.05
+      },
+      "bgm_palette": ["tense_intro", "dramatic_reveal", "upbeat_energy"],
+      "color_emphasis": "#E63946",
+      "hook_patterns_recommended": [
+        "이거 모르면 손해 봅니다",
+        "당신이 놓친 신호가 있습니다",
+        "충격 수치 발표",
+        "~의 진짜 이유"
+      ],
+      "forbidden_patterns": [
+        "100%",
+        "무조건",
+        "확실",
+        "지금 당장 사세요",
+        "지금 당장 파세요",
+        "이것만 하면 부자"
+      ],
+      "required_elements": {
+        "subtitle_disclaimer_seconds": 2,
+        "disclaimer_text": "투자조언 아님"
+      }
+    }
+  ],
+  "validation_policy": {
+    "mode": "warning_only",
+    "description": "forbidden_patterns 매칭 시 WARNING 로그만 발행, 워크플로우는 차단하지 않음. producer가 최종 판단.",
+    "warning_channels": ["producer", "board"],
+    "warning_log_retention_days": 90,
+    "escalation": {
+      "enabled": true,
+      "condition": "same_persona_warnings >= 5 in 7 days",
+      "action": "notify_board_review_persona_drift"
+    }
+  },
+  "cross_persona_rules": {
+    "derive_shorts_requires_persona_switch": true,
+    "description": "롱폼(barro-teacher) → 파생 Shorts(barro-alert) 변환 시 톤 리라이팅 필수. derive-shorts.js가 처리."
+  }
+}

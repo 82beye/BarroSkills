@@ -1,0 +1,46 @@
+# Secrets (데이터 영역 ~/BarroTubeData/.env로 symlink)
+.env
+.env.local
+.env.*.local
+*.key
+secrets/
+
+# Data symlinks (외부 ~/BarroTubeData/ 가리킴 — 다른 환경에서는 운영자가 직접 생성)
+.claude/skills/barrotube/workspace
+.claude/skills/barrotube/logs
+
+# Episode artifacts (혹시 직접 디렉토리로 존재하는 경우)
+.claude/skills/barrotube/workspace/episodes/
+.claude/skills/barrotube/workspace/.in-flight.json
+
+# .env.example은 commit 대상 (셋업 가이드)
+!.env.example
+
+# Large media assets (stock BGM, ~119MB — 운영자가 별도 다운로드/관리)
+.claude/skills/barrotube/assets/bgm/
+
+# Backup
+*.bak
+*.bak.*
+.claude/skills/barrotube/config/*.bak.*
+.backup/
+
+# macOS
+.DS_Store
+
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Logs
+*.log
+.claude/skills/barrotube/logs/audit/
+.claude/skills/barrotube/logs/budget/
+
+# bkit / claude code state
+.bkit/
+
+# IDE
+.vscode/
+.idea/
