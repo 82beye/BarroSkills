@@ -1,0 +1,645 @@
+{
+  "version": "2.0",
+  "updated_at": "2026-05-26",
+  "catalog_summary": {
+    "total_strategies": 27,
+    "categories": ["korean-masters", "global-day", "global-swing", "smc-ict", "classical"],
+    "base_strategies_count": 4,
+    "hybrid_strategies_count": 3,
+    "extended_catalog_count": 27
+  },
+  "base_strategies": [
+    {
+      "id": "trend-following",
+      "name": "추세 추종 (Trend-Following)",
+      "owner_agent": "barrotrade-trend-expert",
+      "core_indicators": ["EMA(8,21,55)", "ADX(14)", "MACD(12,26,9)"],
+      "entry_rule": "ADX ≥ 25 AND EMA8 cross-up EMA21 AND MACD histogram > 0",
+      "exit_rule": "EMA8 cross-down EMA21 OR ADX < 20 OR trailing stop hit",
+      "ideal_regime": "regime_1 (고성장-저인플레)",
+      "includes_catalog_strategies": ["gd-orb", "gd-episodic", "gs-stage", "cl-ichimoku", "cl-supertrend"]
+    },
+    {
+      "id": "mean-reversion",
+      "name": "평균 회귀 (Mean-Reversion)",
+      "owner_agent": "barrotrade-mean-reversion-expert",
+      "core_indicators": ["BB(20, 2.0)", "RSI(14)", "Z-Score(60-day)"],
+      "entry_rule": "Price < BB_lower(-2σ) AND RSI < 30 AND Z-Score ≤ -2.5",
+      "exit_rule": "Price reaches BB_middle OR RSI > 50 OR Z-Score crosses 0",
+      "ideal_regime": "regime_3 (박스권)",
+      "includes_catalog_strategies": ["kr-goldzone", "gd-morningpanic", "smc-premdisc"]
+    },
+    {
+      "id": "event-driven",
+      "name": "이벤트 드리븐 (Event-Driven)",
+      "owner_agent": "barrotrade-event-driven-expert",
+      "core_indicators": ["DART 공시 강도", "LM Finance Lexicon", "Historical 5-day reaction DB"],
+      "entry_rule": "Event impact ≥ 0.6 AND classified as 'Persistent' AND turnover spike > 2σ",
+      "exit_rule": "Holding window expiry OR target hit OR sell-the-news",
+      "ideal_regime": "regime_1, 실적 발표 시즌",
+      "includes_catalog_strategies": ["kr-sfzone", "gd-gapandgo", "gd-episodic", "gs-canslim", "cl-avwap"]
+    },
+    {
+      "id": "chart-pattern",
+      "name": "차트 패턴 (Chart Geometry)",
+      "owner_agent": "barrotrade-pattern-expert",
+      "core_indicators": ["Pivot Points", "Triangle convergence", "Head-and-Shoulders", "Double Bottom"],
+      "entry_rule": "Pattern confidence ≥ 0.7 AND breakout volume > avg×1.5",
+      "exit_rule": "First resistance target OR pattern invalidation",
+      "ideal_regime": "기술적 매매 비중 높은 중소형주",
+      "includes_catalog_strategies": [
+        "kr-fzone", "kr-swing38",
+        "gd-bullflag",
+        "gs-vcp", "gs-cwh", "gs-darvas", "gs-qullamaggie",
+        "smc-orderblock", "smc-fvg", "smc-liqgrab", "smc-bos",
+        "cl-wyckoff", "cl-elliott"
+      ]
+    }
+  ],
+  "hybrid_strategies": [
+    {
+      "id": "dynamic-sentiment-allocation",
+      "name": "Dynamic Sentiment Allocation Strategy (DSAS)",
+      "concept": "실시간 뉴스 감성 강도와 가격 변동성을 결합한 동적 비중 분할",
+      "formula": "I_i(t) = ω_s · S_i(t) + ω_v · normalize(V_i(t))",
+      "weights": {"omega_sentiment": 0.6, "omega_volatility": 0.4, "tau_active_threshold": 0.65, "max_allocation_multiplier": 1.5},
+      "collaborators": ["barrotrade-rag-analyst", "barrotrade-trend-expert", "barrotrade-risk-manager"]
+    },
+    {
+      "id": "hybrid-llm-rl",
+      "name": "Hybrid LLM Strategy + RL Execution (HSRE)",
+      "concept": "상위 LLM이 전략 가이드 π_g, 하위 RL이 ms 단위 체결 최적화",
+      "formula_policy_loss": "L_policy(θ) = -E_t[A_t · log π_θ(a_t | s_t, π_g)]",
+      "note": "본 스킬은 RL 학습 X — 외부 GPU 클러스터 책임"
+    },
+    {
+      "id": "self-improving-dual-loop",
+      "name": "Self-Improving Dual-Loop (SIDL)",
+      "concept": "Inner loop 분석가 토론 + Outer loop 백테스트 + Nightly Fin-R1 7B 로컬 학습",
+      "integration": ["barrotrade-self-reflector", "barrotrade-code-surgeon (evolve 모드)"]
+    }
+  ],
+  "extended_catalog": {
+    "korean_masters": {
+      "reference_file": "references/strategies/korean-masters.md",
+      "reference_code": "/Users/beye/Downloads/seoheefather_strategy.py",
+      "strategies": [
+        {
+          "id": "kr-fzone",
+          "name": "F존 (장중 눌림)",
+          "trader": "서희파더 (이재상)",
+          "timeframe": ["1m", "5m"],
+          "market_fit": ["KRX"],
+          "key_indicators": ["EMA5", "EMA20", "volume_ratio", "change_rate"],
+          "entry_conditions": [
+            "prev_change > 0.02",
+            "curr_change < 0",
+            "vol_ratio < 0.6",
+            "EMA support (|close - EMA5|/EMA5 < 0.005 OR |close - EMA20|/EMA20 < 0.008)"
+          ],
+          "exit_profit_pct": 3.0,
+          "exit_stop_pct": -1.5,
+          "max_hold_bars": 20,
+          "tunable_params": ["volume_decline_ratio", "profit_target_pct", "stop_loss_pct", "zone_ema_short", "zone_ema_long"],
+          "risk_profile": "medium",
+          "agent_routing": "barrotrade-pattern-expert"
+        },
+        {
+          "id": "kr-sfzone",
+          "name": "SF존 (상한가 따라잡기)",
+          "trader": "서희파더 (이재상)",
+          "timeframe": ["일봉"],
+          "market_fit": ["KRX"],
+          "key_indicators": ["change_rate", "vol_ratio", "price_stable"],
+          "entry_conditions": [
+            "change_rate >= 29.5%",
+            "vol_ratio >= 3.0",
+            "(high - close) / close < 0.01"
+          ],
+          "exit_stop_pct": -5.0,
+          "hold_days": 3,
+          "tunable_params": ["min_volume_multiplier", "hold_days", "stop_loss_pct"],
+          "risk_profile": "high",
+          "agent_routing": "barrotrade-event-driven-expert"
+        },
+        {
+          "id": "kr-goldzone",
+          "name": "골드존 (스윙 & 장중 눌림)",
+          "trader": "서희파더 (이재상)",
+          "timeframe": ["일봉", "분봉 혼합"],
+          "market_fit": ["KRX", "OVERSEAS"],
+          "key_indicators": ["BB(20,2σ)", "RSI(14)", "Fibonacci(0.382, 0.618)"],
+          "entry_conditions": [
+            "fib_618 <= close <= fib_382",
+            "close >= bb_lower * 0.99",
+            "(rsi > 35) AND (prev_rsi <= 35)"
+          ],
+          "exit_profit_pct": 5.0,
+          "exit_stop_pct": -2.5,
+          "hold_days": 7,
+          "tunable_params": ["bb_period", "rsi_period", "rsi_oversold", "profit_target_pct", "stop_loss_pct"],
+          "risk_profile": "medium",
+          "agent_routing": "barrotrade-mean-reversion-expert"
+        },
+        {
+          "id": "kr-swing38",
+          "name": "38스윙 (1~2주 스윙)",
+          "trader": "서희파더 (이재상)",
+          "timeframe": ["일봉"],
+          "market_fit": ["KRX", "OVERSEAS"],
+          "key_indicators": ["Fibonacci 0.382/0.618", "RSI", "EMA20"],
+          "entry_conditions": [
+            "impulse_gain >= 0.10 within 5 days",
+            "|price - fib_382| / fib_382 <= 0.015",
+            "rsi < 55",
+            "volume >= MA10 * 0.5"
+          ],
+          "exit_target": "이전 wave high (fib 0)",
+          "exit_stop": "fib 0.618",
+          "hold_days": 10,
+          "max_weight_pct": 30,
+          "tunable_params": ["impulse_days", "impulse_min_gain", "retracement_level", "tolerance", "hold_days"],
+          "risk_profile": "medium",
+          "agent_routing": "barrotrade-pattern-expert"
+        },
+        {
+          "id": "kr-maha7",
+          "name": "마하세븐 단타",
+          "trader": "마하세븐 (김대용)",
+          "timeframe": ["5m"],
+          "market_fit": ["KRX"],
+          "key_indicators": ["거래대금 순위", "VWAP", "vol_ratio"],
+          "entry_conditions": [
+            "rank_1 (거래대금 1위)",
+            "amount >= 100_000_000_000 KRW",
+            "prev_5min_change > 0.03",
+            "volume_5min > MA5 * 2",
+            "price > vwap"
+          ],
+          "exit_stop_pct": -3.0,
+          "exit_profit_pct": [5.0, 8.0, 10.0],
+          "time_stop_minutes": 15,
+          "max_hold_minutes": 60,
+          "position_size_pct": 10,
+          "tunable_params": ["stop_loss_pct", "position_size", "time_stop_minutes"],
+          "risk_profile": "high",
+          "agent_routing": "barrotrade-event-driven-expert"
+        }
+      ]
+    },
+    "global_day_traders": {
+      "reference_file": "references/strategies/global-day-traders.md",
+      "strategies": [
+        {
+          "id": "gd-orb",
+          "name": "Opening Range Breakout",
+          "trader": "Linda Raschke",
+          "timeframe": ["5m", "15m"],
+          "market_fit": ["NYSE", "NASDAQ", "KRX"],
+          "key_indicators": ["OR_high", "OR_low", "ATR(14)"],
+          "entry_conditions": [
+            "price > OR_high (or < OR_low)",
+            "volume > avg_volume_30min * 1.5",
+            "0.3 <= OR_size / ATR <= 1.5"
+          ],
+          "exit_target": "OR_size * 1.5",
+          "exit_stop": "entry - OR_size * 0.5",
+          "tunable_params": ["or_window_minutes", "volume_multiplier"],
+          "risk_profile": "medium",
+          "agent_routing": "barrotrade-trend-expert"
+        },
+        {
+          "id": "gd-bullflag",
+          "name": "Bull Flag",
+          "trader": "Ross Cameron (Warrior Trading)",
+          "timeframe": ["1m", "5m"],
+          "market_fit": ["NYSE", "NASDAQ", "KRX"],
+          "key_indicators": ["pole_gain", "flag_range", "volume_burst"],
+          "entry_conditions": [
+            "flagpole_gain >= 0.03",
+            "flagpole_volume_burst > 3.0",
+            "flag_range <= 0.40 * pole_gain",
+            "breakout > max(high[flag_period])"
+          ],
+          "exit_target": "Measured Move (pole_high - pole_low)",
+          "exit_stop": "Flag 하단 - 1 tick",
+          "tunable_params": ["pole_min_gain", "flag_max_range", "breakout_volume_mult"],
+          "risk_profile": "medium",
+          "agent_routing": "barrotrade-pattern-expert"
+        },
+        {
+          "id": "gd-gapandgo",
+          "name": "Gap and Go",
+          "trader": "Ross Cameron",
+          "timeframe": ["1m", "15m"],
+          "market_fit": ["NYSE", "NASDAQ"],
+          "key_indicators": ["gap_pct", "VWAP", "premarket_volume"],
+          "entry_conditions": [
+            "gap_pct >= 0.04",
+            "premarket_volume >= 100k shares",
+            "news_event exists",
+            "price > vwap for 3 bars"
+          ],
+          "exit_stop": "VWAP 하향 이탈",
+          "exit_targets_pct": [5, 10],
+          "tunable_params": ["gap_min_pct", "vwap_hold_bars"],
+          "risk_profile": "high",
+          "agent_routing": "barrotrade-event-driven-expert"
+        },
+        {
+          "id": "gd-morningpanic",
+          "name": "Morning Panic",
+          "trader": "Tim Sykes",
+          "timeframe": ["5m"],
+          "market_fit": ["NYSE", "NASDAQ"],
+          "key_indicators": ["gap_up", "panic_drop", "volume_spike"],
+          "entry_conditions": [
+            "gap_up >= 0.20",
+            "first_30min_drop <= -0.10",
+            "volume_spike_at_low > 5x",
+            "bullish_engulfing OR hammer"
+          ],
+          "exit_target": "패닉 저점 → 시초가의 50% 회복",
+          "exit_stop": "패닉 저점 - 0.5%",
+          "tunable_params": ["gap_up_min", "panic_drop_min", "max_per_day"],
+          "risk_profile": "very_high",
+          "enabled_by_default": false,
+          "agent_routing": "barrotrade-pattern-expert"
+        },
+        {
+          "id": "gd-episodic",
+          "name": "Episodic Pivot",
+          "trader": "Kristjan Kullamägi (Qullamaggie)",
+          "timeframe": ["일봉"],
+          "market_fit": ["NYSE", "NASDAQ", "KRX"],
+          "key_indicators": ["ADR(20)", "earnings_event", "volume_surge"],
+          "entry_conditions": [
+            "news_event (earnings/M&A/FDA/patent)",
+            "gap_open >= 0.10",
+            "volume_surge >= 5x MA50",
+            "prior_consolidation 20-60 days",
+            "new_high_breakout post-pivot tight"
+          ],
+          "exit_trailing": "ADR-based (1.5/2/3 ADR by hold duration)",
+          "hold_days_avg": 7,
+          "tunable_params": ["adr_period", "trail_multiplier_short", "trail_multiplier_long"],
+          "risk_profile": "medium",
+          "agent_routing": "barrotrade-event-driven-expert"
+        },
+        {
+          "id": "gd-parabolic",
+          "name": "Parabolic Short (Exit Signal Only)",
+          "trader": "Kristjan Kullamägi",
+          "timeframe": ["일봉"],
+          "market_fit": ["NYSE", "NASDAQ"],
+          "monitoring_only": true,
+          "use_case": "보유 long 포지션의 청산 트리거",
+          "entry_conditions_for_exit": [
+            "days_up_consecutive >= 5",
+            "gain_over_5days >= 0.30",
+            "distance_from_MA50 >= 0.50",
+            "first_red_day after parabolic"
+          ],
+          "agent_routing": "barrotrade-risk-manager"
+        }
+      ]
+    },
+    "global_swing_traders": {
+      "reference_file": "references/strategies/global-swing-traders.md",
+      "strategies": [
+        {
+          "id": "gs-vcp",
+          "name": "VCP (Volatility Contraction Pattern)",
+          "trader": "Mark Minervini",
+          "timeframe": ["일봉"],
+          "market_fit": ["NYSE", "NASDAQ", "KRX"],
+          "key_indicators": ["Trend Template (8 conditions)", "contraction stages", "volume dry-up"],
+          "entry_conditions": [
+            "Trend Template 8 conditions pass",
+            "3+ contractions, each ≤ prev × 0.5",
+            "volume dry-up: < MA50 * 0.6",
+            "Pivot breakout: price > pivot AND volume > avg * 1.4"
+          ],
+          "exit_stop_pct": -7.5,
+          "exit_targets_pct": [22.5, 50.0],
+          "hold_weeks_avg": 9,
+          "rs_rating_min": 70,
+          "tunable_params": ["contraction_ratio", "volume_dry_threshold", "breakout_volume_mult"],
+          "risk_profile": "medium",
+          "agent_routing": "barrotrade-pattern-expert"
+        },
+        {
+          "id": "gs-sepa",
+          "name": "SEPA (Specific Entry Point Analysis)",
+          "trader": "Mark Minervini",
+          "concept": "VCP entry 정확도 + Position Sizing 시스템",
+          "position_sizing_rule": "risk_per_trade = total_equity * 0.01",
+          "max_position_pct": 25,
+          "integration": "barrotrade-risk-manager + VCP signal",
+          "agent_routing": "barrotrade-risk-manager"
+        },
+        {
+          "id": "gs-canslim",
+          "name": "CANSLIM",
+          "trader": "William J. O'Neil",
+          "timeframe": ["일봉", "분기"],
+          "market_fit": ["NYSE", "NASDAQ", "KRX"],
+          "key_indicators": ["7 letters (C, A, N, S, L, I, M)", "Cup-with-Handle"],
+          "entry_conditions": [
+            "C: quarterly EPS YoY >= 25%",
+            "A: 3-year annual EPS >= 25% growth",
+            "N: New 52w high OR new product",
+            "S: shares <= 100M AND volume > avg * 1.5",
+            "L: RS rating >= 80",
+            "I: institutional ownership growing",
+            "M: market in uptrend (KOSPI > 200MA)"
+          ],
+          "exit_stop_pct": -8.0,
+          "exit_targets_pct": [22.5, 50.0],
+          "tunable_params": ["eps_growth_min", "rs_rating_min", "shares_max"],
+          "risk_profile": "medium",
+          "agent_routing": "barrotrade-fundamental-specialist"
+        },
+        {
+          "id": "gs-cwh",
+          "name": "Cup-with-Handle",
+          "trader": "William O'Neil",
+          "key_indicators": ["cup depth", "handle depth", "pivot"],
+          "entry_conditions": [
+            "0.12 <= cup_depth <= 0.33",
+            "right cup high >= left cup high * 0.98",
+            "handle_depth <= 0.12",
+            "breakout > pivot AND volume > avg * 1.5"
+          ],
+          "tunable_params": ["cup_depth_min", "cup_depth_max", "handle_depth_max"],
+          "agent_routing": "barrotrade-pattern-expert"
+        },
+        {
+          "id": "gs-stage",
+          "name": "Stage Analysis (4 Phase)",
+          "trader": "Stan Weinstein",
+          "timeframe": ["주봉"],
+          "key_indicators": ["MA30 weekly (= MA150 daily)"],
+          "stages": {
+            "stage_1": "accumulation (횡보)",
+            "stage_2": "markup (상승) — BUY",
+            "stage_3": "distribution (꼭대기)",
+            "stage_4": "markdown (하락) — AVOID"
+          },
+          "regime_mapping": {
+            "stage_1": "regime_3 끝물 / regime_1 초입",
+            "stage_2": "regime_1",
+            "stage_3": "regime_1 끝물",
+            "stage_4": "regime_2 or regime_4"
+          },
+          "hold_months_avg": 12,
+          "tunable_params": ["ma_period_weekly"],
+          "agent_routing": "barrotrade-macro-specialist"
+        },
+        {
+          "id": "gs-darvas",
+          "name": "Darvas Box",
+          "trader": "Nicolas Darvas",
+          "key_indicators": ["52w new high", "box high/low", "ATR"],
+          "entry_conditions": [
+            "box_high == new_52w_high",
+            "box_size <= 0.10",
+            "box_low > new_high * 0.93",
+            "breakout > box_high + 0.5 * ATR"
+          ],
+          "exit_stop": "최신 박스 하단",
+          "trailing": "새 box 형성 시 stop 자동 상향",
+          "tunable_params": ["box_max_size", "box_min_days", "breakout_atr_mult"],
+          "agent_routing": "barrotrade-pattern-expert"
+        },
+        {
+          "id": "gs-qullamaggie",
+          "name": "Tight Consolidation Breakout",
+          "trader": "Kristjan Kullamägi",
+          "key_indicators": ["prior_move", "consolidation_range", "ADR"],
+          "entry_conditions": [
+            "prior_move_gain >= 0.30 within 20-50 days",
+            "consolidation_range <= 0.10",
+            "volume_decline < prior * 0.5",
+            "breakout > consolidation_high AND volume > avg * 2"
+          ],
+          "exit_trailing": "ADR-based (10-EMA trail)",
+          "position_pyramid": "0.5R first, add on confirmation",
+          "tunable_params": ["prior_move_min_gain", "consolidation_max_range"],
+          "agent_routing": "barrotrade-pattern-expert"
+        }
+      ]
+    },
+    "smc_ict": {
+      "reference_file": "references/strategies/smc-ict.md",
+      "strategies": [
+        {
+          "id": "smc-orderblock",
+          "name": "Order Block (OB)",
+          "concept": "기관 마지막 매수/매도 캔들 재방문",
+          "timeframe": ["multi-TF 일봉/4H/1H"],
+          "key_indicators": ["impulse direction", "last opposite candle"],
+          "entry_conditions": [
+            "bullish OB: 강한 상승 직전 마지막 음봉",
+            "price returns to OB zone",
+            "volume confirm > avg * 1.5"
+          ],
+          "exit_stop": "OB low - 0.5 * ATR",
+          "exit_target": "recent swing high or next OB",
+          "korea_bonus": "외국인·기관 순매수 (ka10008/ka10009) 일치 시 confidence 2배",
+          "tunable_params": ["impulse_threshold", "volume_confirm_mult"],
+          "agent_routing": "barrotrade-pattern-expert"
+        },
+        {
+          "id": "smc-fvg",
+          "name": "Fair Value Gap (FVG)",
+          "concept": "3봉 사이 미체결 갭, unfilled 가 강력",
+          "entry_conditions": [
+            "3-candle pattern: c1.high < c3.low (bullish FVG)",
+            "price returns to FVG zone",
+            "bullish candle at FVG bottom",
+            "volume confirm"
+          ],
+          "exit_stop": "FVG 하단 - 0.5 * ATR",
+          "tunable_params": ["fvg_min_size_atr_mult"],
+          "agent_routing": "barrotrade-pattern-expert"
+        },
+        {
+          "id": "smc-liqgrab",
+          "name": "Liquidity Grab (Stop Hunt)",
+          "concept": "Equal Highs/Lows 위/아래 wick, retail 손절 사냥",
+          "entry_conditions": [
+            "Equal Highs/Lows identified (tolerance 0.001)",
+            "wick swept beyond extreme",
+            "close back inside range (failed breakout)",
+            "wick/body ratio >= 1.5"
+          ],
+          "exit_stop": "Grab candle low/high",
+          "tunable_params": ["equal_tolerance", "wick_ratio_min"],
+          "agent_routing": "barrotrade-pattern-expert"
+        },
+        {
+          "id": "smc-bos",
+          "name": "Break of Structure / CHoCH",
+          "concept": "추세 전환 첫 신호",
+          "entry_conditions": [
+            "Bullish CHoCH: prev_downtrend AND last_lower_high broken AND new_higher_low",
+            "Entry on retracement to 0.5-0.618 Fib"
+          ],
+          "exit_stop": "CHoCH 무효화 (구조 깨짐)",
+          "tunable_params": ["swing_window"],
+          "agent_routing": "barrotrade-trend-expert"
+        },
+        {
+          "id": "smc-premdisc",
+          "name": "Premium / Discount Zone (OTE)",
+          "concept": "50% 기준 premium/discount 분리, Long 은 discount + OTE (0.618-0.786)",
+          "entry_conditions": [
+            "current_zone == 'discount'",
+            "fib_786 <= price <= fib_618",
+            "bullish reversal pattern at OTE"
+          ],
+          "exit_stop": "fib_786 - 0.5 * ATR",
+          "exit_target": "leg_high (자연 1:2 R:R)",
+          "tunable_params": ["ote_lower", "ote_upper"],
+          "agent_routing": "barrotrade-pattern-expert"
+        }
+      ]
+    },
+    "classical": {
+      "reference_file": "references/strategies/classical-frameworks.md",
+      "strategies": [
+        {
+          "id": "cl-wyckoff",
+          "name": "Wyckoff Method",
+          "trader": "Richard D. Wyckoff",
+          "phases": ["Accumulation", "Markup", "Distribution", "Markdown"],
+          "key_signals": ["Spring (Accumulation 마무리)", "Sign of Strength", "UTAD (Distribution 마무리)"],
+          "entry_conditions": [
+            "Spring detected: low < range_low AND close > range_low AND volume > avg * 2",
+            "next 3 bars bullish confirm"
+          ],
+          "exit_stop": "Spring low - 0.5 * ATR",
+          "exit_target": "Accumulation range top * 1.3",
+          "regime_mapping": "Accumulation → regime_3 끝물, Markup → regime_1",
+          "tunable_params": ["range_min_weeks", "spring_volume_mult"],
+          "agent_routing": "barrotrade-trend-expert"
+        },
+        {
+          "id": "cl-elliott",
+          "name": "Elliott Wave (5+3)",
+          "trader": "Ralph Nelson Elliott",
+          "structure": "5-wave impulse + 3-wave correction",
+          "absolute_rules": [
+            "Wave 2 never retraces Wave 1 fully",
+            "Wave 3 is never the shortest of 1, 3, 5",
+            "Wave 4 never overlaps Wave 1 territory"
+          ],
+          "entry_target": "Wave 3 (most powerful)",
+          "wave_3_extension": [1.618, 2.618],
+          "confidence_max": 0.6,
+          "note": "auto identification 부정확 — 보조 지표로만 활용",
+          "agent_routing": "barrotrade-pattern-expert"
+        },
+        {
+          "id": "cl-ichimoku",
+          "name": "Ichimoku Cloud",
+          "trader": "Goichi Hosoda",
+          "key_lines": ["Tenkan(9)", "Kijun(26)", "Senkou A", "Senkou B(52)", "Chikou(-26)"],
+          "entry_conditions_5": [
+            "Tenkan crosses above Kijun",
+            "price > cloud_top",
+            "cloud_color == 'green'",
+            "chikou > price.shift(26)",
+            "volume confirm"
+          ],
+          "korea_calibration": {"tenkan": 7, "kijun": 22, "span_b": 44},
+          "tunable_params": ["tenkan_period", "kijun_period", "span_b_period"],
+          "agent_routing": "barrotrade-trend-expert"
+        },
+        {
+          "id": "cl-supertrend",
+          "name": "SuperTrend",
+          "trader": "Olivier Seban",
+          "indicator": "ATR-based trend line",
+          "default_params": {"atr_period": 10, "multiplier": 3.0},
+          "entry_conditions": [
+            "direction flip down → up",
+            "volume confirm > avg * 1.3",
+            "price > MA50"
+          ],
+          "exit": "direction flip up → down",
+          "tunable_params": ["atr_period", "multiplier"],
+          "korea_calibration": {"atr_period": 10, "multiplier": 2.5},
+          "popularity_rank": 1,
+          "agent_routing": "barrotrade-trend-expert"
+        },
+        {
+          "id": "cl-avwap",
+          "name": "Anchored VWAP",
+          "modern_advocate": "Brian Shannon (@AlphaTrends)",
+          "anchor_candidates": ["earnings_date", "swing_high", "swing_low", "fed_meeting", "news_event"],
+          "entry_conditions": [
+            "AVWAP from anchor point computed",
+            "price > AVWAP after recent peak above AVWAP",
+            "current_tap of AVWAP (±1%)",
+            "bullish candle confirm"
+          ],
+          "multi_anchor_confluence": "여러 AVWAP 수렴 시 강력",
+          "tunable_params": ["anchor_lookback_days"],
+          "agent_routing": "barrotrade-data-preprocessor"
+        },
+        {
+          "id": "cl-heikinashi",
+          "name": "Heikin-Ashi Smoothed",
+          "concept": "평활 캔들, 노이즈 제거",
+          "role": "보조 지표 (단독 진입 X)",
+          "tunable_params": [],
+          "agent_routing": "barrotrade-data-preprocessor"
+        }
+      ]
+    }
+  },
+  "regime_filter": {
+    "regime_1": {
+      "name": "고성장 - 저인플레",
+      "preferred_strategies_ids": [
+        "trend-following", "event-driven", "dynamic-sentiment-allocation",
+        "kr-fzone", "kr-sfzone", "gd-orb", "gd-bullflag", "gd-gapandgo", "gd-episodic",
+        "gs-vcp", "gs-canslim", "gs-cwh", "gs-darvas", "gs-qullamaggie",
+        "smc-orderblock", "smc-bos", "cl-ichimoku", "cl-supertrend", "cl-avwap"
+      ]
+    },
+    "regime_2": {
+      "name": "저성장 - 고인플레",
+      "preferred_strategies_ids": [
+        "mean-reversion", "chart-pattern",
+        "kr-goldzone", "kr-swing38",
+        "smc-orderblock", "smc-fvg", "smc-premdisc",
+        "cl-wyckoff"
+      ],
+      "max_total_exposure_pct": 50
+    },
+    "regime_3": {
+      "name": "박스권 횡보",
+      "preferred_strategies_ids": [
+        "mean-reversion", "chart-pattern",
+        "kr-fzone", "kr-goldzone",
+        "smc-orderblock", "smc-fvg", "smc-premdisc", "smc-liqgrab"
+      ],
+      "disable_strategies_ids": ["trend-following", "gd-orb", "gd-bullflag", "gs-vcp"]
+    },
+    "regime_4": {
+      "name": "위기",
+      "preferred_strategies_ids": [],
+      "disable_all": true,
+      "circuit_breaker_recommended": true
+    }
+  },
+  "confluence_rules": {
+    "min_strategies_for_high_confidence": 4,
+    "category_diversity_bonus_per_extra_category": 0.05,
+    "contradiction_penalty_per_pair": 0.10,
+    "auto_GO_threshold": 0.95
+  }
+}

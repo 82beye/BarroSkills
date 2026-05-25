@@ -33,10 +33,14 @@ node_modules/
 npm-debug.log
 yarn-error.log
 
-# Logs
+# Logs (스킬 공통 — audit·budget 출력은 추적 안 함)
 *.log
-.claude/skills/barrotube/logs/audit/
-.claude/skills/barrotube/logs/budget/
+.claude/skills/*/logs/audit/
+.claude/skills/*/logs/budget/
+
+# Episode/runtime artifacts (스킬 공통)
+.claude/skills/*/workspace/episodes/
+.claude/skills/*/workspace/.in-flight.json
 
 # bkit / claude code state
 .bkit/

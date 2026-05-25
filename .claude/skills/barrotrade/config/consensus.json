@@ -1,0 +1,80 @@
+{
+  "version": "1.0",
+  "updated_at": "2026-05-25",
+  "owner_agent": "barrotrade-debate-moderator",
+  "debate_protocol": {
+    "rounds": [
+      {
+        "round": 1,
+        "name": "기초 진술",
+        "participants": ["bull", "bear"],
+        "format": "각자 핵심 논거 3개 + 근거 데이터 인용",
+        "max_tokens_per_side": 1500
+      },
+      {
+        "round": 2,
+        "name": "교차 논증",
+        "participants": ["bull", "bear"],
+        "format": "상대 진술의 가장 약한 논거 1개씩 반박",
+        "max_tokens_per_side": 1000
+      },
+      {
+        "round": 3,
+        "name": "데이터 대조",
+        "participants": ["bull", "bear", "moderator"],
+        "format": "모더레이터가 동일 데이터 포인트에 대해 양측 해석 차이를 표로 정리",
+        "max_tokens": 1500
+      },
+      {
+        "round": 4,
+        "name": "합의 시도",
+        "participants": ["moderator"],
+        "format": "합의 가능 영역과 합의 불능 영역을 분리, 종합 점수 산정",
+        "max_tokens": 2000
+      }
+    ]
+  },
+  "scoring_weights": {
+    "macro_alignment": 0.20,
+    "fundamental_safety": 0.20,
+    "technical_signal_quality": 0.20,
+    "event_impact": 0.10,
+    "sector_momentum": 0.10,
+    "rag_sentiment_confidence": 0.10,
+    "historical_pattern_match": 0.10
+  },
+  "vote_pass_threshold": 70,
+  "tie_break_rule": "bear_priority",
+  "veto_conditions": {
+    "macro_specialist_red_flag": "regime == 'crisis'",
+    "fundamental_specialist_red_flag": "audit_opinion ∈ {'disclaimer', 'adverse', 'qualified'}",
+    "rag_red_flag_keywords": [
+      "감사의견 거절", "감사의견 비적정", "분식회계",
+      "횡령", "배임", "상장폐지", "거래정지",
+      "자본잠식", "신청자본금 부족"
+    ]
+  },
+  "user_bias_integration": {
+    "conservative": {
+      "bear_weight_multiplier": 1.4,
+      "minimum_consensus_score": 78,
+      "max_position_multiplier": 0.7
+    },
+    "balanced": {
+      "bear_weight_multiplier": 1.0,
+      "minimum_consensus_score": 70,
+      "max_position_multiplier": 1.0
+    },
+    "aggressive": {
+      "bear_weight_multiplier": 0.8,
+      "minimum_consensus_score": 60,
+      "max_position_multiplier": 1.3
+    }
+  },
+  "default_user_profile": "balanced",
+  "audit_log": {
+    "path": "logs/consensus/<cycle_id>.jsonl",
+    "include_full_text": true,
+    "retention_days": 365
+  }
+}

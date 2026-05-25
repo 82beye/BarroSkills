@@ -1,0 +1,92 @@
+{
+  "version": "1.0",
+  "updated_at": "2026-05-25",
+  "vendor": "한국투자증권 KIS Developers",
+  "environments": {
+    "paper": {
+      "base_url": "https://openapivts.koreainvestment.com:29443",
+      "websocket_url": "ws://ops.koreainvestment.com:31000",
+      "rate_limit_per_second": 3,
+      "rate_limit_safety_pct": 0.8,
+      "effective_rps": 2.4
+    },
+    "live": {
+      "base_url": "https://openapi.koreainvestment.com:9443",
+      "websocket_url": "ws://ops.koreainvestment.com:21000",
+      "rate_limit_per_second": 10,
+      "rate_limit_safety_pct": 0.8,
+      "effective_rps": 8,
+      "read_only_enforced": true,
+      "note": "본 스킬에서 live 환경은 시세·잔고 조회 read-only 전용. 주문 엔드포인트는 호출하지 않음."
+    }
+  },
+  "allowed_endpoints": {
+    "quotations": [
+      "/uapi/domestic-stock/v1/quotations/inquire-price",
+      "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice",
+      "/uapi/domestic-stock/v1/quotations/inquire-asking-price-exp-ccn",
+      "/uapi/domestic-stock/v1/quotations/inquire-time-itemconclusion",
+      "/uapi/overseas-price/v1/quotations/price"
+    ],
+    "account_inquiry": [
+      "/uapi/domestic-stock/v1/trading/inquire-balance",
+      "/uapi/domestic-stock/v1/trading/inquire-account-balance",
+      "/uapi/domestic-stock/v1/trading/inquire-deposit"
+    ]
+  },
+  "blocked_endpoints": {
+    "order": [
+      "/uapi/domestic-stock/v1/trading/order-cash",
+      "/uapi/domestic-stock/v1/trading/order-credit",
+      "/uapi/domestic-stock/v1/trading/order-rvsecncl",
+      "/uapi/overseas-stock/v1/trading/order",
+      "/uapi/overseas-stock/v1/trading/order-rvsecncl"
+    ],
+    "reason": "본 스킬은 read-only. 실거래는 외부 OMS + HITL 결재 후 처리."
+  },
+  "websocket": {
+    "subscription_keys": [
+      "H0STCNT0",
+      "H0STASP0",
+      "HDFSCNT0"
+    ],
+    "heartbeat_interval_sec": 30,
+    "reconnect_max_retries": -1,
+    "reconnect_backoff_sec": [1, 2, 5, 10, 30],
+    "failover_to_rest_polling_after_ms": 5000,
+    "failover_polling_endpoint": "/uapi/domestic-stock/v1/quotations/inquire-price",
+    "failover_polling_interval_ms": 1000
+  },
+  "rate_limit_strategy": {
+    "algorithm": "token_bucket",
+    "gateway_singleton": true,
+    "queue_overflow_action": "backpressure_to_caller",
+    "on_429_response": {
+      "exponential_backoff_sec": [1, 2, 4],
+      "max_retries": 3,
+      "after_max_retries": "pause_cycle_and_alert_user"
+    }
+  },
+  "auth": {
+    "token_endpoint": "/oauth2/tokenP",
+    "token_ttl_hours": 24,
+    "token_refresh_buffer_sec": 600,
+    "credential_resolution_order": [
+      "process.env.KIS_APP_KEY",
+      "macos_keychain: BarroTrade/KIS_APP_KEY",
+      ".env file"
+    ]
+  },
+  "global_markets": {
+    "supported": ["KRX", "NYSE", "NASDAQ", "HKEX", "TSE", "SSE", "SZSE"],
+    "session_aware_routing": true,
+    "fx_rate_source": "/uapi/etfetn/v1/quotations/inquire-exchange-rate",
+    "after_hours_strategy": "queue_until_open"
+  },
+  "compliance_logging": {
+    "log_every_request": true,
+    "path": "logs/audit/kis-api-<date>.jsonl",
+    "redact_secrets": true,
+    "include_response_time_ms": true
+  }
+}

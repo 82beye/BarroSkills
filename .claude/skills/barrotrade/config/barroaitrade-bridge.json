@@ -1,0 +1,193 @@
+{
+  "version": "1.0",
+  "updated_at": "2026-05-26",
+  "target_project": {
+    "name": "BarroAiTrade",
+    "root_path": "/Users/beye/workspace/BarroAiTrade",
+    "language": "python",
+    "python_version": ">=3.13",
+    "git_remote": "https://github.com/82beye/BarroAiTrade.git",
+    "main_branch": "main"
+  },
+  "data_sources": {
+    "logs": {
+      "current": "/Users/beye/workspace/BarroAiTrade/logs/barro.log",
+      "rotated_pattern": "/Users/beye/workspace/BarroAiTrade/logs/barro.log.YYYY-MM-DD",
+      "format": "jsonl",
+      "schema": {
+        "ts": "ISO8601 with offset",
+        "level": "DEBUG|INFO|WARNING|ERROR|CRITICAL",
+        "logger": "dotted.module.path (e.g., backend.core.gateway.kiwoom_native_account)",
+        "msg": "human readable Korean/English mixed"
+      },
+      "tail_policy": {
+        "mode": "tail -F",
+        "buffer_lines": 200,
+        "encoding": "utf-8",
+        "filter_loggers": [
+          "backend.core.strategy.*",
+          "backend.core.orchestrator",
+          "backend.core.journal.*",
+          "backend.api.routes.signals",
+          "backend.api.routes.positions"
+        ],
+        "filter_levels": ["INFO", "WARNING", "ERROR"]
+      }
+    },
+    "sqlite": {
+      "path": "/Users/beye/workspace/BarroAiTrade/data/barro_trade.db",
+      "polling_interval_sec": 5,
+      "tables_of_interest": ["trades", "signals", "positions", "pnl_snapshots"],
+      "read_only": true,
+      "connection_string_template": "sqlite:///{path}?mode=ro"
+    },
+    "csv": {
+      "order_audit": {
+        "path": "/Users/beye/workspace/BarroAiTrade/data/order_audit.csv",
+        "schema": ["ts", "action", "side", "symbol", "qty", "price", "order_no", "return_code", "blocked", "reason"],
+        "tail_policy": "tail_new_lines_since_last_offset"
+      },
+      "strategy_ledger": {
+        "path_candidates": [
+          "/Users/beye/workspace/BarroAiTrade/analysis/strategy_ledger.csv",
+          "/Users/beye/workspace/BarroAiTrade/data/strategy_ledger.csv",
+          "/Users/beye/workspace/BarroAiTrade/scripts/_strategy_perf_track.py (regenerate)"
+        ],
+        "regenerator_script": "/Users/beye/workspace/BarroAiTrade/scripts/_strategy_perf_track.py",
+        "if_missing": "regenerate_via_script"
+      }
+    },
+    "json": {
+      "active_positions": "/Users/beye/workspace/BarroAiTrade/data/active_positions.json",
+      "policy": "/Users/beye/workspace/BarroAiTrade/data/policy.json",
+      "polling_interval_sec": 10
+    }
+  },
+  "strategies": {
+    "directory": "/Users/beye/workspace/BarroAiTrade/backend/core/strategy",
+    "base_class": "backend/core/strategy/base.py",
+    "all_strategies": [
+      "f_zone", "gold_zone", "sf_zone", "blue_line", "swing_38",
+      "scalping_consensus", "short_term_high_exit",
+      "crypto_breakout", "stock_strategy",
+      "_watermelon"
+    ],
+    "dataclass_params": {
+      "FZoneParams": {
+        "file": "backend/core/strategy/f_zone.py",
+        "line_hint": 44,
+        "known_fields": [
+          "impulse_min_gain_pct",
+          "bounce_min_gain_pct",
+          "min_atr_pct",
+          "ma_support_tolerance",
+          "pullback_min_pct"
+        ]
+      },
+      "GoldZoneParams": {
+        "file": "backend/core/strategy/gold_zone.py",
+        "note": "필드명 동적 탐색"
+      }
+    },
+    "policy_config": {
+      "file": "backend/core/journal/policy_config.py",
+      "dataclass": "PolicyConfig",
+      "known_fields": [
+        "min_score",
+        "stop_loss_pct",
+        "take_profit_pct",
+        "max_total",
+        "max_concurrent",
+        "max_per_position"
+      ],
+      "runtime_apply_command": "/tune apply",
+      "note": "이미 BAR-OPS-31 로 영속화 인프라 존재 — code-surgeon 이 우선 활용"
+    }
+  },
+  "intraday_runtime": {
+    "daemon_script": "/Users/beye/workspace/BarroAiTrade/scripts/intraday_buy_daemon.py",
+    "key_functions": {
+      "_sync_positions": "활성 포지션 동기화",
+      "_compute_daily_pnl_pct": "일일 수익률 계산",
+      "_in_market_hours": "장시간 확인"
+    },
+    "market_hours_kst": {
+      "open": "09:00",
+      "close": "15:30",
+      "after_market_recap_at": "15:35"
+    }
+  },
+  "pipeline_scripts": {
+    "daily_evening": "/Users/beye/workspace/BarroAiTrade/scripts/_daily_evening_pipeline.py",
+    "strategy_perf_track": "/Users/beye/workspace/BarroAiTrade/scripts/_strategy_perf_track.py",
+    "loss_drill_down": "/Users/beye/workspace/BarroAiTrade/scripts/_loss_drill_down.py",
+    "note": "BAR-OPS-09 Phase 1 산출물 — barrotrade live/recap 모드가 결과를 소비"
+  },
+  "code_evolution_policy": {
+    "scope": "dataclass_numeric_fields_only",
+    "scope_description": "오직 @dataclass 안의 숫자 필드만 수정 가능. 함수 로직·조건문·문자열·타입 변경 절대 금지.",
+    "allowed_change_types": [
+      "float field default value",
+      "int field default value"
+    ],
+    "forbidden_change_types": [
+      "function body modification",
+      "new field addition",
+      "field rename",
+      "type annotation change",
+      "import statement change",
+      "class hierarchy change"
+    ],
+    "change_magnitude_limits": {
+      "max_relative_change_pct": 25,
+      "max_absolute_change_per_field_per_week": 3,
+      "note": "단일 필드를 1주에 3회 이상 수정 시 차단 (overfitting 방지)"
+    },
+    "hitl_policy": {
+      "auto_apply_threshold_pct": 0,
+      "note": "0 = 모든 변경은 사용자 명시 승인 필수. 자동 적용 비활성.",
+      "approval_methods_accepted": [
+        "explicit_text_confirmation",
+        "git_apply_manual"
+      ]
+    },
+    "preferred_apply_path": {
+      "primary": "policy_config.py + /tune apply (runtime override)",
+      "fallback": "dataclass field default in strategy file (requires restart)",
+      "rationale": "BAR-OPS-31 가 이미 runtime 영속 + apply 명령 제공 — 코드 직접 수정보다 안전"
+    },
+    "patch_output": {
+      "format": "unified diff",
+      "path": "workspace/_evolve/<id>/patch.diff",
+      "rationale_path": "workspace/_evolve/<id>/proposal.md",
+      "git_apply_command_hint": "cd /Users/beye/workspace/BarroAiTrade && git apply <patch_path>"
+    },
+    "rollback": {
+      "git_revert_supported": true,
+      "policy_config_backup_path": "/Users/beye/workspace/BarroAiTrade/data/policy.json.bak.<timestamp>"
+    }
+  },
+  "report_output": {
+    "intraday_recap_path": "workspace/_intraday/<YYYY-MM-DD>/recap.md",
+    "signal_decision_log": "logs/decisions/<YYYY-MM-DD>.jsonl",
+    "evolve_proposal_dir": "workspace/_evolve/<id>/",
+    "retention_days": 365
+  },
+  "safety_rails": {
+    "barroaitrade_must_be_read_only": true,
+    "note_1": "본 스킬은 BarroAiTrade의 코드를 직접 수정하지 않는다. patch 파일만 생성하고, git apply 는 사용자가 직접 실행.",
+    "note_2": "policy.json 의 백업은 항상 생성 (policy.json.bak.<ts>).",
+    "note_3": "active_positions.json 은 절대 쓰지 않음 (read-only)."
+  },
+  "compliance_logging": {
+    "all_reads": {
+      "path": "logs/audit/barroaitrade-reads-<date>.jsonl",
+      "fields": ["ts_utc", "source", "path", "lines_read", "agent_id", "cycle_id"]
+    },
+    "all_patches": {
+      "path": "logs/audit/code-evolution-<date>.jsonl",
+      "fields": ["ts_utc", "evolve_id", "target_file", "field_name", "old_value", "new_value", "rationale_summary", "hitl_status", "hitl_approved_at"],
+      "retention_years": 5
+    }
+  }
+}

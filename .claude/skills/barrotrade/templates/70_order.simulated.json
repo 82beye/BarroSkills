@@ -1,0 +1,51 @@
+{
+  "template_id": "70_order.simulated",
+  "owner_agent": "barrotrade-portfolio-pm",
+  "cycle_id": "{{cycle_id}}",
+  "ts_utc": "{{ts_utc}}",
+  "simulation_only": true,
+  "execution_warning": "본 파일은 시뮬레이션입니다. 실거래 송출은 외부 OMS와 HITL 결재로만 가능합니다.",
+  "order": {
+    "ticker": "{{ticker}}",
+    "side": "buy|sell",
+    "order_type": "limit|market",
+    "qty": 0,
+    "price_krw": 0,
+    "estimated_value_krw": 0,
+    "estimated_slippage_bps": 0,
+    "time_in_force": "DAY|IOC|FOK",
+    "venue": "KRX|NYSE|NASDAQ|HKEX|TSE|SSE|SZSE"
+  },
+  "risk_attachments": {
+    "atr_14": 0,
+    "computed_Q_i": 0,
+    "trailing_stop_initial_krw": 0,
+    "trailing_stop_theta": 1.5,
+    "circuit_breaker_state": "armed_normal"
+  },
+  "hitl": {
+    "threshold_krw": 50000000,
+    "threshold_pct_of_equity": 5.0,
+    "current_order_value_krw": 0,
+    "current_order_pct_of_equity": 0.0,
+    "hitl_required": false,
+    "hitl_status": "not_required|pending|approved|expired",
+    "approver_id_hash": null,
+    "approval_method": null,
+    "approved_at_utc": null,
+    "expires_at_utc": null
+  },
+  "consensus_attachment": {
+    "vote_score": 0.0,
+    "decision": "PASS",
+    "bull_brief_ref": "40_bull_brief.md",
+    "bear_brief_ref": "41_bear_brief.md",
+    "debate_log_ref": "50_debate_log.md"
+  },
+  "compliance": {
+    "explainability_artifacts_complete": true,
+    "look_ahead_bias_clean": true,
+    "distraction_filter_applied": true,
+    "audit_log_appended": false
+  }
+}

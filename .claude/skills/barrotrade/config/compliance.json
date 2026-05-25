@@ -1,0 +1,105 @@
+{
+  "version": "1.0",
+  "updated_at": "2026-05-25",
+  "owner_agent": "barrotrade-compliance-officer",
+  "regulatory_frameworks": [
+    "자본시장과 금융투자업에 관한 법률 (자본시장법)",
+    "금융분야 AI 개발·활용 안내서 (금융위원회)",
+    "금융회사 내부통제 가이드라인",
+    "전자금융거래법"
+  ],
+  "human_in_the_loop": {
+    "hitl_threshold_krw": 50000000,
+    "hitl_threshold_pct_of_equity": 5.0,
+    "hitl_timeout_hours": 24,
+    "on_timeout": "mark_expired_and_close_cycle",
+    "approval_methods_accepted": [
+      "biometric_touchid",
+      "physical_token_otp",
+      "explicit_text_confirmation"
+    ],
+    "audit_required": true,
+    "approver_identity_must_match": "registered_account_holder"
+  },
+  "explainability_xai": {
+    "required_artifacts_per_order": [
+      "10_market_snapshot.md",
+      "15_news_rag.json",
+      "20~22_*_reports.md",
+      "30~33_*_signals.md",
+      "40_bull_brief.md",
+      "41_bear_brief.md",
+      "50_debate_log.md",
+      "60_risk_check.md",
+      "70_order.simulated.json",
+      "80_compliance.md"
+    ],
+    "retention_years": 5,
+    "format": "markdown + jsonl",
+    "extraction_sla_minutes": 30,
+    "language": "ko"
+  },
+  "bias_deflectors": {
+    "look_ahead_bias": {
+      "enabled": true,
+      "enforcement_point": "rag_query + backtest",
+      "rule": "all news/disclosures with published_at >= T_virtual are filtered out"
+    },
+    "distraction_effect": {
+      "enabled": true,
+      "enforcement_point": "rag_analyst NER step",
+      "rule": "target entity score must be >= 0.75 for inclusion"
+    },
+    "confirmation_bias": {
+      "enabled": true,
+      "enforcement_point": "debate moderator",
+      "rule": "bear_researcher always invoked even when all 4 signals bullish"
+    },
+    "anchoring_bias": {
+      "enabled": true,
+      "enforcement_point": "portfolio_pm",
+      "rule": "previous cycle outcome must not appear in current cycle prompt"
+    }
+  },
+  "audit_trail": {
+    "path": "logs/audit/<date>.jsonl",
+    "append_only": true,
+    "fields_required": [
+      "cycle_id", "ticker", "timestamp_utc", "user_id_hash",
+      "agents_invoked", "consensus_score", "risk_status",
+      "hitl_status", "order_simulated", "circuit_breaker_state"
+    ],
+    "hash_chain": {
+      "enabled": true,
+      "algorithm": "sha256",
+      "previous_hash_field": "prev_hash"
+    },
+    "tamper_detection_routine": "scripts/verify-audit-chain.sh"
+  },
+  "fsc_ai_guideline_mapping": {
+    "principle_1_human_accountability": {
+      "implementation": "HITL above threshold + compliance-officer sign-off"
+    },
+    "principle_2_safety": {
+      "implementation": "circuit_breaker + max_position_constraints + monte_carlo_stress_test"
+    },
+    "principle_3_transparency": {
+      "implementation": "full debate log + reasoning chain in 80_compliance.md"
+    },
+    "principle_4_fairness": {
+      "implementation": "no discriminatory features (ticker selection by quantitative criteria only)"
+    },
+    "principle_5_privacy": {
+      "implementation": "user_id_hash only, no PII in logs"
+    }
+  },
+  "anti_money_laundering_aml": {
+    "stub_only": true,
+    "note": "Read-only 시뮬레이션 스킬이므로 AML/KYC 통제는 외부 OMS 책임. 본 스킬은 거래 로그를 AML 분석 가능한 형태로 출력만 보장."
+  },
+  "data_residency": {
+    "primary_region": "ap-northeast-2",
+    "log_storage_region": "ap-northeast-2",
+    "cross_border_transfer_allowed": false
+  }
+}

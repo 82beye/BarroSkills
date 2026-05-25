@@ -1,0 +1,118 @@
+{
+  "version": "1.0",
+  "updated_at": "2026-05-25",
+  "currency": "USD",
+  "billing_cycle": "monthly",
+  "roles": {
+    "barrotrade-controller": {
+      "monthly_limit_usd": 5.0,
+      "on_limit": "alert_only",
+      "tracking_metrics": ["input_tokens", "output_tokens", "tool_calls"]
+    },
+    "barrotrade-data-preprocessor": {
+      "monthly_limit_usd": 3.0,
+      "on_limit": "fallback_to_local_llama",
+      "tracking_metrics": ["api_calls", "tokens"]
+    },
+    "barrotrade-rag-analyst": {
+      "monthly_limit_usd": 25.0,
+      "on_limit": "throttle_to_50pct",
+      "tracking_metrics": ["embedding_calls", "vector_lookups", "tokens"]
+    },
+    "barrotrade-macro-specialist": {
+      "monthly_limit_usd": 15.0,
+      "on_limit": "fallback_to_sonnet",
+      "tracking_metrics": ["tokens", "report_count"]
+    },
+    "barrotrade-sector-expert": {
+      "monthly_limit_usd": 10.0,
+      "on_limit": "fallback_to_haiku",
+      "tracking_metrics": ["tokens"]
+    },
+    "barrotrade-fundamental-specialist": {
+      "monthly_limit_usd": 12.0,
+      "on_limit": "fallback_to_haiku",
+      "tracking_metrics": ["tokens", "dart_lookups"]
+    },
+    "barrotrade-trend-expert": {
+      "monthly_limit_usd": 8.0,
+      "on_limit": "fallback_to_local_llama",
+      "tracking_metrics": ["signals_emitted"]
+    },
+    "barrotrade-mean-reversion-expert": {
+      "monthly_limit_usd": 8.0,
+      "on_limit": "fallback_to_local_llama",
+      "tracking_metrics": ["signals_emitted"]
+    },
+    "barrotrade-event-driven-expert": {
+      "monthly_limit_usd": 12.0,
+      "on_limit": "fallback_to_sonnet",
+      "tracking_metrics": ["events_classified"]
+    },
+    "barrotrade-pattern-expert": {
+      "monthly_limit_usd": 8.0,
+      "on_limit": "fallback_to_local_llama",
+      "tracking_metrics": ["patterns_detected"]
+    },
+    "barrotrade-bull-researcher": {
+      "monthly_limit_usd": 30.0,
+      "on_limit": "fallback_to_sonnet",
+      "tracking_metrics": ["debate_rounds", "tokens"]
+    },
+    "barrotrade-bear-researcher": {
+      "monthly_limit_usd": 30.0,
+      "on_limit": "fallback_to_sonnet",
+      "tracking_metrics": ["debate_rounds", "tokens"]
+    },
+    "barrotrade-debate-moderator": {
+      "monthly_limit_usd": 25.0,
+      "on_limit": "alert_only",
+      "tracking_metrics": ["consensus_count", "tokens"]
+    },
+    "barrotrade-risk-manager": {
+      "monthly_limit_usd": 10.0,
+      "on_limit": "alert_only",
+      "tracking_metrics": ["risk_checks", "tokens"]
+    },
+    "barrotrade-portfolio-pm": {
+      "monthly_limit_usd": 20.0,
+      "on_limit": "alert_only",
+      "tracking_metrics": ["orders_simulated", "tokens"]
+    },
+    "barrotrade-self-reflector": {
+      "monthly_limit_usd": 15.0,
+      "on_limit": "alert_only",
+      "tracking_metrics": ["reflections", "patterns_archived"]
+    },
+    "barrotrade-compliance-officer": {
+      "monthly_limit_usd": 8.0,
+      "on_limit": "alert_only",
+      "tracking_metrics": ["audit_reports", "hitl_events"]
+    }
+  },
+  "channel_budget_summary": {
+    "barrotrade_total_monthly_usd": 244.0,
+    "warning_threshold_pct": 70,
+    "critical_threshold_pct": 90,
+    "kill_switch_pct": 110,
+    "notification": {
+      "warning": "telegram",
+      "critical": "telegram + email",
+      "kill_switch": "telegram + email + sms"
+    }
+  },
+  "cost_optimization_rules": [
+    {
+      "rule": "stage_III_expert_caching",
+      "description": "동일 ticker 동일 봉 데이터 5분 내 재호출 시 캐시 사용. 토큰 사용 0으로 카운트."
+    },
+    {
+      "rule": "debate_skip_if_signal_unanimous",
+      "description": "Stage III의 4개 전략 신호가 모두 동일 방향이고 confidence ≥ 0.85 면 Bull/Bear 토론 단축 (라운드 1만)."
+    },
+    {
+      "rule": "rag_embedding_dedup",
+      "description": "동일 뉴스 URL 24h 내 재처리 차단. 벡터 DB hash 기반."
+    }
+  ]
+}

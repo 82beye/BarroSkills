@@ -1,0 +1,219 @@
+{
+  "version": "1.0",
+  "updated_at": "2026-05-25",
+  "vendor": "키움증권 REST API (Kiwoom Securities)",
+  "spec_source": "키움 REST API 문서.pdf (528p)",
+  "environments": {
+    "paper": {
+      "base_url": "https://mockapi.kiwoom.com",
+      "supports_markets": ["KRX"],
+      "rate_limit_per_second": 5,
+      "rate_limit_safety_pct": 0.8,
+      "effective_rps": 4,
+      "note": "모의투자 환경. KRX(국내주식)만 지원."
+    },
+    "live": {
+      "base_url": "https://api.kiwoom.com",
+      "supports_markets": ["KRX", "OVERSEAS"],
+      "rate_limit_per_second": 10,
+      "rate_limit_safety_pct": 0.8,
+      "effective_rps": 8,
+      "read_only_enforced": true,
+      "note": "운영 환경. 본 스킬은 read-only 만 허용, 주문 송출 금지."
+    }
+  },
+  "websocket_url": "wss://api.kiwoom.com:10000/api/dostk/websocket",
+  "websocket_url_paper": "wss://mockapi.kiwoom.com:10000/api/dostk/websocket",
+  "auth": {
+    "issue_endpoint": "/oauth2/token",
+    "revoke_endpoint": "/oauth2/revoke",
+    "method": "POST",
+    "content_type": "application/json;charset=UTF-8",
+    "issue_request_body": {
+      "grant_type": "client_credentials",
+      "appkey": "<KIWOOM_APP_KEY>",
+      "secretkey": "<KIWOOM_SECRET_KEY>"
+    },
+    "issue_response_fields": ["token", "token_type", "expires_dt", "return_code", "return_msg"],
+    "header_required": {
+      "api-id": "7자리 TR 코드 (예: ka00001)",
+      "authorization": "Bearer <token>",
+      "cont-yn": "연속조회 여부 (Y/N) — optional",
+      "next-key": "연속조회 키 — optional"
+    },
+    "token_ttl_hours": 24,
+    "token_refresh_buffer_sec": 600,
+    "credential_resolution_order": [
+      "process.env.KIWOOM_APP_KEY",
+      "macos_keychain: BarroTrade/KIWOOM_APP_KEY",
+      ".env file"
+    ]
+  },
+  "category_base_paths": {
+    "auth": "/oauth2",
+    "stock_info": "/api/dostk/stkinfo",
+    "market_condition": "/api/dostk/mrkcond",
+    "chart": "/api/dostk/chart",
+    "ranking_info": "/api/dostk/rkinfo",
+    "sector": "/api/dostk/sect",
+    "theme": "/api/dostk/thme",
+    "foreigner_institution": "/api/dostk/frgnistt",
+    "short_selling": "/api/dostk/slb",
+    "etf": "/api/dostk/etf",
+    "elw": "/api/dostk/elw",
+    "shsa": "/api/dostk/shsa",
+    "account": "/api/dostk/acnt",
+    "order": "/api/dostk/ordr",
+    "credit_order": "/api/dostk/crdordr",
+    "websocket": "/api/dostk/websocket"
+  },
+  "allowed_endpoints": {
+    "quotations": [
+      {"tr_id": "ka10001", "name": "주식기본정보요청", "path": "/api/dostk/stkinfo"},
+      {"tr_id": "ka10002", "name": "주식거래원요청", "path": "/api/dostk/stkinfo"},
+      {"tr_id": "ka10003", "name": "체결정보요청", "path": "/api/dostk/stkinfo"},
+      {"tr_id": "ka10004", "name": "주식호가요청", "path": "/api/dostk/mrkcond"},
+      {"tr_id": "ka10005", "name": "주식일주월시분요청", "path": "/api/dostk/mrkcond"},
+      {"tr_id": "ka10006", "name": "주식시분요청", "path": "/api/dostk/mrkcond"},
+      {"tr_id": "ka10007", "name": "시세표성정보요청", "path": "/api/dostk/mrkcond"},
+      {"tr_id": "ka10015", "name": "일별거래상세요청", "path": "/api/dostk/stkinfo"},
+      {"tr_id": "ka10016", "name": "신고저가요청", "path": "/api/dostk/stkinfo"},
+      {"tr_id": "ka10017", "name": "상하한가요청", "path": "/api/dostk/stkinfo"},
+      {"tr_id": "ka10018", "name": "고저가근접요청", "path": "/api/dostk/stkinfo"},
+      {"tr_id": "ka10019", "name": "가격급등락요청", "path": "/api/dostk/stkinfo"}
+    ],
+    "ranking": [
+      {"tr_id": "ka10020", "name": "호가잔량상위요청", "path": "/api/dostk/rkinfo"},
+      {"tr_id": "ka10023", "name": "거래량급증요청", "path": "/api/dostk/rkinfo"},
+      {"tr_id": "ka10027", "name": "전일대비등락률상위요청", "path": "/api/dostk/rkinfo"},
+      {"tr_id": "ka10030", "name": "당일거래량상위요청", "path": "/api/dostk/rkinfo"},
+      {"tr_id": "ka10032", "name": "거래대금상위요청", "path": "/api/dostk/rkinfo"}
+    ],
+    "foreigner_institution": [
+      {"tr_id": "ka10008", "name": "주식외국인종목별매매동향", "path": "/api/dostk/frgnistt"},
+      {"tr_id": "ka10009", "name": "주식기관요청", "path": "/api/dostk/frgnistt"},
+      {"tr_id": "ka10036", "name": "외인한도소진율증가상위", "path": "/api/dostk/frgnistt"}
+    ],
+    "sector_theme": [
+      {"tr_id": "ka10010", "name": "업종프로그램요청", "path": "/api/dostk/sect"},
+      {"tr_id": "ka10051", "name": "업종별투자자순매수요청", "path": "/api/dostk/sect"}
+    ],
+    "short_selling": [
+      {"tr_id": "ka10014", "name": "공매도추이요청", "path": "/api/dostk/slb"}
+    ],
+    "chart": [
+      {"tr_id": "ka10080", "name": "주식분봉차트조회요청", "path": "/api/dostk/chart"},
+      {"tr_id": "ka10081", "name": "주식일봉차트조회요청", "path": "/api/dostk/chart"},
+      {"tr_id": "ka10082", "name": "주식주봉차트조회요청", "path": "/api/dostk/chart"},
+      {"tr_id": "ka10083", "name": "주식월봉차트조회요청", "path": "/api/dostk/chart"}
+    ],
+    "account_inquiry": [
+      {"tr_id": "kt00001", "name": "예수금상세현황요청", "path": "/api/dostk/acnt"},
+      {"tr_id": "kt00002", "name": "일별추정예탁자산현황요청", "path": "/api/dostk/acnt"},
+      {"tr_id": "kt00003", "name": "추정자산조회요청", "path": "/api/dostk/acnt"},
+      {"tr_id": "kt00004", "name": "계좌평가현황요청", "path": "/api/dostk/acnt"},
+      {"tr_id": "kt00005", "name": "체결잔고요청", "path": "/api/dostk/acnt"},
+      {"tr_id": "kt00007", "name": "계좌별주문체결내역상세요청", "path": "/api/dostk/acnt"},
+      {"tr_id": "kt00010", "name": "주문인출가능금액요청", "path": "/api/dostk/acnt"},
+      {"tr_id": "kt00016", "name": "일별계좌수익률상세현황요청", "path": "/api/dostk/acnt"},
+      {"tr_id": "kt00018", "name": "계좌평가잔고내역요청", "path": "/api/dostk/acnt"}
+    ],
+    "account_inquiry_total_count": 17,
+    "note": "전체 ka* 150개 + kt0* 17개 = 약 167개 read-only 엔드포인트. 위 목록은 BarroTrade 가 우선 사용하는 핵심 서브셋."
+  },
+  "blocked_endpoints": {
+    "order": [
+      {"tr_id": "kt10000", "name": "주식 매수주문", "path": "/api/dostk/ordr"},
+      {"tr_id": "kt10001", "name": "주식 매도주문", "path": "/api/dostk/ordr"},
+      {"tr_id": "kt10002", "name": "주식 정정주문", "path": "/api/dostk/ordr"},
+      {"tr_id": "kt10003", "name": "주식 취소주문", "path": "/api/dostk/ordr"}
+    ],
+    "credit_order": [
+      {"tr_id": "kt10006", "name": "신용 매수주문", "path": "/api/dostk/crdordr"},
+      {"tr_id": "kt10007", "name": "신용 매도주문", "path": "/api/dostk/crdordr"},
+      {"tr_id": "kt10008", "name": "신용 정정주문", "path": "/api/dostk/crdordr"},
+      {"tr_id": "kt10009", "name": "신용 취소주문", "path": "/api/dostk/crdordr"}
+    ],
+    "blocked_path_prefixes": [
+      "/api/dostk/ordr",
+      "/api/dostk/crdordr"
+    ],
+    "reason": "본 스킬은 read-only. 실거래 송출은 외부 OMS + HITL 결재로만 가능.",
+    "enforcement": "API Gateway 가 path prefix 매칭 시 즉시 reject + audit log ERROR 라인"
+  },
+  "websocket": {
+    "url": "wss://api.kiwoom.com:10000/api/dostk/websocket",
+    "url_paper": "wss://mockapi.kiwoom.com:10000/api/dostk/websocket",
+    "auth_header_required": true,
+    "auth_header_field": "authorization",
+    "auth_header_value_format": "Bearer <token>",
+    "subscription_types_supported": [
+      "주식기세",
+      "주식체결",
+      "주식우선호가",
+      "주식호가잔량",
+      "주식시간외호가",
+      "주식예상체결"
+    ],
+    "heartbeat_interval_sec": 30,
+    "reconnect_max_retries": -1,
+    "reconnect_backoff_sec": [1, 2, 5, 10, 30],
+    "failover_to_rest_polling_after_ms": 5000,
+    "failover_polling_path": "/api/dostk/mrkcond",
+    "failover_polling_tr_id": "ka10004",
+    "failover_polling_interval_ms": 1000
+  },
+  "rate_limit_strategy": {
+    "algorithm": "token_bucket",
+    "gateway_singleton": true,
+    "queue_overflow_action": "backpressure_to_caller",
+    "on_429_response": {
+      "exponential_backoff_sec": [1, 2, 4],
+      "max_retries": 3,
+      "after_max_retries": "pause_cycle_and_alert_user"
+    },
+    "kiwoom_specific_errors": {
+      "1687": "재귀 호출 제한 — 동일 API 연속 호출 차단. 다른 TR 코드와 인터리브 필요"
+    }
+  },
+  "continuation_pagination": {
+    "header_field_cont": "cont-yn",
+    "header_field_next_key": "next-key",
+    "description": "Response Header 의 cont-yn 이 Y 면 next-key 값을 다음 요청 Header 에 세팅하여 연속 조회",
+    "max_pages_per_cycle": 10
+  },
+  "compliance_logging": {
+    "log_every_request": true,
+    "path": "logs/audit/kiwoom-api-<date>.jsonl",
+    "redact_secrets": true,
+    "include_response_time_ms": true,
+    "include_tr_id": true,
+    "include_continuation_state": true
+  },
+  "kis_vs_kiwoom_differences": {
+    "url_structure": {
+      "kis": "/uapi/<market>/v1/<category>/<endpoint-name>",
+      "kiwoom": "/api/dostk/<category-code>"
+    },
+    "endpoint_identification": {
+      "kis": "URL path 가 endpoint 식별",
+      "kiwoom": "동일 path 에서 header 의 api-id (TR 코드) 로 endpoint 식별"
+    },
+    "pagination": {
+      "kis": "tr_cont header (F/N/M)",
+      "kiwoom": "cont-yn + next-key header"
+    },
+    "websocket_protocol": {
+      "kis": "ops.koreainvestment.com:21000/31000, JSON message with tr_id",
+      "kiwoom": "api.kiwoom.com:10000/api/dostk/websocket"
+    },
+    "auth": {
+      "kis": "POST /oauth2/tokenP, grant_type=client_credentials, appkey+appsecret",
+      "kiwoom": "POST /oauth2/token, grant_type=client_credentials, appkey+secretkey"
+    },
+    "global_markets": {
+      "kis": "KRX, NYSE, NASDAQ, HKEX, TSE, SSE, SZSE",
+      "kiwoom": "KRX 주력, 해외주식 일부 (live only)"
+    }
+  }
+}

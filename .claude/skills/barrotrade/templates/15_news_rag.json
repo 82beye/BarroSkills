@@ -1,0 +1,42 @@
+{
+  "template_id": "15_news_rag",
+  "owner_agent": "barrotrade-rag-analyst",
+  "cycle_id": "{{cycle_id}}",
+  "ticker": "{{ticker}}",
+  "ts_utc": "{{ts_utc}}",
+  "T_virtual": "{{T_virtual}}",
+  "look_ahead_bias_deflector": true,
+  "distraction_filter_min": 0.75,
+  "documents": [
+    {
+      "doc_id": "{{hash}}",
+      "source": "{{source_url}}",
+      "type": "news|disclosure",
+      "published_at": "{{iso8601}}",
+      "title": "{{title}}",
+      "entity_score": 0.0,
+      "sentiment_score": 0.0,
+      "lexicon_polarity": 0.0,
+      "ner_entities": [
+        {"name": "{{entity}}", "type": "ORG|PERSON|PRODUCT", "weight": 0.0}
+      ],
+      "summary_ko": "{{1-3줄 한국어 요약}}",
+      "citation_quote": "{{원본 직접 인용}}",
+      "relevance_to_ticker": 0.0
+    }
+  ],
+  "aggregate": {
+    "total_documents_processed": 0,
+    "documents_after_distraction_filter": 0,
+    "documents_after_lookahead_filter": 0,
+    "weighted_sentiment_score": 0.0,
+    "veto_keyword_hits": [],
+    "veto_triggered": false
+  },
+  "risk_flags": {
+    "audit_opinion": "none|disclaimer|adverse|qualified|clean",
+    "trading_halt": false,
+    "delisting_risk": false,
+    "fraud_indicators": []
+  }
+}

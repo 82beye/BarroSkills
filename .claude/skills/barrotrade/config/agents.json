@@ -1,0 +1,224 @@
+{
+  "version": "1.0",
+  "updated_at": "2026-05-25",
+  "total_agents": 17,
+  "agents": [
+    {
+      "id": "barrotrade-controller",
+      "layer": "controller",
+      "role": "사이클 오케스트레이션 + 상태 머신",
+      "model_primary": "claude-opus-4-7",
+      "model_fallback": "claude-sonnet-4-6",
+      "temperature": 0.2,
+      "max_tokens": 4096,
+      "inputs": ["mode", "args", "config/*"],
+      "outputs": ["cycle_id", "agent_dispatch_plan", "status_log"]
+    },
+    {
+      "id": "barrotrade-data-preprocessor",
+      "layer": "input",
+      "role": "OHLCV·VWAP 정규화, 거래대금 필터, 데이터 왜곡 정제",
+      "model_primary": "claude-haiku-4-5-20251001",
+      "model_fallback": "local-llama-3-8b",
+      "temperature": 0.0,
+      "max_tokens": 2048,
+      "inputs": ["kis_websocket_tick", "redis_timeseries"],
+      "outputs": ["10_market_snapshot.md"]
+    },
+    {
+      "id": "barrotrade-rag-analyst",
+      "layer": "input",
+      "role": "실시간 뉴스·DART 공시 RAG. NER 기반 distraction filter (≥0.75)",
+      "model_primary": "gpt-4o-mini",
+      "model_fallback": "claude-haiku-4-5-20251001",
+      "temperature": 0.1,
+      "max_tokens": 2048,
+      "inputs": ["news_rss", "dart_disclosures", "vector_db"],
+      "outputs": ["15_news_rag.json"],
+      "guardrails": {
+        "look_ahead_bias_deflector": true,
+        "distraction_filter_min": 0.75
+      }
+    },
+    {
+      "id": "barrotrade-macro-specialist",
+      "layer": "analysis",
+      "role": "거시 감성 지수 (성장·인플레), 글로벌 매크로 국면 정의",
+      "model_primary": "gemini-1.5-pro",
+      "model_fallback": "claude-sonnet-4-6",
+      "temperature": 0.3,
+      "max_tokens": 4096,
+      "inputs": ["wsj_text", "fed_statements", "macro_api"],
+      "outputs": ["20_macro_report.md"]
+    },
+    {
+      "id": "barrotrade-sector-expert",
+      "layer": "analysis",
+      "role": "섹터 강도 지수, 주도 테마, 공급망 노출",
+      "model_primary": "claude-sonnet-4-6",
+      "model_fallback": "gpt-4o",
+      "temperature": 0.3,
+      "max_tokens": 3072,
+      "inputs": ["sector_turnover", "supply_chain_ontology"],
+      "outputs": ["21_sector_brief.md"]
+    },
+    {
+      "id": "barrotrade-fundamental-specialist",
+      "layer": "analysis",
+      "role": "재무제표 감사, 적정 가치 범위, 안전성 점수",
+      "model_primary": "claude-sonnet-4-6",
+      "model_fallback": "gemini-1.5-pro",
+      "temperature": 0.2,
+      "max_tokens": 4096,
+      "inputs": ["dart_quarterly_reports", "earnings_releases"],
+      "outputs": ["22_fundamental.md"]
+    },
+    {
+      "id": "barrotrade-trend-expert",
+      "layer": "strategy",
+      "role": "EMA·ADX·MACD. ADX ≥ 25 게이트로만 추세 신호 발행",
+      "model_primary": "claude-haiku-4-5-20251001",
+      "model_fallback": "local-llama-3-8b",
+      "temperature": 0.1,
+      "max_tokens": 2048,
+      "inputs": ["10_market_snapshot.md"],
+      "outputs": ["30_trend_signal.md"],
+      "indicators": {
+        "ema_periods": [8, 21, 55],
+        "adx_period": 14,
+        "adx_min_gate": 25,
+        "macd_fast": 12,
+        "macd_slow": 26,
+        "macd_signal": 9
+      }
+    },
+    {
+      "id": "barrotrade-mean-reversion-expert",
+      "layer": "strategy",
+      "role": "Bollinger Bands·RSI·Z-Score. |Z|≥2.5 진입 격발",
+      "model_primary": "claude-haiku-4-5-20251001",
+      "model_fallback": "local-llama-3-8b",
+      "temperature": 0.1,
+      "max_tokens": 2048,
+      "inputs": ["10_market_snapshot.md"],
+      "outputs": ["31_meanrev_signal.md"],
+      "indicators": {
+        "bb_period": 20,
+        "bb_sigma": 2.0,
+        "rsi_period": 14,
+        "rsi_oversold": 30,
+        "rsi_overbought": 70,
+        "z_score_lookback": 60,
+        "z_score_entry_threshold": 2.5
+      }
+    },
+    {
+      "id": "barrotrade-event-driven-expert",
+      "layer": "strategy",
+      "role": "공시·속보 이벤트 임팩트. Persistent vs Transitory 분류",
+      "model_primary": "gpt-4o",
+      "model_fallback": "claude-sonnet-4-6",
+      "temperature": 0.2,
+      "max_tokens": 3072,
+      "inputs": ["15_news_rag.json", "lm_finance_lexicon"],
+      "outputs": ["32_event_signal.md"]
+    },
+    {
+      "id": "barrotrade-pattern-expert",
+      "layer": "strategy",
+      "role": "피벗·삼각수렴·헤드앤숄더·이중바닥 자동 검출",
+      "model_primary": "claude-haiku-4-5-20251001",
+      "model_fallback": "gpt-4o-mini",
+      "temperature": 0.1,
+      "max_tokens": 2048,
+      "inputs": ["multi_timeframe_ohlcv"],
+      "outputs": ["33_pattern_signal.md"]
+    },
+    {
+      "id": "barrotrade-bull-researcher",
+      "layer": "debate",
+      "role": "낙관 논거 (기술·감성 긍정, 상방 목표)",
+      "model_primary": "claude-opus-4-7",
+      "model_fallback": "gpt-4o",
+      "temperature": 0.5,
+      "max_tokens": 3072,
+      "inputs": ["20~22 reports", "30~33 signals"],
+      "outputs": ["40_bull_brief.md"]
+    },
+    {
+      "id": "barrotrade-bear-researcher",
+      "layer": "debate",
+      "role": "비관 논거 (거시·재무 위험, 손절 단가)",
+      "model_primary": "claude-opus-4-7",
+      "model_fallback": "gpt-4o",
+      "temperature": 0.5,
+      "max_tokens": 3072,
+      "inputs": ["20~22 reports", "30~33 signals"],
+      "outputs": ["41_bear_brief.md"]
+    },
+    {
+      "id": "barrotrade-debate-moderator",
+      "layer": "debate",
+      "role": "교차 논증, 합의문, 가중치 투표 집계",
+      "model_primary": "claude-opus-4-7",
+      "model_fallback": "gpt-4o",
+      "temperature": 0.4,
+      "max_tokens": 4096,
+      "inputs": ["40_bull_brief.md", "41_bear_brief.md", "consensus.json"],
+      "outputs": ["50_debate_log.md", "logs/consensus/<cycle>.jsonl"]
+    },
+    {
+      "id": "barrotrade-risk-manager",
+      "layer": "control",
+      "role": "ATR 사이징, 트레일링 스탑, 회로 차단기",
+      "model_primary": "claude-sonnet-4-6",
+      "model_fallback": "claude-haiku-4-5-20251001",
+      "temperature": 0.0,
+      "max_tokens": 2048,
+      "inputs": ["50_debate_log.md", "risk-policy.json", "current_portfolio"],
+      "outputs": ["60_risk_check.md", "logs/risk/<cycle>.jsonl"]
+    },
+    {
+      "id": "barrotrade-portfolio-pm",
+      "layer": "control",
+      "role": "자산 배분, 주문 명령서 시뮬, HITL 게이트",
+      "model_primary": "claude-opus-4-7",
+      "model_fallback": "claude-sonnet-4-6",
+      "temperature": 0.2,
+      "max_tokens": 3072,
+      "inputs": ["60_risk_check.md", "compliance.json"],
+      "outputs": ["70_order.simulated.json"]
+    },
+    {
+      "id": "barrotrade-self-reflector",
+      "layer": "reflect",
+      "role": "손절 역추적, 묵살된 Bear 경고 식별, 의미론적 기억 적재",
+      "model_primary": "claude-opus-4-7",
+      "model_fallback": "gpt-4o",
+      "temperature": 0.3,
+      "max_tokens": 4096,
+      "inputs": ["cycle archive (40~70)"],
+      "outputs": ["99_reflection.md", "workspace/_memory/semantic/*.md"]
+    },
+    {
+      "id": "barrotrade-compliance-officer",
+      "layer": "compliance",
+      "role": "설명가능성 리포트, HITL 추적, 감사 추적, FSC 가이드라인 매핑",
+      "model_primary": "claude-sonnet-4-6",
+      "model_fallback": "gpt-4o-mini",
+      "temperature": 0.1,
+      "max_tokens": 3072,
+      "inputs": ["full cycle archive", "compliance.json"],
+      "outputs": ["80_compliance.md", "logs/audit/<date>.jsonl"]
+    }
+  ],
+  "execution_topology": {
+    "stage_I_parallel": ["barrotrade-data-preprocessor", "barrotrade-rag-analyst"],
+    "stage_II_parallel": ["barrotrade-macro-specialist", "barrotrade-sector-expert", "barrotrade-fundamental-specialist"],
+    "stage_III_parallel": ["barrotrade-trend-expert", "barrotrade-mean-reversion-expert", "barrotrade-event-driven-expert", "barrotrade-pattern-expert"],
+    "stage_IV_serial": ["barrotrade-bull-researcher", "barrotrade-bear-researcher", "barrotrade-debate-moderator"],
+    "stage_V_serial": ["barrotrade-risk-manager"],
+    "stage_VI_serial": ["barrotrade-portfolio-pm"],
+    "stage_VII_serial": ["barrotrade-compliance-officer"]
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "version": "1.0",
+  "updated_at": "2026-05-25",
+  "owner_agent": "barrotrade-risk-manager",
+  "position_sizing": {
+    "formula": "Q_i = min( total_equity * alpha_risk / (ATR_i(N) * multiplier_kappa), total_equity * gamma_max_alloc / price_i )",
+    "alpha_risk_per_trade": 0.01,
+    "gamma_max_alloc_per_ticker": 0.15,
+    "atr_period_N": 14,
+    "multiplier_kappa": 2.0,
+    "rounding": "floor"
+  },
+  "trailing_stop": {
+    "formula": "Exit(t) = max( Entry - beta * ATR(t0), max_{tau<=t}(Price(tau)) - theta * ATR(t) )",
+    "initial_beta": 2.0,
+    "tracking_theta": 1.5,
+    "trigger_mode": "market_order_on_touch",
+    "min_holding_minutes_before_arm": 5
+  },
+  "daily_loss_circuit_breaker": {
+    "threshold_pct_of_day_start_equity": 1.5,
+    "on_trigger": [
+      "reject_new_cycles",
+      "simulate_liquidation_of_holdings",
+      "lock_agents_offline_mode",
+      "require_human_unlock"
+    ],
+    "unlock_command": "/barrotrade init --unlock --confirm",
+    "audit_required": true
+  },
+  "portfolio_constraints": {
+    "max_concurrent_positions": 8,
+    "max_sector_concentration_pct": 35,
+    "max_single_ticker_pct": 15,
+    "min_cash_buffer_pct": 10,
+    "leverage_max": 1.0,
+    "short_selling": false
+  },
+  "monte_carlo_stress_test": {
+    "enabled": true,
+    "scenarios": ["covid_2020_03", "fed_pivot_2022", "korea_blackout_2024_q3"],
+    "min_simulations": 1000,
+    "fail_threshold_drawdown_pct": 8.0
+  },
+  "execution_constraints": {
+    "max_slippage_tolerance_bps": 15,
+    "min_order_value_krw": 100000,
+    "max_order_value_per_cycle_krw": 100000000,
+    "limit_order_offset_bps_from_mid": 5,
+    "cancel_replace_max_per_minute": 4
+  },
+  "audit_log": {
+    "path": "logs/risk/<cycle_id>.jsonl",
+    "fields_required": [
+      "cycle_id", "timestamp", "ticker", "position_sizing_inputs",
+      "atr_value", "computed_Q_i", "trailing_stop_initial",
+      "circuit_breaker_status", "pass_fail", "reason_codes"
+    ]
+  }
+}
