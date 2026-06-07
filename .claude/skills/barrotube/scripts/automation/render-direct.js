@@ -28,6 +28,15 @@ import { execSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { parse as parseYAML } from 'yaml';
 
+// 이모지·픽토그램(🚨📚✅ 등) 제거 — 자막 burn-in 표시 오류 방지 (2026-06-07)
+// generate-tts.js stripEmoji 와 동일 규칙.
+function stripEmoji(s) {
+  return (s || '')
+    .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{2300}-\u{23FF}\u{1F1E6}-\u{1F1FF}\u{FE00}-\u{FE0F}\u{200D}]/gu, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 function parseFrontmatter(mdPath) {
   const content = readFileSync(mdPath, 'utf-8');
   const match = content.match(/^---\n([\s\S]*?)\n---/);
@@ -56,7 +65,7 @@ function probeDuration(mediaPath) {
  * 각 phrase에 시간 배분 (char 비율)
  */
 function splitNarrationByTime(narration, totalSec) {
-  const phrases = narration
+  const phrases = stripEmoji(narration)
     .split(/(?<=[.!?])\s+/)
     .flatMap(p => {
       // 한 문장도 60자 넘으면 쉼표 기준 재분할

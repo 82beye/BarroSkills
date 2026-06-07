@@ -333,9 +333,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         // 1. Extract [palette:NAME] token from image_prompt (if present)
         const { prompt: cleanedPrompt, paletteName: tokenPalette } = extractPaletteToken(scene.image_prompt || '');
 
-        // 2. Fallback: map scene.role to a default palette
-        const palettePick = tokenPalette || ROLE_PALETTE_FALLBACK[scene.role] || null;
-        const paletteBlock = palettePick ? loadPalette(meta.channel_id, palettePick) : '';
+        // 2. Palette 색상 강제 제거 (2026-06-07 배경이미지 룰 개선)
+        //    role→bullish/bearish/wealth 자동 색상(ROLE_PALETTE_FALLBACK)과 [palette:NAME]
+        //    색상 블록 주입을 비활성화. style-guide framing + character DNA 는 유지하고,
+        //    배경 색감은 콘텐츠/씬 image_prompt 에 위임한다. (extractPaletteToken 은
+        //    cleanedPrompt 에서 [palette:] 토큰만 제거하는 용도로 계속 사용)
+        const palettePick = null;
+        const paletteBlock = '';
 
         // 3. Scene mascot mode (Hybrid v2, 2026-05-16) — 씬 이미지에서 마스코트 비중 결정.
         //    'minimal' (기본): full DNA 제외, framing only + corner accent 안내. 콘텐츠 dominant.

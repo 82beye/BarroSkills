@@ -18,6 +18,15 @@ const API_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
 const DEFAULT_VOICE_ID = '4JJwo477JUAx3HV0T7n7'; // Yohan Koo — Encouraging, Clear and Airy
 const DEFAULT_MODEL = 'eleven_multilingual_v2';
 
+// 이모지·픽토그램(🚨📚✅ 등) 제거 — TTS 오발음·자막 표시 오류 방지 (2026-06-07)
+// 자막(render-direct.js)과 동일 규칙. narration 표기 원본은 보존하고 TTS 입력만 정제한다.
+export function stripEmoji(s) {
+  return (s || '')
+    .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{2300}-\u{23FF}\u{1F1E6}-\u{1F1FF}\u{FE00}-\u{FE0F}\u{200D}]/gu, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 export async function generateTTS({ text, outPath, voiceId = DEFAULT_VOICE_ID, model = DEFAULT_MODEL, settings = {}, costContext = {} }) {
   const apiKey = getSecret('ELEVENLABS_API_KEY');
   if (!apiKey) throw new Error('ELEVENLABS_API_KEY not set in .env');
@@ -159,7 +168,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
           console.log(`  ⏭  Scene ${scene.scene_id} exists (use --force to regen)`);
           continue;
         }
-        const { text: ttsText, count: applied } = applyOverrides(scene.narration);
+        const { text: ttsText, count: applied } = applyOverrides(stripEmoji(scene.narration));
         if (applied > 0) {
           totalOverrides += applied;
           console.log(`  📝 Scene ${scene.scene_id}: ${applied} phoneme override(s) applied`);
