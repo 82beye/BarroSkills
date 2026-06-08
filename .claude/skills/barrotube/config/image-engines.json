@@ -1,0 +1,16 @@
+{
+  "version": "1.0",
+  "description": "이미지 생성 엔진 전역 설정(SSOT). S6d 인트로 / S6e 썸네일 단계가 공유한다. 환경변수(BT_IMAGE_ENGINE 등)가 이 파일보다 우선한다. 'auto'=현행 호환(인트로: OPENAI_API_KEY 있으면 openai, 썸네일: gemini).",
+  "global": "openai",
+  "stages": {
+    "S6c_scene": "openai",
+    "S6d_intro": "openai",
+    "S6e_thumbnail": "auto"
+  },
+  "_notes": {
+    "values": "gemini | openai | auto",
+    "priority_high_to_low": "--engine(CLI) > BT_INTRO_ENGINE / BT_THUMBNAIL_ENGINE(단계별 env) > BT_INTRO_FORCE_GEMINI=1(legacy, 인트로 한정) > BT_IMAGE_ENGINE(전역 env) > config.stages[stage] > config.global > auto(현행 호환)",
+    "openai_requires": "OPENAI_API_KEY (없으면 자동으로 gemini 강등)",
+    "quick_global_switch": "전 파이프라인을 OpenAI로 전환하려면 BT_IMAGE_ENGINE=openai 또는 이 파일 global='openai'"
+  }
+}

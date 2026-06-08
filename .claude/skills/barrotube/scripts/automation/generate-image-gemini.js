@@ -27,6 +27,8 @@ import {
   computeTreatment,
 } from './lib/public-figures.js';
 import { recordCost } from './lib/cost-tracker.js';
+import { generateImageOpenAI } from './lib/image-engines/openai-gpt-image.js';
+import { resolveImageEngine } from './lib/image-engine-config.js';
 
 const DEFAULT_MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image-preview';
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
@@ -315,7 +317,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
       mkdirSync(outDir, { recursive: true });
 
-      const resolution = opts.resolution || '1K';
+      const resolution = opts.resolution || '2K';  // 2026-06-08: 1K→2K 상향 (표현력/디테일 개선, 비용 대비 품질)
       console.log(`📐 Format=${format} → aspect=${aspectRatio}, resolution=${resolution}, model=${DEFAULT_MODEL}`);
       if (stylePath) {
         console.log(`📋 Framing: ${stylePath.replace(process.cwd() + '/', '')}`);
@@ -405,17 +407,44 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         const parts = [charPrefix, emotionBlock, paletteBlock, visualHintBlock, cleanedPrompt].filter(Boolean);
         const fullPrompt = parts.join('\n\n');
 
-        await generateImageGemini({
-          prompt: fullPrompt,
-          outPath,
-          aspectRatio,
-          resolution,
-          costContext: {
-            episode: meta.episode_id || null,
-            stage: 'S6c',
-            note: `scene_${scene.scene_id}`,
-          },
-        });
+        // 프롬프트 산출물 저장 (품질 진단·디버깅용, 2026-06-08) — API에 보낸 최종 프롬프트를 파일로 남긴다.
+        try {
+          writeFileSync(outPath.replace(/\.png$/, '.prompt.txt'),
+            `# scene_${scene.scene_id} (${scene.role || ''})\n# model=${DEFAULT_MODEL} aspect=${aspectRatio} resolution=${resolution}\n\n${fullPrompt}\n`, 'utf-8');
+        } catch {}
+
+        // 엔진 분기 (2026-06-08): config/image-engines.json S6c_scene 으로 결정.
+        //   openai=gpt-image-1(고품질), 그 외=gemini. OPENAI 키는 resolve 전에 hydrate.
+        if (!process.env.OPENAI_API_KEY) {
+          const _k = getSecret('OPENAI_API_KEY');
+          if (_k) process.env.OPENAI_API_KEY = _k;
+        }
+        const sceneEng = resolveImageEngine('S6c_scene', { env: process.env });
+        if (sceneEng.engine === 'openai') {
+          await generateImageOpenAI({
+            prompt: fullPrompt,
+            outPath,
+            size: aspectRatio === '16:9' ? '1536x1024' : '1024x1536',
+            quality: 'high',
+            costContext: {
+              episode: meta.episode_id || null,
+              stage: 'S6c',
+              note: `scene_${scene.scene_id}`,
+            },
+          });
+        } else {
+          await generateImageGemini({
+            prompt: fullPrompt,
+            outPath,
+            aspectRatio,
+            resolution,
+            costContext: {
+              episode: meta.episode_id || null,
+              stage: 'S6c',
+              note: `scene_${scene.scene_id}`,
+            },
+          });
+        }
         const paletteTag = palettePick ? ` [palette:${palettePick}${tokenPalette ? '' : ' auto'}]` : '';
         const dnaTag = scene.character_override && !dnaUsed ? ' [dna:bypassed]' : '';
         console.log(`  ✅ Scene ${scene.scene_id}${paletteTag}${overrideTag}${dnaTag}`);
