@@ -18,6 +18,11 @@
  * Usage:
  *   node generate-thumbnail.js --episode <dir>
  *   node generate-thumbnail.js --episode <dir> --palette bullish --keyword "90%" --force
+ *   node generate-thumbnail.js --episode <dir> --engine openai   # gpt-image-1 (실패 시 Gemini 폴백)
+ *
+ * 이미지 엔진(기본 Gemini):
+ *   --engine openai  또는  BT_THUMBNAIL_ENGINE=openai (+ OPENAI_API_KEY) → gpt-image-1.
+ *   인트로(S6d v10)와 동일하게 opt-in 이며, 키 없음/호출 실패 시 자동으로 Gemini 폴백.
  *
  * 참조 문서: workspace/channels/{channel}/intro-thumbnail-guide.md
  */
@@ -36,6 +41,16 @@ import {
   resolveFiguresForBrief,
 } from './lib/public-figures.js';
 import { composeThumbnail } from './lib/thumbnail-composer.js';
+import { detectSentimentPalette } from './lib/sentiment.js';
+import { resolveImageEngine } from './lib/image-engine-config.js';
+import { getSecret } from './config-loader.js';
+
+// OpenAI 키를 .env/keychain → process.env 로 hydrate. resolver·openai-gpt-image·enrich·verify
+// 가 모두 process.env.OPENAI_API_KEY 를 직접 읽으므로, keychain에만 있어도 전역으로 인식되게 한다.
+function hydrateOpenAIKey() {
+  if (process.env.OPENAI_API_KEY) return;
+  try { const k = getSecret('OPENAI_API_KEY'); if (k) process.env.OPENAI_API_KEY = k; } catch { /* keychain 미설정 무시 */ }
+}
 
 function locateBase(epDir, platformHint) {
   const candidates = platformHint
@@ -70,6 +85,8 @@ function loadSeriesDisplayName(seriesId) {
 const BRAND_TAGLINE = '3분이면 충분한 경제';
 
 // role 기반 기본 팔레트 (Hook 씬의 role이 thumbnail emotion과 가장 가까움)
+// 주의: role 단독으로는 감정(상승/하락)을 구분하지 못한다. 단발 EP는
+// detectSentimentPalette()가 topic/narration 감정을 먼저 반영하고, 여기는 최후 fallback.
 const ROLE_PALETTE_FALLBACK = {
   hook: 'bullish',
   data: 'bullish',
@@ -78,8 +95,44 @@ const ROLE_PALETTE_FALLBACK = {
   wrap: 'cta',
 };
 
+// topic + hook narration 텍스트 감정 → 팔레트 자동 추론 로직은 lib/sentiment.js로 이관.
+// (단순 키워드 매칭 → 부정/반전 문맥 인식 스코어링 + 옵셔널 LLM 하이브리드)
+// scene-backgrounds.md §63 자동 매핑("hook + 위기/충격 → bearish") 준수.
+
 function aspectForFormat(format) {
   return format === 'long-3min' ? '16:9' : '9:16';
+}
+
+// 썸네일 이미지 렌더 — 엔진 라우팅. 기본 Gemini, OpenAI gpt-image-1 opt-in.
+// 인트로(S6d v10)와 동일 정책: env/플래그로 OpenAI 선택, 실패 시 Gemini 자동 폴백.
+// gpt-image-1 지원 사이즈는 1024x1536(세로)·1536x1024(가로)·1024x1024 뿐이라
+// 정확한 16:9/9:16이 아닌 근사 비율(가로 3:2 / 세로 2:3)이다. v2는 composer가
+// 1080×1920 cover로 재정렬하므로 무관하고, v1 직출력은 약간의 크롭이 생길 수 있다.
+async function renderThumbnailImage({ useOpenAI, prompt, outPath, aspectRatio, episodeId, note }) {
+  if (useOpenAI) {
+    try {
+      const { generateImageOpenAI } = await import('./lib/image-engines/openai-gpt-image.js');
+      const size = aspectRatio === '16:9' ? '1536x1024' : '1024x1536';
+      await generateImageOpenAI({
+        prompt,
+        outPath,
+        size,
+        quality: 'high',
+        costContext: { episode: episodeId, stage: 'S6e', note: `${note}-openai`, engine: 'openai-gpt-image-1' },
+      });
+      return 'openai-gpt-image-1';
+    } catch (e) {
+      console.warn(`   ⚠ OpenAI(gpt-image-1) 썸네일 실패 (${String(e.message).slice(0, 120)}) → Gemini 폴백`);
+    }
+  }
+  await generateImageGemini({
+    prompt,
+    outPath,
+    aspectRatio,
+    resolution: '1K',
+    costContext: { episode: episodeId, stage: 'S6e', note },
+  });
+  return 'gemini';
 }
 
 function resolveStylePrefix(channel, format) {
@@ -107,6 +160,7 @@ function buildThumbnailPrompt({
   hookNarration,
   keywordHint,
   paletteBlock,
+  sentiment = null,    // 'bearish' | 'bullish' | null — 마스코트 표정/포즈 정합용
   publicFigure,        // resolved figure (max 1, primary) — { figure, treatment, sensitivity, blockReason? }
   noTextMode = false,  // v2: composer가 텍스트·로고·인용을 후처리할 base 이미지 모드
 }) {
@@ -149,7 +203,14 @@ function buildThumbnailPrompt({
     primarySubjectClause = `PRIMARY SUBJECT (must be clearly visible, identifiable, and dominate the composition): ${fig.descriptor_en}. The figure occupies roughly 45-55% of the frame, positioned in the left-center or center, framed from waist-up or chest-up. The figure's identifying features (${cues}) MUST be unambiguous so a viewer recognizes the person at a glance from the YouTube feed thumbnail. Do NOT generate a generic mascot or anonymous stick-figure — the figure is the named public-figure caricature.`;
     characterClause = `Character details (carry over from PRIMARY SUBJECT above): ${expressionRule} ${colorRule} Stylization MUST stay cartoon (NOT photorealistic — no AI photo-likeness, no realistic skin texture, no hyperrealistic facial details). Trademark visual cues to preserve: ${cues}. NEVER add the figure's name as on-screen text — name appears only in voice/narration, not in the image.`;
   } else {
-    characterClause = `Character: the mascot positioned on one side, posed expressively to match the topic's emotion (surprised for shock values, confident thumbs-up for bullish, thoughtful hand-on-chin for complex, determined for risk).`;
+    // sentiment가 명확하면 표정/포즈를 강제해 팔레트와 정합시킨다.
+    // (하락 뉴스인데 웃으며 thumbs-up + 상승 화살표가 나오던 버그 교정)
+    const moodPose = sentiment === 'bearish'
+      ? 'worried / alarmed / serious expression — a concerned hand-near-face or pointing down at a FALLING/red downward chart. ABSOLUTELY NO smiling, NO thumbs-up, NO celebration, NO upward-rising green/orange arrows. The visual mood must read as a market drop / warning'
+      : sentiment === 'bullish'
+        ? 'confident, upbeat expression — thumbs-up or pointing up at a RISING chart, energetic positive mood'
+        : "expressively to match the topic's emotion (surprised for shock values, confident thumbs-up for bullish, thoughtful hand-on-chin for complex, determined for risk)";
+    characterClause = `Character: the mascot positioned on one side, posed ${moodPose}.`;
   }
 
   const thumbnailSpec = noTextMode
@@ -182,6 +243,7 @@ Hook narration (for keyword extraction): "${hookNarration}"
 }
 
 async function main() {
+  hydrateOpenAIKey();
   const args = process.argv.slice(2);
   const opts = {};
   for (let i = 0; i < args.length; i++) {
@@ -198,7 +260,7 @@ async function main() {
   }
 
   if (!opts.episode) {
-    console.error('Usage: generate-thumbnail.js --episode <dir> [--keyword "..."] [--palette NAME] [--force]');
+    console.error('Usage: generate-thumbnail.js --episode <dir> [--keyword "..."] [--palette NAME] [--engine gemini|openai] [--sentiment-llm] [--force]');
     process.exit(1);
   }
 
@@ -269,11 +331,25 @@ async function main() {
     }
   }
 
-  // palette resolution: CLI > series spec > role fallback > bullish
+  // sentiment 자동 감지: 단발 EP도 topic/narration 감정(상승/하락)을 팔레트에 반영.
+  // (scene-backgrounds.md §63 자동 매핑 준수 — role 단독 fallback의 bullish 고정 버그 교정)
+  // 기본은 결정적 regex(부정/반전 인식). --sentiment-llm 또는 BARROTUBE_SENTIMENT_LLM=1
+  // + OPENAI_API_KEY 가 있으면 gpt-4o-mini 문맥 분류로 정밀화(실패 시 regex 폴백).
+  const useSentimentLLM = !!opts['sentiment-llm']
+    || /^(1|true|yes)$/i.test(process.env.BARROTUBE_SENTIMENT_LLM || '');
+  const sentiment = await detectSentimentPalette(`${topic}\n${hookNarration}`, {
+    useLLM: useSentimentLLM,
+    costContext: { episode: fm.episode_id || null, stage: 'S6e' },
+  });
+  const sentimentPalette = sentiment.palette;
+
+  // palette resolution: CLI > series spec > sentiment > role fallback > bullish
   const paletteName = opts.palette
     || specPalette
+    || sentimentPalette
     || ROLE_PALETTE_FALLBACK[hookScene?.role]
     || 'bullish';
+  const paletteSource = opts.palette ? 'CLI' : specPalette ? 'series-spec' : sentimentPalette ? `sentiment/${sentiment.source}` : ROLE_PALETTE_FALLBACK[hookScene?.role] ? 'role' : 'default';
   const paletteBlock = loadPalette(channel, paletteName);
   // keyword resolution: CLI > series spec > null (Gemini가 hook narration에서 추출)
   const keywordResolved = opts.keyword || specKeyword || null;
@@ -311,6 +387,7 @@ async function main() {
     hookNarration,
     keywordHint: keywordResolved,
     paletteBlock,
+    sentiment: sentimentPalette,
     publicFigure: primaryFigure,
     noTextMode: isV2,
   });
@@ -318,10 +395,16 @@ async function main() {
   // Aspect: thumbnails match the format (YouTube accepts 16:9 for long, 9:16 for Shorts)
   const aspectRatio = aspectForFormat(format);
 
+  // 이미지 엔진: 전역 resolver(SSOT)로 통일. --engine / BT_THUMBNAIL_ENGINE / BT_IMAGE_ENGINE
+  // / config/image-engines.json 순으로 해석. 기본(auto)은 현행 호환 = gemini.
+  const thumbEngine = resolveImageEngine('S6e_thumbnail', { cliOverride: opts.engine });
+  const useOpenAIThumb = thumbEngine.engine === 'openai';
+  if (thumbEngine.downgraded) console.warn('   ⚠ OpenAI 요청됐으나 OPENAI_API_KEY 없음 → Gemini 사용');
+
   console.log(`🖼  Generating thumbnail for ${fm.episode_id}${isV2 ? ' (v2 composer mode)' : ''}`);
   console.log(`   Series: ${seriesName} [${seriesN}/${seriesM}]`);
   console.log(`   Topic: ${topic}`);
-  console.log(`   Palette: ${paletteName}${opts.palette ? '' : ' (auto from role)'}`);
+  console.log(`   Palette: ${paletteName} (${paletteSource}${paletteSource.startsWith('sentiment') ? `: ${sentimentPalette === 'bearish' ? '위기/하락 감지' : '상승/호재 감지'}` : ''})`);
   if (opts.keyword) console.log(`   Keyword hint: ${opts.keyword}`);
   if (isV2) {
     console.log(`   v2 spec: headline="${v2spec.headline_text}"${v2spec.keyword_number ? `, keyword_number="${v2spec.keyword_number}"` : ''}, bg=${v2spec.background_style}, accent=${v2spec.accent_color}${v2spec.featured_person ? `, person=${v2spec.featured_person.id}(${v2spec.featured_person.treatment})` : ''}${v2spec.brand_logos ? `, logos=[${v2spec.brand_logos.map(b=>b.id).join(',')}]` : ''}`);
@@ -338,30 +421,33 @@ async function main() {
     }
   }
   console.log(`   Format: ${format} → aspect=${aspectRatio}`);
+  console.log(`   Engine: ${useOpenAIThumb ? 'openai-gpt-image-1 (Gemini 폴백)' : 'gemini'} (source=${thumbEngine.source})`);
   console.log(`   Out: ${outPath}`);
 
   try {
     if (isV2) {
       const baseOutPath = join(baseDir, '47_thumbnail.base.png');
-      await generateImageGemini({
+      const baseEngine = await renderThumbnailImage({
+        useOpenAI: useOpenAIThumb,
         prompt,
         outPath: baseOutPath,
         aspectRatio,
-        resolution: '1K',
-        costContext: { episode: fm.episode_id || null, stage: 'S6e', note: 'thumbnail-base' },
+        episodeId: fm.episode_id || null,
+        note: 'thumbnail-base',
       });
-      console.log(`   📸 Base image: ${baseOutPath}`);
+      console.log(`   📸 Base image (${baseEngine}): ${baseOutPath}`);
       const result = await composeThumbnail({ baseImagePath: baseOutPath, spec: v2spec, outPath });
       console.log(`✅ Thumbnail (v2 composer, ${result.layers} layers): ${outPath}`);
     } else {
-      await generateImageGemini({
+      const engUsed = await renderThumbnailImage({
+        useOpenAI: useOpenAIThumb,
         prompt,
         outPath,
         aspectRatio,
-        resolution: '1K',
-        costContext: { episode: fm.episode_id || null, stage: 'S6e', note: 'thumbnail' },
+        episodeId: fm.episode_id || null,
+        note: 'thumbnail',
       });
-      console.log(`✅ Thumbnail saved: ${outPath}`);
+      console.log(`✅ Thumbnail saved (${engUsed}): ${outPath}`);
     }
   } catch (e) {
     console.error(`❌ Thumbnail generation failed: ${e.message}`);

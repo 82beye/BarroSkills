@@ -83,8 +83,10 @@ export function getSecret(key) {
   // 2. 환경변수
   if (process.env[key]) return process.env[key];
 
-  // 3. macOS Keychain
-  return getFromKeychain(key);
+  // 3. macOS Keychain — bare 키, 실패 시 'BarroTube/<key>' 컨벤션 폴백.
+  //    (키체인 항목이 `security add-generic-password -s BarroTube/OPENAI_API_KEY` 형태로
+  //     저장되어 있어도 찾도록. 이 컨벤션은 prompt-enrich.js 등에 문서화돼 있다.)
+  return getFromKeychain(key) || getFromKeychain(`BarroTube/${key}`);
 }
 
 /**

@@ -16,6 +16,10 @@
  * Usage:
  *   node generate-intro.js --episode <dir>
  *   node generate-intro.js --episode <dir> --force   (기존 파일 덮어쓰기)
+ *   node generate-intro.js --episode <dir> --engine gemini|openai  (엔진 1회성 override)
+ *
+ * 이미지 엔진은 전역 SSOT(config/image-engines.json + lib/image-engine-config.js)로 결정.
+ * 전역 전환은 BT_IMAGE_ENGINE=openai, 인트로 한정은 BT_INTRO_ENGINE=... (자세히는 .env.example).
  *
  * 참조 문서: workspace/channels/{channel}/intro-thumbnail-guide.md
  */
@@ -30,6 +34,15 @@ import {
   parseFrontmatter,
 } from './generate-image-gemini.js';
 import { composeThumbnail } from './lib/thumbnail-composer.js';
+import { resolveImageEngine } from './lib/image-engine-config.js';
+import { getSecret } from './config-loader.js';
+
+// OpenAI 키를 .env/keychain → process.env 로 hydrate. resolver·openai-gpt-image·enrich·verify
+// 가 모두 process.env.OPENAI_API_KEY 를 직접 읽으므로, keychain에만 있어도 전역으로 인식되게 한다.
+function hydrateOpenAIKey() {
+  if (process.env.OPENAI_API_KEY) return;
+  try { const k = getSecret('OPENAI_API_KEY'); if (k) process.env.OPENAI_API_KEY = k; } catch { /* keychain 미설정 무시 */ }
+}
 
 /**
  * v2 (platforms/) layout 우선 → v1 (legacy) fallback.
@@ -163,6 +176,7 @@ not a narrative scene. The only allowed text in the entire image is the four lin
 }
 
 async function main() {
+  hydrateOpenAIKey();
   const args = process.argv.slice(2);
   const opts = {};
   for (let i = 0; i < args.length; i++) {
@@ -284,13 +298,20 @@ async function main() {
   console.log(`   Format: ${format} → aspect=${aspectRatio}`);
   console.log(`   Out: ${outPath}`);
 
+  // 이미지 엔진: 전역 resolver(SSOT)로 통일. --engine / BT_INTRO_ENGINE / BT_INTRO_FORCE_GEMINI(legacy)
+  // / BT_IMAGE_ENGINE / config/image-engines.json 순으로 해석. (OpenAI는 isV2 v10 경로에서만 의미)
+  const introEngine = resolveImageEngine('S6d_intro', { cliOverride: opts.engine });
+  const useOpenAI = introEngine.engine === 'openai';
+  if (introEngine.downgraded) console.warn('   ⚠ OpenAI 요청됐으나 OPENAI_API_KEY 없음 → Gemini 사용');
+  console.log(`   Engine: ${useOpenAI ? 'openai-gpt-image-1 (v10)' : 'gemini'} (source=${introEngine.source})`);
+
   // Debug: --print-prompt 또는 BT_PRINT_PROMPT=1 시 prompt만 출력하고 종료 (image gen skip).
   if (opts['print-prompt'] || process.env.BT_PRINT_PROMPT === '1') {
     console.log('===== FINAL PROMPT (sent to image API) =====');
     console.log(prompt);
     console.log('===== END PROMPT =====');
     console.log(`\n📏 prompt length: ${prompt.length} chars`);
-    console.log(`🎨 engine: ${process.env.OPENAI_API_KEY && process.env.BT_INTRO_FORCE_GEMINI !== '1' ? 'openai-gpt-image-1' : 'gemini-3.1-flash-image-preview'}`);
+    console.log(`🎨 engine: ${useOpenAI ? 'openai-gpt-image-1' : 'gemini-3.1-flash-image-preview'}`);
     console.log(`📐 v2spec: ${JSON.stringify(v2spec, null, 2)}`);
     process.exit(0);
   }
@@ -298,8 +319,7 @@ async function main() {
   try {
     if (isV2) {
       // 2026-05-16 v10: OpenAI 있으면 ALL-IN-ONE + verify retry loop (한글 정확도 보장).
-      // 폴백: Gemini base + composer (기존 v2).
-      const useOpenAI = process.env.OPENAI_API_KEY && process.env.BT_INTRO_FORCE_GEMINI !== '1';
+      // 폴백: Gemini base + composer (기존 v2). 엔진은 위 resolver가 결정(useOpenAI).
       if (useOpenAI) {
         const { generateIntroV10, resolveIntroHeadline } = await import('./lib/image-engines/intro-v10.js');
         const introHeadline = resolveIntroHeadline({ briefThumb, topic: briefFM.topic || '' });
