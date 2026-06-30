@@ -18,9 +18,9 @@ tags:
 
 | Slot | Episode | Target Window | Status |
 |---|---|---|---|
-| Next | EP03 - PC방 간 조선 선비 | Tue/Thu 19:30-20:30 KST | planning |
-| +1 | EP04 - 헬스장 간 조선 선비 | Tue/Thu 19:30-20:30 KST | backlog |
-| +2 | EP05 - 편의점 알바하는 선비 | Sunday 12:00-14:00 KST test | backlog |
+| Next | [[episodes/EP03-worldcup-korea-satire|EP03 - 월드컵 간 조선 선비]] | Tue/Thu 19:30-20:30 KST | planning |
+| +1 | EP04 - PC방 간 조선 선비 | Tue/Thu 19:30-20:30 KST | backlog |
+| +2 | EP05 - 헬스장 간 조선 선비 | Sunday 12:00-14:00 KST test | backlog |
 
 ## Post-Publish Checklist
 
