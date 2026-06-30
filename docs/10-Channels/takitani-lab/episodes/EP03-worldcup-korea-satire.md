@@ -92,6 +92,8 @@ The scholar is the audience lens. He makes vague football language literal.
 - "늦은 교체" -> checks a sundial.
 - "VAR" -> bows as if receiving a royal edict.
 - "전술 보완" -> tries to fill the blank board with brush strokes.
+- "붉은 응원단" -> gets overexcited in the stands, then enters a fantasy version
+  of the pitch and scores the goal the tactic board never planned.
 
 ## Marketing Rationale
 
@@ -108,6 +110,7 @@ Allowed:
 - "교체 타이밍은 해시계가 정했다"
 - "정신력이 전술보다 먼저 투입됐다"
 - "경우의 수만 조선 팔도만큼 길었다"
+- "응원하다가 상상 속 경기장으로 뛰쳐나갔다"
 
 Avoid:
 
@@ -115,6 +118,9 @@ Avoid:
 - "무능", "바보", "사기", "비리" as direct assertions.
 - Real team logos, real sponsors, real player faces.
 - Violence against the coach or players.
+- Depicting a realistic illegal pitch invasion as admirable or actionable. If the
+  scholar enters the pitch, make it clearly fantasy, dream, replay, or tactical-board
+  imagination.
 
 ## Render-Ready Cut Plan
 
@@ -184,23 +190,27 @@ Players jog through cones, the scholar dramatically checks the sundial, the mana
 hesitates with the substitution card, camera does a smooth lateral tracking shot.
 ```
 
-### CUT 4 - 정신력 투입
+### CUT 4 - 붉은 응원단 망상 드리블
 
 Visual:
 
 ```text
-Vertical 9:16 cinematic wide-angle 24mm stadium sideline scene. The Joseon scholar
-beats a battlefield drum while generic fans in red cheer behind him. The fictional
-generic manager stands nearby whispering motivational words instead of giving tactical
-instructions. Stadium lights flare, confetti and scarves move in the air. No real
-flags, no official marks, no readable text, no real person likeness.
+Vertical 9:16 cinematic wide-angle 24mm stadium fantasy sequence, full-body view.
+The Joseon scholar first cheers from the stands with a generic red supporters' crowd,
+then the scene transforms into a dreamlike tactical-board pitch where he dribbles
+past abstract training cones and faceless generic defenders, still wearing his white
+robes and black gat. He shoots the ball into a glowing generic goal as the crowd
+erupts. Make it clearly surreal and imaginary, not a realistic illegal pitch invasion.
+No real flags, no official marks, no readable text, no real person likeness, no
+official kits or sponsor boards.
 ```
 
 Grok motion:
 
 ```text
-Crowd jumps in rhythm, drum and sleeves move, confetti falls, the manager keeps
-gesturing vaguely, camera shakes slightly like a handheld stadium shot.
+The scholar cheers with the red crowd, suddenly the stadium morphs into a glowing
+tactical-board pitch, he dribbles in flowing robes, shoots, and the crowd explodes
+with confetti. Fast comic camera move, clear fantasy transition.
 ```
 
 ### CUT 5 - VAR 교지
@@ -254,7 +264,7 @@ Optional narration timing if TTS is later added:
 0-3s: 한국 축구 작전회의에 조선 선비가 소환됐다.
 3-7s: 전술판은 비어 있었고, 말은 웅장했다.
 7-12s: 교체 타이밍은 해시계가 정했다.
-12-17s: 전술 대신 정신력이 투입됐다.
+12-17s: 참다못한 선비는 상상 속 경기장으로 뛰어들었다.
 17-22s: VAR 앞에서는 모두가 왕명을 기다렸다.
 22-26s: 결론. 경우의 수는 아직도 계산 중이다.
 ```
@@ -293,6 +303,7 @@ Reason:
 - Stadium drum intro, 130-140 BPM.
 - EDM bass under tactic-room cuts.
 - Whistle hit before the sundial substitution gag.
+- Crowd chant into fantasy whoosh for the dribble scene.
 - Low suspense riser for VAR.
 - Crowd swell before press conference.
 - Keep one continuous master mix.
