@@ -38,6 +38,7 @@ AI-generated short-form channel focused on surreal Joseon characters entering mo
 | EP01 | Joseon DJ Night | published | https://www.instagram.com/reel/DaLyNvODQXd/ |
 | EP02 | 놀이동산 간 조선 선비 | published | https://www.instagram.com/reel/DaNiFfPlamY/ |
 | EP03 | [[episodes/EP03-worldcup-korea-satire|월드컵 간 조선 선비]] | planning |  |
+| EP03-B | [[episodes/EP03-ab-test-plan|경기장 판타지 드리블 A/B]] | planning |  |
 
 ## Working Rules
 

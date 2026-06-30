@@ -12,37 +12,39 @@ tags:
 
 | Priority | Episode | Marketing Potential | Reason |
 |---:|---|---|---|
-| 1 | [[episodes/EP03-worldcup-korea-satire|EP03 - 월드컵 간 조선 선비]] | Very high | Current World Cup timing, Korean football discourse, high comment potential |
-| 2 | EP04 - PC방 간 조선 선비 | Very high | Gaming, Korean culture, visual props, comment-friendly |
-| 3 | EP05 - 헬스장 간 조선 선비 | High | Physical comedy and existing pull-up response |
-| 4 | EP06 - 편의점 알바하는 선비 | High | Everyday Korean setting, cashier conflict, ramen props |
-| 5 | EP07 - 지하철 탄 조선 선비 | High | Universal commute friction, transport-card gag |
-| 6 | EP08 - 노래방 간 조선 선비 | Medium-high | Music loop and Korean culture |
-| 7 | EP09 - 공항 처음 간 조선 선비 | Medium-high | Security scan, luggage, passport gags |
-| 8 | EP10 - 찜질방 간 조선 선비 | Medium | Strong Korea signal, slightly more context-dependent |
-| 9 | EP11 - 배달앱 쓰는 선비 | Medium | Funny idea, but phone UI can weaken visual impact |
+| 1 | [[episodes/EP03-ab-test-plan|EP03-B - 조선 선비, 참다못해 직접 골 넣다]] | Very high | Strongest visual hook, action-first, high share potential |
+| 2 | [[episodes/EP03-worldcup-korea-satire|EP03-A - 무전술 대감독과 경우의 수]] | Very high | Current World Cup timing, Korean football discourse, high comment potential |
+| 3 | EP04 - PC방 간 조선 선비 | Very high | Gaming, Korean culture, visual props, comment-friendly |
+| 4 | EP05 - 헬스장 간 조선 선비 | High | Physical comedy and existing pull-up response |
+| 5 | EP06 - 편의점 알바하는 선비 | High | Everyday Korean setting, cashier conflict, ramen props |
+| 6 | EP07 - 지하철 탄 조선 선비 | High | Universal commute friction, transport-card gag |
+| 7 | EP08 - 노래방 간 조선 선비 | Medium-high | Music loop and Korean culture |
+| 8 | EP09 - 공항 처음 간 조선 선비 | Medium-high | Security scan, luggage, passport gags |
+| 9 | EP10 - 찜질방 간 조선 선비 | Medium | Strong Korea signal, slightly more context-dependent |
+| 10 | EP11 - 배달앱 쓰는 선비 | Medium | Funny idea, but phone UI can weaken visual impact |
 
-## EP03 Draft: 월드컵 간 조선 선비
+## EP03 Draft: 조선 선비, 참다못해 직접 골 넣다
 
 Working title:
 
-- `EP03 - 월드컵 간 조선 선비`
-- `JOSEON SCHOLAR ENTERS THE WORLD CUP`
+- `EP03 - 조선 선비, 참다못해 직접 골 넣다`
+- `WHEN THE TACTICS ARE EMPTY, THE SCHOLAR SCORES`
 
 Scene beats:
 
-1. Scholar appears in a modern locker room holding a brush and tactical scroll.
-2. Staff points at a digital tactic board; scholar writes "경우의 수" on a giant scroll.
-3. Training field: GPS vests and cones meet sundial stamina measurement.
-4. Stadium crowd erupts; scholar leads a battlefield-style cheer.
-5. VAR review freezes the room; scholar treats the screen like a royal edict.
-6. Press conference parody: generic "다음 경기는 정신력으로..." line, no real names.
+1. Scholar cheers from the stands with a generic red supporters' crowd.
+2. The blank tactic board flashes and becomes a surreal pitch portal.
+3. Scholar is pulled into a dreamlike tactical-board pitch.
+4. He dribbles through abstract defenders in white robes and black gat.
+5. He scores into a glowing generic goal; crowd explodes.
+6. Cut back to the fictional manager proudly pointing at the same blank tactic board.
 
 Guardrails:
 
 - No real player, coach, federation, FIFA, or kit logo likeness.
+- Do not depict realistic illegal pitch invasion as admirable or actionable.
+- Make the pitch scene clearly fantasy, dream, or tactical-board imagination.
 - Satirize football culture and systems, not a named person.
-- Keep the scholar as the comedic target.
 
 ## Later Draft: PC방 간 조선 선비
 
