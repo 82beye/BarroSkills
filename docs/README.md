@@ -15,6 +15,7 @@ Obsidian에서 열 경로:
 - [[10-Channels/takitani-lab/instagram-reels-playbook|Instagram Reels 운영안]]
 - [[10-Channels/takitani-lab/episode-backlog|에피소드 백로그]]
 - [[20-Operations/barrotube-reels-pipeline|BarroTube Reels 제작 파이프라인]]
+- [[20-Operations/barrotube-media-render-automation-plan|Media Render 자동 운영 계획]]
 
 ## 운영 원칙
 

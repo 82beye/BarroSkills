@@ -29,6 +29,7 @@ AI-generated short-form channel focused on surreal Joseon characters entering mo
 - [[episode-backlog|에피소드 백로그]]
 - [[content-calendar|콘텐츠 캘린더]]
 - [[20-Operations/barrotube-reels-pipeline|제작 파이프라인]]
+- [[20-Operations/barrotube-media-render-automation-plan|Media Render 자동 운영 계획]]
 - [[20-Operations/instagram-publishing|Instagram 게시 운영]]
 
 ## Published Series

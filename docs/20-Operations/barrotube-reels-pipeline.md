@@ -21,6 +21,42 @@ scene plan
 -> Instagram Reels publish
 ```
 
+Automation gap analysis and implementation plan:
+
+- [[barrotube-media-render-automation-plan|BarroTube Media Render 자동 운영 갭 분석 및 구현 계획]]
+
+## Timing Convention
+
+Start timing before the first production action and keep it updated through final QA:
+
+```bash
+python3 /Users/beye/workspace/BarroSkills/.claude/skills/barrotube-media-render/scripts/production_timer.py init <reel> --episode <EP-ID>
+python3 /Users/beye/workspace/BarroSkills/.claude/skills/barrotube-media-render/scripts/production_timer.py start <reel> scene_plan --label "Scene plan"
+python3 /Users/beye/workspace/BarroSkills/.claude/skills/barrotube-media-render/scripts/production_timer.py end <reel> scene_plan
+```
+
+Use one step per slow production stage:
+
+- `scene_plan`
+- `chatgpt_image_cutN`
+- `image_contact_sheet`
+- `grok_video_cutN`
+- `ffmpeg_master`
+- `capcut_draft`
+- `capcut_export`
+- `distribution_package`
+- `final_qa`
+- `instagram_publish`
+
+Timing outputs:
+
+```text
+<reel>/90_timing/production-timing.json
+<reel>/90_timing/production-timing.md
+```
+
+Final reports should include total wall-clock time and the longest step.
+
 ## Output Convention
 
 ```text
@@ -31,6 +67,8 @@ scene plan
   55_render/master-bgm-mix.m4a
   56_capcut_export/video.mp4
   distribution/reels/
+  90_timing/production-timing.json
+  90_timing/production-timing.md
   70_publish_meta.instagram.json
   80_publish_result.instagram.json
 ```
