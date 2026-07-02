@@ -82,16 +82,33 @@ export PAPERCLIP_DISABLED=1
    - HIGH면 S4로 회귀 (최대 2회), 그래도 HIGH면 운영자에게 escalation
 
 6. **S6 자산 생성** (비용 발생 — 운영자 명시 승인 필요):
+
+   **S6c 씬 이미지·모션 클립 — 기본: `barrotube-media-render` 스킬** (config
+   `image-engines.json`의 `stages.S6c_scene: "media-render"`). PD가 브라우저를
+   조작해 씬별로 생성하고 **기존 산출물 경로에 그대로 저장**:
+   - 이미지 (ChatGPT): `EP-YYYY-NNNN/40_assets/images/scene_NNN.png` (1080×1920 세로)
+   - 모션 클립 (Grok image→video, 선택): `EP-YYYY-NNNN/40_assets/videos/scene_NNN.mp4`
+     — 있으면 S7 렌더가 정지 이미지 대신 자동 사용
+   - 프롬프트는 `30_script.md`의 씬별 `image_prompt` 사용. 절차는
+     `barrotube-media-render` 스킬 (`references/chatgpt-image.md`, `grok-video.md`) 준수.
+
+   이후 나머지 자산 일괄 (media-render 산출물이 있으면 S6c는 자동 skip):
    ```bash
    node scripts/automation/produce-episode.js --episode EP-YYYY-NNNN --execute
    ```
-   - 내부적으로 S6a(TTS) → S6b(Sync) → S6c(이미지) → S6d(인트로) → S6e(썸네일) 일괄
+   - 내부적으로 S6a(TTS) → S6b(Sync) → S6c(이미지, 존재 시 skip) → S6d(인트로) → S6e(썸네일) 일괄
    - `--execute` 없으면 dry-run (echo only)
+   - **레거시 옵션** (API 이미지 — Gemini/OpenAI, 브라우저 불필요):
+     `--image-engine openai|gemini` 로 기존 API 경로 강제. media-render 기본 모드에서
+     이미지가 없으면 produce-episode가 안내 메시지와 함께 중단(exit 3)한다.
 
 7. **S7 Render** (헤드리스 FFmpeg, 무비용):
    ```bash
    node scripts/automation/render-direct.js --episode EP-YYYY-NNNN
    ```
+   - `40_assets/videos/scene_NNN.mp4` (media-render Grok 클립)가 있는 씬은 모션 클립
+     기반, 없는 씬은 기존 정지 이미지+Ken Burns 기반(레거시)으로 렌더 — 씬별 혼합 가능.
+     산출물은 동일하게 `55_render/video.mp4`.
 
 8. **S8 QA** — Task 위임 (`subagent_type: barrotube-qa-reviewer`)
    - prompt: "55_render/video.mp4 ffprobe 검사 + 자막·자산 정합 → 60_qa_report.md. FAIL이면 어떤 stage로 회귀할지 명시."

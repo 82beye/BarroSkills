@@ -21,6 +21,7 @@ export async function generateIntroV10({
   outPath,
   maxRetries = 2,
   mood = 'tense breaking-news alert',
+  size = '1024x1536',   // 2026-06-27 B-2: 호출자(generate-intro.js)가 format별로 주입. long=1536x1024, shorts=1024x1536
 }) {
   if (!headline) throw new Error('generateIntroV10: headline required');
 
@@ -38,7 +39,7 @@ export async function generateIntroV10({
     totalCost += enriched.cost_usd;
     lastEnrichLen = enriched.prompt.length;
 
-    await generateImageOpenAI({ prompt: enriched.prompt, outPath, size: '1024x1536', quality: 'high', costContext: { stage: 'S6d', engine: 'v10' } });
+    await generateImageOpenAI({ prompt: enriched.prompt, outPath, size, quality: 'high', costContext: { stage: 'S6d', engine: 'v10' } });
     totalCost += 0.17;
 
     const verdict = await verifyImageText({ imagePath: outPath, expectedTextSet });

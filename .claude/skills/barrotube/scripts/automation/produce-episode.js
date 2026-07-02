@@ -43,6 +43,7 @@ import { parseArgs } from 'node:util';
 import { parse as parseYAML } from 'yaml';
 import { updateIssueStatus } from './register-paperclip-issue.js';
 import { resolvePaths, formatToPlatform } from './paths.js';
+import { getSecret } from './config-loader.js';
 import { acquireLock, releaseLock, heartbeat as lockHeartbeat } from './in-flight-lock.js';
 
 const ROOT = resolve(import.meta.dirname, '../..');
@@ -121,12 +122,49 @@ async function main() {
       force: { type: 'boolean', default: false },
       'skip-capcut': { type: 'boolean', default: false },
       'force-release-stale': { type: 'boolean', default: false },
+      'image-engine': { type: 'string' },      // openai(기본) | gemini | auto — 모든 이미지 단계(S6c/d/e/f) 엔진 선택
     },
   });
   if (!values.episode) {
-    console.error('Usage: produce-episode.js --episode EP-YYYY-NNNN [--platform long|shorts] [--force] [--skip-capcut] [--force-release-stale]');
+    console.error('Usage: produce-episode.js --episode EP-YYYY-NNNN [--platform long|shorts] [--image-engine openai|gemini|auto] [--force] [--skip-capcut] [--force-release-stale]');
     process.exit(1);
   }
+
+  // ── 이미지 엔진 선택 (2026-06-27) ─────────────────────────────────────────────
+  // 기본값 openai(gpt-image-1). --image-engine 으로 전환. 우선순위: CLI > BT_IMAGE_ENGINE env > openai.
+  // 하위 이미지 스크립트(S6c 씬 / S6d 인트로 v10 / S6e 썸네일 / S6f 엔드카드)는 spawnSync로
+  // process.env 를 상속하므로, 여기서 BT_IMAGE_ENGINE 전역 override + OPENAI_API_KEY hydrate 한 번이면 일괄 적용된다.
+  //   openai → gpt-image-1, gemini → gemini-3.1-flash-image-preview, auto → config/image-engines.json 단계별 설정.
+  // openai 인데 키/결제 문제로 실패하면 각 스크립트가 자동으로 Gemini 폴백.
+  // 2026-07-02: 'media-render' 추가 — S6c 씬 이미지를 barrotube-media-render 스킬
+  // (브라우저 ChatGPT/Grok, PD 수행)으로 사전 생성하는 기본 모드. API 호출 없음.
+  // 명시(explicit) 값과 미지정을 구분해 S6c 기본값을 config.stages.S6c_scene에서 가져온다.
+  const explicitEngine = (values['image-engine'] || process.env.BT_IMAGE_ENGINE || '').toLowerCase() || null;
+  const imageEngine = explicitEngine || 'openai';
+  if (!['openai', 'gemini', 'auto', 'media-render'].includes(imageEngine)) {
+    console.error(`❌ --image-engine 는 openai|gemini|auto|media-render 중 하나여야 합니다 (받음: ${imageEngine})`);
+    process.exit(1);
+  }
+  if (imageEngine === 'openai' || imageEngine === 'gemini') {
+    process.env.BT_IMAGE_ENGINE = imageEngine;   // resolveImageEngine 이 config.stages/global 보다 우선 적용
+  } else {
+    // auto / media-render: S6d 인트로·S6e 썸네일 하위 스크립트는 config 단계별 설정 그대로
+    delete process.env.BT_IMAGE_ENGINE;
+  }
+  // S6c 씬 엔진 resolution: 명시(CLI/env, auto 제외) > config.stages.S6c_scene > openai
+  let sceneEngine = (explicitEngine && explicitEngine !== 'auto') ? explicitEngine : null;
+  if (!sceneEngine) {
+    try {
+      const engCfg = JSON.parse(readFileSync(join(ROOT, 'config/image-engines.json'), 'utf-8'));
+      sceneEngine = (engCfg.stages && engCfg.stages.S6c_scene) || engCfg.global || 'openai';
+    } catch { sceneEngine = 'openai'; }
+  }
+  if (imageEngine === 'openai' || imageEngine === 'auto') {
+    if (!process.env.OPENAI_API_KEY) {
+      try { const k = getSecret('OPENAI_API_KEY'); if (k) process.env.OPENAI_API_KEY = k; } catch { /* keychain 미설정 무시 */ }
+    }
+  }
+  console.log(`🎨 Image engine: ${imageEngine} (OpenAI key ${process.env.OPENAI_API_KEY ? '✓' : '✗ 없음 → openai 요청 시 Gemini 폴백'})`);
 
   // --episode 가 ID 만인지 경로인지 처리
   let epDir = values.episode;
@@ -230,9 +268,20 @@ async function main() {
         '--tts-dir', ttsDirArg,
       ]);
 
-    // S6c Images
+    // S6c Images — 기본: media-render(브라우저, PD 사전 생성) / 레거시: API(gemini|openai)
     const imgDone = exists(join(p.imagesDir, 'scene_001.png')) && exists(join(p.imagesDir, 'scene_005.png'));
-    if (!imgDone || force) {
+    if (sceneEngine === 'media-render') {
+      if (imgDone) {
+        console.log(`\n⏭  S6c Images: media-render 산출물 존재 (skip) — ${p.imagesDir}`);
+      } else {
+        console.error(`\n❌ S6c Images (media-render 기본 모드): ${p.imagesDir}/scene_NNN.png 이 없습니다.`);
+        console.error(`   → PD가 barrotube-media-render 스킬(브라우저 ChatGPT)로 씬 이미지를 먼저 생성한 뒤 재실행하세요.`);
+        console.error(`   → 씬 모션 클립(Grok)은 40_assets/videos/scene_NNN.mp4 에 두면 S7 렌더가 자동 사용합니다.`);
+        console.error(`   → 레거시 API 경로로 진행하려면: --image-engine openai|gemini`);
+        releaseLock();
+        process.exit(3);
+      }
+    } else if (!imgDone || force) {
       runTracked(absEp, episodeId, 'S6c', 'S6c Images (Nano Banana 2)', '08-image-generator',
         'scripts/automation/generate-image-gemini.js', [
           '--script', scriptArg,
@@ -285,6 +334,20 @@ async function main() {
       } else {
         console.log(`\n⏭  S6d Intro (standalone): 이미 있음 (skip)`);
       }
+    }
+
+    // S6f Endcard (구독/좋아요/알림 CTA 카드) — 2026-06-27 추가.
+    // render-direct.js(S7)가 48_endcard.png 존재 시 영상 끝에 정지 클립으로 붙인다(자산 게이트).
+    const endcardPath = join(p.base, '48_endcard.png');
+    if (!exists(endcardPath) || force) {
+      runTracked(absEp, episodeId, 'S6f', 'S6f Endcard (구독/좋아요)', '08-image-generator',
+        'scripts/automation/generate-endcard.js', [
+          '--episode', relEp,
+          '--platform', platform,
+          ...(force ? ['--force'] : []),
+        ]);
+    } else {
+      console.log(`\n⏭  S6f Endcard: 이미 있음 (skip)`);
     }
 
     // S7 Render

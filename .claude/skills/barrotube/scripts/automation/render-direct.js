@@ -18,6 +18,8 @@
  * 에피소드 구조 기대:
  *   <episode_dir>/30_script.md              (YAML frontmatter 파싱)
  *   <episode_dir>/assets/images/scene_NNN.png
+ *   <episode_dir>/assets/videos/scene_NNN.mp4  (선택 — media-render Grok 모션 클립,
+ *                                               있으면 정지 이미지 대신 사용)
  *   <episode_dir>/assets/tts/scene_NNN.wav
  *   <episode_dir>/assets/bgm.wav            (선택)
  */
@@ -101,7 +103,7 @@ const KEN_BURNS_ENABLED = process.env.BT_DISABLE_KEN_BURNS !== '1';
 const KEN_BURNS_ZOOM_MAX = 1.05;
 const KEN_BURNS_FPS = 30;
 
-function renderScene({ imagePath, ttsPath, durationSec, narration, workDir, sceneId, outPath, canvasW = 1080, canvasH = 1920 }) {
+function renderScene({ imagePath, videoPath = null, ttsPath, durationSec, narration, workDir, sceneId, outPath, canvasW = 1080, canvasH = 1920 }) {
   // 나레이션을 시간 기반 phrase로 분할 → 자막 PNG 여러 개 생성 → 시간 오버레이
   const phrases = narration ? splitNarrationByTime(narration, durationSec) : [];
   const overlays = [];
@@ -113,7 +115,11 @@ function renderScene({ imagePath, ttsPath, durationSec, narration, workDir, scen
     }
   }
 
-  const args = ['-y', '-loop', '1', '-i', imagePath, '-i', ttsPath];
+  // 입력 0 = 씬 소스: 모션 클립(media-render Grok)이면 TTS 길이까지 무한 루프,
+  // 아니면 기존 정지 이미지 (-t 로 최종 길이 캡)
+  const args = videoPath
+    ? ['-y', '-stream_loop', '-1', '-i', videoPath, '-i', ttsPath]
+    : ['-y', '-loop', '1', '-i', imagePath, '-i', ttsPath];
   overlays.forEach(o => args.push('-loop', '1', '-i', o.png));
 
   // Subtitle bottom margin — Shorts needs 480px for YouTube UI; Long-form only 100px
@@ -122,7 +128,10 @@ function renderScene({ imagePath, ttsPath, durationSec, narration, workDir, scen
   const subtitleBottomMargin = isVertical ? 480 : 100;
 
   let filter;
-  if (KEN_BURNS_ENABLED) {
+  if (videoPath) {
+    // 모션 클립: 이미 움직임이 있으므로 Ken Burns 없이 캔버스 normalize만
+    filter = `[0:v]scale=${canvasW}:${canvasH}:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH},fps=30,setpts=PTS-STARTPTS[v0]`;
+  } else if (KEN_BURNS_ENABLED) {
     // Ken Burns: 입력 110%로 scale 후 zoompan으로 1.0→1.05 점진 줌인 (씬 길이 전체)
     const scaledW = Math.floor(canvasW * 1.10);
     const scaledH = Math.floor(canvasH * 1.10);
@@ -392,10 +401,14 @@ export function renderDirect({ episodeDir, outPath, canvas, platform: platformHi
     const scene = scenes[i];
     const sceneId = scene.scene_id || String(i + 1).padStart(3, '0');
     const imagePath = join(assetsDir, 'images', `scene_${sceneId}.png`);
+    // 2026-07-02: media-render(Grok image→video) 모션 클립이 있으면 정지 이미지 대신
+    // 사용 (기본). 없으면 기존 still 기반 렌더 (레거시). 산출물 경로는 동일.
+    const videoPath = join(assetsDir, 'videos', `scene_${sceneId}.mp4`);
+    const hasMotion = existsSync(videoPath);
     const ttsPath = join(assetsDir, 'tts', `scene_${sceneId}.wav`);
     const clipPath = join(workDir, `clip_${sceneId}.mp4`);
 
-    if (!existsSync(imagePath)) throw new Error(`Missing image: ${imagePath}`);
+    if (!hasMotion && !existsSync(imagePath)) throw new Error(`Missing image: ${imagePath} (and no motion clip ${videoPath})`);
     if (!existsSync(ttsPath)) throw new Error(`Missing tts: ${ttsPath}`);
 
     // Use ACTUAL TTS duration for clip length + subtitle timing
@@ -406,6 +419,7 @@ export function renderDirect({ episodeDir, outPath, canvas, platform: platformHi
 
     renderScene({
       imagePath,
+      videoPath: hasMotion ? videoPath : null,
       ttsPath,
       durationSec,
       narration: scene.narration || '',
@@ -417,7 +431,7 @@ export function renderDirect({ episodeDir, outPath, canvas, platform: platformHi
     });
 
     clipPaths.push(clipPath);
-    console.log(`  ✅ Scene ${sceneId} (${durationSec.toFixed(2)}s TTS${targetNote})`);
+    console.log(`  ✅ Scene ${sceneId} (${durationSec.toFixed(2)}s TTS${targetNote}${hasMotion ? ', motion clip' : ''})`);
   }
 
   // Outro pad: 마지막 씬 끝에 freeze + audio fadeout (abrupt cut 방지)
@@ -470,6 +484,24 @@ export function renderDirect({ episodeDir, outPath, canvas, platform: platformHi
     });
     clipPaths.push(outroClipPath);
     console.log(`🎬 Outro slot clip appended (${outroClipDur.toFixed(2)}s, TTS=${outroTtsDur.toFixed(2)}s) from ${outroTtsPath.split('/').slice(-1)[0]}`);
+  }
+
+  // Endcard (구독/좋아요 CTA): 48_endcard.png 존재 시 영상 끝에 정지 클립으로 추가 (자산 게이트).
+  // 2026-06-27 추가: 채널 심볼 + 구독/좋아요 엔드카드. 자산 없으면 무동작(기존 에피소드 안전).
+  // BGM은 concat 후 전체에 믹스되므로 엔드카드 구간에도 음악이 자연스럽게 이어진다.
+  const endcardPath = join(baseDir, '48_endcard.png');
+  if (existsSync(endcardPath)) {
+    const endcardDurationSec = chosenCanvas === 'vertical' ? 2.5 : 3.5;
+    const endcardClipPath = join(workDir, 'clip_zzzz_endcard.mp4');
+    renderStillClip({
+      imagePath: endcardPath,
+      durationSec: endcardDurationSec,
+      canvasW: canvasDim[0],
+      canvasH: canvasDim[1],
+      outPath: endcardClipPath,
+    });
+    clipPaths.push(endcardClipPath);
+    console.log(`🎬 Endcard appended (+${endcardDurationSec}s, from 48_endcard.png)`);
   }
 
   // Concat

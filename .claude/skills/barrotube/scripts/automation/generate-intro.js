@@ -332,6 +332,9 @@ async function main() {
           keyword: introKeyword,
           outPath,
           maxRetries: 2,
+          // 2026-06-27 B-2: long(16:9)은 가로 1536x1024, shorts(9:16)는 세로 1024x1536.
+          // (이전엔 intro-v10에 '1024x1536' 세로 하드코딩 → long 인트로가 세로로 나오는 버그)
+          size: aspectRatio === '16:9' ? '1536x1024' : '1024x1536',
         });
         console.log(`✅ Intro (v10${result.accurate ? ' ✓ accurate' : ' ⚠ partial accuracy'}, $${result.cost_usd.toFixed(4)}): ${outPath}`);
       } else {
