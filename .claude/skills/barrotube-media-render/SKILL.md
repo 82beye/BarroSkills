@@ -1,0 +1,285 @@
+---
+name: barrotube-media-render
+description: >-
+  Render BarroTube/ShortsGen media by driving the user's logged-in browser:
+  create a ChatGPT image, animate it in Grok Imagine as a 9:16 720p 10s video,
+  download the files, move them into Image/ and video/ folders, merge the reel,
+  create a CapCut draft, and export the final MP4. Use for requests like
+  "이 대본으로 영상까지 뽑아줘", "barrotube 프롬프트로 쇼츠 만들어",
+  "ChatGPT로 이미지 만들고 Grok으로 영상 생성해줘", "render this scene",
+  "make a 9:16 short clip", "generate the image then animate it". Also use when
+  a reel must be finished end-to-end through Playwright MCP, ChatGPT image
+  download, Grok image-to-video download, FFmpeg master mix, and CapCut export:
+  "ep01 릴스 영상까지 만들어", "컷별 이미지로 grok 영상 일괄 생성",
+  "CapCut으로 렌더링까지", "render all cuts of this reel".
+---
+
+# barrotube-media-render
+
+Turn a **barrotube/ShortsGen prompt** into **finished media on disk** by piloting
+the user's logged-in browser: generate the still on **ChatGPT**, animate/render the
+clip on **Grok Imagine** (720p / 10s / 9:16), download both, merge the reel with
+one master BGM/SFX mix, create a **CapCut** project, and export the final MP4.
+
+This skill is the *render* half of the pipeline. **barrotube writes the prompt;
+this skill produces the files.** It deliberately does the parts that are fiddly and
+easy to get wrong — option toggles, waiting for generation, and getting the bytes
+off the page and into the right folder.
+
+## When to use
+
+Use this when the user has (or wants) a BarroTube reel/short and needs actual
+image, video, CapCut draft, or exported MP4 files rendered. Typical asks:
+"이 씬으로 영상까지", "barrotube 대본 렌더해줘", "이미지 만들고 그걸로 10초 영상",
+"CapCut으로 최종 렌더", "make the short for scene 2". If the user only gives a
+topic, write the reel script first, then render.
+
+## Two consumption modes (standalone is the default identity)
+
+이 스킬은 **단독 실행이 기본**이며, barrotube 스킬이 이를 참조하는 것은 단방향
+의존이다 (barrotube가 없어도 이 스킬은 완전하게 동작한다).
+
+1. **Standalone — 릴/Instagram 채널 모드 (기본).** 입력은 reel `script.md` +
+   `Image/` 스틸; 산출은 `<reel>/Image/<slug>.png`, `<reel>/video/<slug>.mp4`,
+   `55_render/` → CapCut export → Instagram publish. 이 문서의 전 워크플로우와
+   `scripts/` 전부(상태머신 `render_reel_job.py`, QA `qa_reel_media.py`,
+   preflight `media_render_doctor.py`, 공용 렌더러 `render_master_mix.py` 포함)가
+   이 모드 기준이다. 예: takitani.lab 인스타 릴 채널 운영.
+
+2. **barrotube EP 모드 (S6c 소비자).** barrotube 스킬의 에피소드 파이프라인이
+   S6c 씬 이미지·모션 클립 생성을 이 스킬에 위임한다. 브라우저 절차는 동일하되
+   **산출 경로만 EP 규약을 따른다**:
+   - 이미지 → `EP-YYYY-NNNN/40_assets/images/scene_NNN.png`
+   - 모션 클립(선택) → `EP-YYYY-NNNN/40_assets/videos/scene_NNN.mp4`
+   - Downloads 경유 시: `move_media.py --dest-dir <ep>/40_assets/images --slug scene_001`
+   - 프롬프트 소스는 `30_script.md`의 씬별 `image_prompt`. 나머지(엔진 선택·skip
+     로직)는 barrotube 쪽 `config/image-engines.json`이 관장한다.
+
+어느 모드든 브라우저 절차(`references/`)와 가드(Gotchas)는 공통이다.
+
+## Inputs
+
+One of:
+
+1. **barrotube YAML** (preferred) — the ShortsGen script schema:
+   `title, hook, scenes[](narration, duration, broll_keywords), captions[]`.
+   See `references/barrotube-schema.md` for the exact shape and how each field maps
+   to an image prompt and a video prompt.
+2. **A direct scene description** — free text the user typed.
+3. **A whole reel (batch)** — a `script.md` with `CUT 1..N` blocks (each having an
+   `**이미지 파일:**` path and a `**Grok 모션:**` prompt) plus an `Image/` folder of 9:16
+  stills, one per cut, or no stills yet. The user wants **every cut** rendered
+  and exported. This is the BarroMarketing→BarroTube handoff shape. → use
+  **Reel batch mode** (`references/reel-batch.md`); parse with
+  `scripts/reel_render_plan.py` when stills already exist.
+
+Optional knobs (with sensible defaults):
+
+- `style` — 감성 VLOG / 정보형 / 리뷰형 / 다이나믹 (controls tone of the visual prompt).
+- `scene_index` — which scene to render (default: the hero scene, i.e. the first, or
+  loop over all scenes if the user asks for the whole short).
+- `aspect / resolution / duration` — default **9:16 / 720p / 10s** (Grok short).
+
+## Prerequisites (check first, don't assume)
+
+- A **browser-automation tool with a logged-in session**. Prefer **Playwright MCP**
+  when it is available and already logged into ChatGPT/Grok; it supports direct
+  `download.saveAs()` and hidden file input upload. Use `chrome:control-chrome`
+  only when Playwright lacks the needed login/session or file upload state.
+  This skill cannot run as a purely background task because generation requires
+  visible state checks.
+- The user is **signed in** to both https://chatgpt.com and https://grok.com/imagine.
+- **Folder access** to: the project's `Image/` and `video/` output folders, and the
+  browser's **Downloads** folder (that's where the sites' Download buttons save).
+  Default project layout (per-channel convention):
+  `~/BarroAiFactory/<handle>/barrotube/Image` and `.../barrotube/video`, and for a reel,
+  `~/BarroAiFactory/<handle>/barrotube/<reel>/Image` + `.../<reel>/video`. If a folder
+  isn't mounted, request it.
+- **Environment matters for file attach.** Attaching a still to Grok (image→video) needs
+  browser control that can select or upload local files. In Codex, prefer Chrome with the
+  user's logged-in profile; if file upload is blocked by the current browser surface, ask
+  the user to drag the still into Grok or fall back to text→video (see
+  `references/reel-batch.md`).
+- `ffmpeg`/`ffprobe` for final merge, stream validation, contact sheets, and BGM/SFX
+  master mix.
+- CapCut 2 installed when the user asks for CapCut draft/export. Prefer
+  `/Applications/CapCut 2.app`; older `/Applications/CapCut.app` can reject newer
+  drafts with an update dialog.
+
+## Workflow
+
+Before work starts, initialize production timing for the reel:
+
+```bash
+python3 scripts/production_timer.py init <reel> --episode <EP-ID>
+python3 scripts/production_timer.py start <reel> scene_plan --label "Scene plan"
+```
+
+Every major step must be wrapped with `production_timer.py start/end`, including
+browser-driven waiting time. For shell commands, prefer:
+
+```bash
+python3 scripts/production_timer.py run <reel> ffmpeg_master --label "FFmpeg master mix" -- ffmpeg ...
+```
+
+The expected timing outputs are:
+
+- `<reel>/90_timing/production-timing.json`
+- `<reel>/90_timing/production-timing.md`
+
+Work one cut at a time:
+
+1. Build the image and motion prompts.
+2. Generate/download the still from ChatGPT into `Image/<slug>.png`.
+3. Upload that still to Grok Imagine, generate/download `video/<slug>.mp4`.
+4. After all cuts, merge with one master BGM/SFX track.
+5. Create/open a CapCut draft and export the final MP4.
+
+Use Playwright MCP `browser_run_code_unsafe` for fragile UI operations such as
+`download.saveAs()` and `input[type=file].setInputFiles(...)`, and use screenshots
+or contact sheets to verify visual state before proceeding.
+
+### Step 0 — Build the prompts from the script
+
+Read the barrotube YAML and turn the chosen scene into two prompts:
+
+- **image_prompt** — a vivid still describing subject + setting + `broll_keywords` +
+  `style`, ending with a concrete look (e.g. "지브리 스타일, 손그림 느낌, 영화 같은 분위기").
+  Always frame for vertical reels with a **wide-angle 24mm look**: full-body or
+  full-object view, enough headroom/footroom, clear surrounding environment, no tight
+  close-up, and no cropped limbs or key props. This keeps the scene readable inside
+  a 9:16 frame.
+- **video_prompt** — the same scene but describing **motion + camera** (what moves,
+  wind, water, a tracking shot), because video models need movement cues.
+
+You can do this by hand, or run the helper for a deterministic mapping:
+
+```bash
+python scripts/barrotube_to_prompts.py <script.yaml> --scene 0 --style "감성 VLOG"
+```
+
+It prints JSON: `{ "slug", "image_prompt", "video_prompt" }`. Use `slug` for filenames.
+Mapping details and editable rules: `references/barrotube-schema.md`.
+
+### Step 1 — Generate the image on ChatGPT
+
+Follow `references/chatgpt-image.md` for the exact, verified UI steps. In short:
+open chatgpt.com, type an explicit image-generation prompt, wait for a portrait
+image to appear, open the image share/download modal, then save it directly to
+`Image/<slug>.png` with Playwright `download.saveAs()` when available.
+
+Timing rule: start `chatgpt_image_cutN` before sending the prompt and end it only
+after the file has been saved and validated.
+
+### Step 2 — Generate the video on Grok Imagine
+
+Follow `references/grok-video.md`. In short: open grok.com/imagine, set the option
+bar to **비디오 / 720p / 10s / 9:16** and verify it. Then:
+
+- **Image→video (preferred for visual continuity):** attach the ChatGPT image you just
+  saved (the "+" in the prompt bar) and give a short **motion** prompt, or
+- **Text→video (fallback):** just type `video_prompt`.
+
+Send, watch the **"생성 중 NN%"** progress to 100%, then click **다운로드** and save to
+`video/<slug>.mp4`.
+
+Timing rule: start `grok_video_cutN` before attaching the image/prompt and end it
+only after the downloaded video passes `ffprobe`.
+
+### Step 3 — File the outputs into the project folders
+
+Move each download out of `~/Downloads` into the right folder, validate, rename by slug,
+and (with approval) remove the original:
+
+```bash
+# image
+python scripts/move_media.py --kind image --slug <slug> \
+  --dest-root /Users/beye/BarroAiFactory
+# video
+python scripts/move_media.py --kind video --slug <slug> \
+  --dest-root /Users/beye/BarroAiFactory
+```
+
+`move_media.py` picks the newest matching file in Downloads (png for image,
+`grok-video-*.mp4`/mp4 for video), verifies it (PNG signature / `ffprobe` for the mp4:
+expect ~720×1280, ~10s), copies it to `Image/<slug>.png` or `video/<slug>.mp4`, and
+prints the final path. See its `--help`.
+
+**Deleting the Downloads original may require approval** depending on the current sandbox
+or browser surface. If deletion fails or is denied, leave the original and keep the copied
+project file; tell the user it is also still in Downloads. Use `--no-delete` when you want
+to avoid deletion entirely.
+
+### Step 4 — Merge and CapCut export
+
+For a whole reel, follow `references/capcut-reel-export.md` after all Grok clips
+exist. The expected outputs are:
+
+- `55_render/video.mp4` — FFmpeg master merge for QA and draft input.
+- CapCut draft under `~/Movies/CapCut/User Data/Projects/com.lveditor.draft/<project>/`.
+- `56_capcut_export/video.mp4` — final CapCut export.
+- `distribution/{reels,tiktok,youtube}/video.mp4` symlinks to the CapCut export.
+
+## Reel batch mode (render a whole reel)
+
+When the input is a reel, follow **`references/reel-batch.md`**. Quick shape:
+
+```bash
+REEL=~/BarroAiFactory/<handle>/barrotube/<reel>
+python scripts/reel_render_plan.py "$REEL/script.md"     # -> [{cut, slug, image, motion, caption, exists}]
+# if stills are missing, generate them on ChatGPT first.
+# then ONE cut at a time (never two downloads back to back):
+#   Grok image→video: attach <image>, type <motion>, 9:16/720p/10s, wait 100%, download
+#   python scripts/move_media.py --kind video --slug <slug> --dest-root "$REEL"   # -> video/<slug>.mp4
+# after all clips: FFmpeg master mix -> CapCut draft -> CapCut export -> distribution package
+```
+Report final `56_capcut_export/video.mp4`, contact sheet, and stream validation.
+
+## Gotchas learned the hard way (read these — they save a lot of flailing)
+
+- **Don't curl ChatGPT image URLs.** `backend-api/estuary/content?...` URLs usually
+  require browser cookies and return 403 from terminal. Use the page's download
+  button with Playwright `download.saveAs()`.
+- **Don't return base64 through tools.** Base64 output is blocked and screenshots are
+  not the full-resolution asset.
+- **Grok paywall.** On some accounts, clicking generate pops a **SuperGrok** subscription
+  modal (especially when a daily/free quota is spent). **Never purchase or start a paid
+  trial on the user's behalf.** Close the modal, report it, and offer alternatives
+  (try later, switch account, use ChatGPT for the still only).
+- **Grok options can already be correct.** The option bar often defaults to a prior
+  selection — zoom in and *verify* 비디오/720p/10s/9:16 rather than blindly clicking.
+- **Account drift.** The logged-in account may differ between runs (check the
+  bottom-left avatar/email). That's the user's browser state — note it, don't fight it.
+- **Video takes time.** Grok shows a percentage; poll with short waits (≤10s each) and
+  re-screenshot until 100%. Don't assume it's done.
+- **Filenames.** Grok saves as `grok-video-<uuid>.mp4`; ChatGPT as a long localized name.
+  Always rename by `slug` on the way into the project folder so scenes stay ordered.
+- **Download-too-early duplicate trap.** Grabbing the newest image/video before generation
+  finishes silently downloads the **previous** item again (duplicate bytes). Poll to
+  completion first; for images verify it's the **last unique src AND portrait** for 9:16;
+  md5 a batch afterward and re-grab duplicates.
+- **Chrome multi-download block.** Two+ quick downloads trip Chrome's "여러 파일 다운로드"
+  block, then **all** downloads from that site are blocked for the session (even the UI
+  button). Do **one at a time, ~2s apart.** If blocked, user must allow it in the address
+  bar / restart Chrome — page automation can't clear it.
+- **ChatGPT image quota.** Free tier stops after ~10 images and shows an upgrade modal
+  ("이미지가 0개 남았습니다"). **Don't pay.** Wait for reset, use a Pro/quota account, or continue
+  later.
+- **Grok file upload may not expose a modal.** If `browser_file_upload` says there is
+  no modal state, use `page.locator('input[type="file"]').first().setInputFiles(path)`.
+- **CapCut 2 vs CapCut.** Open drafts with CapCut 2. The older CapCut app may show an
+  update-required dialog for projects created by newer CapCut.
+
+## Output
+
+- `Image/<slug>.png` — the still (ChatGPT).
+- `video/<slug>.mp4` — the 9:16 / 720p / ~10s clip (Grok).
+- `55_render/video.mp4` — FFmpeg master merge.
+- `56_capcut_export/video.mp4` — final CapCut export.
+- `distribution/{reels,tiktok,youtube}/` — platform package.
+- `90_timing/production-timing.json` and `.md` — production time by stage.
+
+Report both final paths and a one-line note of anything notable (paywall hit, account
+used, quota, longest production step). When rendering a whole short, repeat per scene with `<slug>` like
+`<title>-s01`, `<title>-s02`, … so downstream FFmpeg merge (barrotube/ShortsGen render
+step ④) can pick them up in order.

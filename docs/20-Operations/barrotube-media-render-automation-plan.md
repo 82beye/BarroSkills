@@ -1,6 +1,7 @@
 ---
 created: 2026-07-02
-status: draft
+updated: 2026-07-02
+status: reviewed
 tags:
   - operations
   - barrotube
@@ -33,18 +34,80 @@ scene plan
 - [[instagram-publishing|Instagram Reels 게시 운영]]
 - [[../10-Channels/takitani-lab/index|takitani.lab]]
 
+## Skill Source of Truth
+
+이 계획의 기준이 되는 정본(source of truth) 스킬 경로는 하나로 고정한다.
+
+```text
+정본: ~/workspace/BarroSkills/.claude/skills/barrotube-media-render
+구버전: ~/Desktop/Workspace/my-skills/.claude/skills/barrotube-media-render
+```
+
+두 경로에 스킬이 **중복 존재**한다. 구버전(my-skills)은 scripts 3종
+(`barrotube_to_prompts.py`, `move_media.py`, `reel_render_plan.py`)만 갖고 있고,
+정본(BarroSkills)은 여기에 `production_timer.py`, `agents/openai.yaml`,
+`references/capcut-reel-export.md`가 더해지고 SKILL.md가 CapCut/FFmpeg/Playwright까지
+확장된 상태다.
+
+> 드리프트 리스크: 두 벌이 갈라져 있으면 "어느 스킬을 운영에 쓰는가"가 모호해진다.
+> 이 문서와 모든 자동화는 **BarroSkills 경로를 정본**으로 삼고, my-skills 사본은
+> 폐기하거나 정본을 복제한 스냅샷으로만 취급한다.
+
 ## Current State
 
 현재 `barrotube-media-render`는 Codex가 브라우저를 조작하며 끝까지 실행할 수 있는 수준의 절차서와 보조 스크립트를 갖고 있다.
 
-이미 구현된 것:
+이미 구현된 것 (정본 스킬 실측):
 
+- 스크립트→프롬프트 결정론 매핑: `barrotube_to_prompts.py`
+  (scene→`image_prompt`/`video_prompt`/`slug`, 필드 alias 흡수. R1에 해당)
 - `script.md` 기반 컷 계획 파싱: `reel_render_plan.py`
 - 다운로드 파일 정리와 기본 검증: `move_media.py`
+  (PNG 시그니처 / `ffprobe` 720×1280·10s 검증, 복사 후 크기 일치 시에만 원본 삭제)
 - 제작 시간 기록: `production_timer.py`
-- ChatGPT 이미지 생성 절차 문서
-- Grok 720p / 10s / 9:16 영상 생성 절차 문서
-- FFmpeg 마스터 믹스 / CapCut Draft / export 절차 문서
+  — CLI(`init`/`start`/`end`/`event`/`run`/`summary`)뿐 아니라 `ProductionTimer`
+  클래스 + 컨텍스트매니저 `step()`을 제공해 render 스크립트가 임포트해 자동 계측 가능
+- 에이전트 인터페이스 정의: `agents/openai.yaml`
+- **릴스 R단계 상태 머신: `render_reel_job.py`** (2026-07-02 구현)
+  — `<reel>/render-job.json` 진실원천, R0~R11 stage + per-cut 추적,
+  `sync`가 디스크 증거로 완료 stage를 idempotent skip, 표준 `error_type`으로
+  실패 기록·retry 목록 제공, QA 리포트(`60_qa_report.*.json`) 게이트 연동.
+  EP04 실물 검증: 6컷 감지, 완료 8개 stage 자동 skip, next=R3(image QA)
+- **QA 게이트: `qa_reel_media.py`** (2026-07-02 구현)
+  — `images`(R3)/`videos`(R5)/`final`(R8)/`all` 4모드, §4 검사 항목 전체 커버
+  (컷 수 일치·PNG portrait·md5 중복·해상도/길이/codec·오디오 스트림·
+  blackdetect·volumedetect·contact sheet·자막 스트림). error/warn 2단계 —
+  error만 `ok:false`로 게이트 차단. EP04 검증: 3 stage 모두 ok:true,
+  게이트 연동 후 next=R10(publish, HITL)만 잔여.
+  실전 발견: **Grok 실측 해상도는 720×1264** (공칭 720×1280과 다름) — 둘 다
+  known-good으로 등록, 그 외 portrait는 warn, landscape는 error.
+- **Preflight doctor: `media_render_doctor.py`** (2026-07-02 구현)
+  — `<reel>/00_preflight.media.json` 출력, §3 검사 항목 커버: 바이너리
+  (ffmpeg/ffprobe/node/jq)·Downloads 쓰기·CapCut 2 앱+Draft 템플릿·BGM/SFX·
+  Instagram token(+`--online` Graph API 실검증)·reel 구조. 브라우저 로그인/
+  Grok 옵션바는 CLI 검증 불가 → `manual` 레벨로 분리(browser worker가 런타임 검증).
+  token 조회는 `config-loader.js getSecret()`과 동일 체인(.env→process env→
+  **macOS Keychain**)을 미러링, 값은 절대 출력하지 않음.
+  실전 발견: **Instagram token이 현재 3곳 모두 부재** — EP02(6/30) 게시 당시
+  일회성 주입 후 영속화되지 않음. 다음 R10 게시 전 운영자가 token을
+  .env 또는 Keychain(`security add-generic-password -s INSTAGRAM_ACCESS_TOKEN`)에
+  저장해야 함. doctor가 이 실패를 사전 감지하는 것이 확인됨.
+- **공용 FFmpeg 렌더러: `render_master_mix.py`** (2026-07-02 구현, Phase 2 착수)
+  — EP03/EP04 개별 스크립트에서 검증된 로직(1080×1920/30fps normalize·scene trim·
+  smoothleft xfade·연속 BGM bed·전환점 whoosh SFX·loudnorm I=-16:TP=-1.5:LRA=11)을
+  파라미터화. 컷 목록은 script.md 순서에서 자동 유도, `--durations`/`--duration-each`,
+  `--bgm/sfx-volume`, `--dry-run`, `ProductionTimer` 자동 연동(`--no-timer` 지원).
+  manifest 스키마 `barrotube.master_mix.v1`. **EP04 재현 검증: 스트림
+  (h264 1080×1920 30fps/aac/25.97s)·볼륨(mean −17.6dB, max −1.0dB) 원본과 동일**,
+  EP03 타임라인(26.85s, offsets 4.45~22.45) dry-run 일치, 단일클립·no-sfx 엣지 통과.
+  → 새 EP는 개별 `render_epXX_master.py` 없이 이 스크립트로 렌더한다.
+- ChatGPT 이미지 생성 절차 문서: `references/chatgpt-image.md`
+- Grok 720p / 10s / 9:16 영상 생성 절차 문서: `references/grok-video.md`
+- FFmpeg 마스터 믹스 + CapCut Draft + export 절차 → **단일 문서로 통합**:
+  `references/capcut-reel-export.md`
+- SKILL.md에 반영된 운영 정책:
+  - **브라우저: Playwright MCP 우선**, `chrome:control-chrome`은 폴백
+  - **wide-angle 24mm 이미지 규칙**(9:16 전신/전체 객체, 헤드룸/풋룸, 클로즈업·잘림 금지)
 - EP04 기준 실제 산출물 구조 검증
 - `90_timing/production-timing.json` 및 `.md` 기록 체계
 
@@ -67,6 +130,24 @@ scene plan
   90_timing/production-timing.md
   distribution/{reels,tiktok,youtube}/
 ```
+
+## Design Principle (결정론 / 비결정론 분리)
+
+이 스킬의 현재 설계는 작업을 두 종류로 명확히 나눈 위에 서 있고, 자동 오케스트레이터도
+이 경계를 그대로 유지해야 한다.
+
+| 구분 | 담당 | 산출물 예 |
+| --- | --- | --- |
+| **결정론** (매번 동일 결과) | Python 스크립트 | 프롬프트 매핑, 컷 계획 파싱, 파일 이동·검증, 타이밍 기록 |
+| **비결정론** (페이지 상태·대기·팝업 판단 필요) | 브라우저 UI 절차 문서 + LLM 조작 | ChatGPT 이미지 생성, Grok 영상 생성, CapCut export |
+
+핵심은 "애매하고 틀리기 쉬운 부분(옵션 토글·생성 대기·바이트 회수)"은 절차 문서로,
+"틀리면 안 되는 반복 작업"은 코드로 처리한다는 것이다. 오케스트레이터가 지켜야 할 함의:
+
+- 상태(state)·검증(QA)·재시작 판정은 **결정론 영역(코드+JSON 파일)** 에만 둔다.
+  브라우저 결과의 성패는 파일·`ffprobe`·md5 같은 결정론 신호로 판정한다.
+- browser worker는 비결정론 영역을 감싸되, **표준 실패 응답(JSON)** 으로 결과를
+  결정론 영역에 돌려줘야 재시작 위치가 명확해진다(§2 참조).
 
 ## Main Gap
 
@@ -142,6 +223,30 @@ scripts/browser_workers/
   "next_action": "switch_account_or_retry_later"
 }
 ```
+
+#### Gotchas → worker 감지 스펙 매핑
+
+SKILL.md의 "Gotchas learned the hard way"는 곧 browser worker가 코드로 감지·처리해야
+할 상태 스펙이다. 위 `error_type`은 이 함정 목록에서 도출한다.
+
+| SKILL.md gotcha | worker 감지 방법 | `error_type` | `recoverable` / next_action |
+| --- | --- | --- | --- |
+| Grok SuperGrok / ChatGPT 이미지 quota·paywall modal | 생성 클릭 후 구독 모달/"이미지가 0개 남았습니다" 검출 | `quota_or_paywall` | true / 계정 전환·나중 재시도. **절대 결제 금지** |
+| Chrome multi-download block | 연속 다운로드로 사이트 다운로드가 세션 차단됨 | `download_blocked` | false(자동 불가) / 사용자 주소창 허용·Chrome 재시작. 예방: 1건씩 ~2s 간격 |
+| Download-too-early duplicate | 생성 완료 전 회수 → 이전 항목 재다운로드 | `stale_download` | true / 100% 폴링 후 재회수. **md5 guard** + 이미지 last-unique-src·portrait 확인 |
+| Grok option drift | 옵션바가 비디오/720p/10s/9:16 아님 | `option_drift` | true / 재설정 후 zoom 스크린샷 재검증 |
+| Account drift | 하단 아바타/이메일이 예상 계정과 다름 | `account_drift` | true(경고) / 기록만, 사용자 상태와 싸우지 않음 |
+| Grok 파일첨부 모달 부재 | `browser_file_upload`가 모달 없음 반환 | `file_attach_unavailable` | true / `input[type=file].setInputFiles(path)` 폴백, 안 되면 text→video |
+| 로그인 만료 | composer/prompt bar 대신 로그인 화면 | `not_logged_in` | false / 사용자 로그인 요청(대행 금지) |
+
+#### 셀렉터 전략 리스크
+
+현재 절차는 ChatGPT/Grok의 **한국어 UI 라벨 텍스트**("이미지 만들기", "생성 중 NN%",
+"다운로드", "내보내기")에 의존한다. UI 개편·언어 설정 변화에 취약하므로 worker 코드화 시:
+
+- 라벨 문자열은 상수 테이블로 분리(로케일 교체 대비).
+- 가능하면 구조적 셀렉터(역할/DOM 위치)를 우선하고, 라벨은 보조 신호로.
+- 상태 확인은 라벨뿐 아니라 결정론 신호(다운로드 파일 존재·`ffprobe`·md5)로 이중 확인.
 
 ### 3. Preflight
 
@@ -344,19 +449,24 @@ docs/10-Channels/takitani-lab/episodes/<EP>-postmortem.md
 릴스 전용 workflow를 기존 long-form S단계에 억지로 넣기보다 별도 R단계로 관리한다.
 
 ```text
-R0 topic/brief
-R1 script/prompts
-R2 ChatGPT images
-R3 image QA
-R4 Grok videos
-R5 video QA
-R6 FFmpeg master
-R7 CapCut draft/export
-R8 final QA
-R9 distribution
-R10 Instagram publish
-R11 postmortem/timing report
+R0   topic discovery        (완전 자율: marketing-analyst 블루오션 키워드→주제 후보)
+R0.5 topic fact-check gate   (barrotube-fact-checker: 수치·인용·법적·트렌드 진위 검증)
+R1   script/prompts         (ceo brief → strategist hook → writer script+prompts)
+R2   ChatGPT images
+R3   image QA
+R4   Grok videos
+R5   video QA
+R6   FFmpeg master
+R7   CapCut draft/export
+R8   final QA
+R9   distribution
+R10  Instagram publish
+R11  postmortem/timing report
 ```
+
+R0.5는 **게이트**다: 팩트체크가 HIGH 위험(허위 수치·저작권/명예훼손 소지·트렌드 오판)을
+반환하면 해당 주제를 반려하고 R0의 다음 후보로 되돌린다. 통과한 주제만 R1로 내려간다.
+완전 자율로 주제를 뽑되, "검증되지 않은 주제로 제작에 들어가지 않는다"를 보장하는 장치.
 
 각 단계는 다음 필드를 가진다:
 
@@ -373,6 +483,115 @@ R11 postmortem/timing report
 }
 ```
 
+## Orchestrator Agent Design (`barrotube-reel-director`)
+
+릴스 R단계를 R0(자율 주제 발굴)부터 R11(회고)까지 자율 지휘하는 **신규 전용 에이전트**를
+정의한다. 기존 `barrotube-producer`(S단계 long-form)와 **책임을 분리**하여 R단계 릴스 트랙만
+담당한다.
+
+### 설계 원칙 — 판단(에이전트)과 상태(코드) 분리
+
+오케스트레이터는 "에이전트 1개"가 아니라 **판단 계층(에이전트) + 상태 계층(결정론 코드)**
+의 조합이다. 위 **Design Principle (결정론 / 비결정론 분리)** 섹션을 그대로 따른다.
+
+```text
+Layer 1  판단/지휘 (비결정론)   barrotube-reel-director
+  - render-job.json 읽고 "다음 단계" 결정
+  - QA gate 판정(fail → publish 차단), HITL 승인 관리
+  - worker 실패 error_type별 재시도/계정전환/에스컬레이션
+  - topic 미지정 시 R0 자율 발굴 체인 dispatch
+        │  Task dispatch  +  read/write state
+Layer 2  상태/실행 (결정론)
+  render_reel_job.py  ── render-job.json  (상태 진실원천)
+  media_render_doctor.py (preflight)
+  browser_workers/*  (chatgpt/grok, 표준 JSON 반환)
+  qa_reel_media.py (gate)   production_timer.py (계측)
+```
+
+성패 판정은 항상 파일(`render-job.json`)과 결정론 신호(`ffprobe`/md5)로 한다. 그래야
+중단 후 director를 다시 불러도 job 파일만 보고 이어갈 수 있다(idempotent resume).
+
+### 기존 자산 재사용 (새로 만들지 않는다)
+
+| R단계 | 재사용 에이전트/도구 | 신규 여부 |
+| --- | --- | --- |
+| R0 topic discovery | `barrotube-marketing-analyst` (블루오션 키워드) | 재사용 |
+| R0.5 topic fact-check | `barrotube-fact-checker` (수치·인용·법적 위험) | 재사용 |
+| R1 script/prompts | `barrotube-ceo`→`barrotube-strategist`→`barrotube-writer`, `barrotube_to_prompts.py` | 재사용 |
+| R2/R4 image·video | media-render 절차 문서 + (신규)browser worker | 신규 worker |
+| R3/R5/R8 QA | (신규)`qa_reel_media.py` | 신규 |
+| R6/R7 render/export | `capcut-reel-export.md` + (신규)공용 렌더러 | 일부 신규 |
+| R9 distribution | `build-distribution.js` | 재사용 |
+| R10 publish | `publish-instagram-reels.js` + (신규)publish guard | 일부 신규 |
+| R11 timing | `production_timer.py` | 재사용 |
+
+즉 **"주제를 정하는 뇌"와 dispatch 대상은 이미 존재**하고, director가 새로 하는 일은
+*릴스 전용 지휘 루프 + 상태 머신 연결*뿐이다.
+
+### 에이전트 정의 스케치
+
+`~/workspace/BarroSkills/.claude/skills/barrotube-media-render/agents/reel-director.md`
+(Claude Code subagent). frontmatter + 지휘 루프를 system prompt로 둔다.
+
+```yaml
+---
+name: barrotube-reel-director
+description: >-
+  릴스 R단계(R0 자율 주제 발굴 ~ R11 회고) 자율 오케스트레이터.
+  render-job.json 상태 머신을 읽고 stage worker를 ONE-at-a-time dispatch,
+  QA gate·HITL 승인·실패 복구를 지휘. 실거래성 액션(결제/삭제/게시)은 HITL 강제.
+tools: [Bash, Read, Write, Edit, Task]
+model: opus
+---
+```
+
+### 지휘 루프 (director 알고리즘)
+
+```text
+1. render_reel_job.py load  (없으면 init) → 완료/미완 stage 판정
+2. media_render_doctor.py    → preflight FAIL이면 중단·보고 (HITL)
+3. topic 없으면 R0 자율 체인:
+     marketing-analyst → 주제 후보 N개
+     → R0.5 fact-check gate (barrotube-fact-checker)
+          HIGH risk → 반려, 다음 후보 (모두 반려면 사람에게 에스컬레이션)
+     → ceo brief → strategist hook → writer script/prompts
+4. 다음 미완 stage worker를 ONE at a time dispatch (동시 다운로드 금지)
+5. worker 표준 JSON 수신:
+     ok:true  → qa gate 통과 시 stage=completed, production_timer end
+     ok:false → error_type별 (§2 매핑 표):
+        quota_or_paywall  → 계정전환/나중재시도  (결제 절대 금지)
+        download_blocked  → 사용자 Chrome 허용 요청 (HITL, 자동 불가)
+        stale_download    → 100% 재폴링 후 재회수
+        option_drift      → 옵션 재설정 후 재시도
+        account_drift     → 기록만, 사용자 상태와 싸우지 않음
+6. idempotent skip: 산출물 존재 + md5 유효 → stage skip
+7. HITL 게이트(승인 없이 진행 금지): R10 publish, 결제, Downloads 원본 삭제
+8. 완료 → R11 postmortem + timing 집계
+```
+
+### 실패·안전 불변식
+
+- 결제/유료 전환 **절대 금지** (quota/paywall은 항상 비결제 경로로 우회).
+- 로그인 대행 금지 — `not_logged_in`은 사람에게 넘긴다.
+- 게시(R10)·파일 삭제는 **명시적 사람 승인** 후에만.
+- 모든 stage는 `production_timer.py`로 계측(브라우저 대기 시간 포함).
+
+### 구현 순서 (이 설계의 다음 단계)
+
+계획 문서 MVP 순서와 정합: 상태·검수 기반(코드) → worker → director 에이전트.
+
+```text
+1. render_reel_job.py + render-job.json 스키마   (상태 머신)
+2. media_render_doctor.py                        (preflight)
+3. qa_reel_media.py                              (gate)
+4. browser_workers/{chatgpt,grok}                (§2 error_type 반환)
+5. agents/reel-director.md                       (지휘 루프 = 위 알고리즘)
+6. R0 자율 체인 + R0.5 fact-check 배선
+```
+
+에이전트를 먼저 만들면 붙일 상태 머신·worker가 없어 지휘할 대상이 없다. **상태/worker를
+먼저 코드화한 뒤 director를 얹어야** 디버깅 비용이 낮다.
+
 ## Implementation Plan
 
 ### Phase 1 - Stability Foundation
@@ -381,11 +600,16 @@ R11 postmortem/timing report
 
 구현:
 
-- `media_render_doctor.py`
-- `render_reel_job.py`
-- `qa_reel_media.py`
-- `render-job.json`
+- ~~`media_render_doctor.py`~~ ✅ 구현 완료 (2026-07-02, EP04 ok:true·token 부재 사전 감지 확인)
+- ~~`render_reel_job.py`~~ ✅ 구현 완료 (2026-07-02, EP04 검증 통과)
+- ~~`qa_reel_media.py`~~ ✅ 구현 완료 (2026-07-02, EP04 3-stage ok:true·게이트 연동 검증)
+- ~~`render-job.json`~~ ✅ 스키마 `barrotube.render_job.v1` 확정
+
+**→ Phase 1 완료 (2026-07-02).** 완료 기준 3건 모두 충족: ① doctor/QA가 EP04 대상
+pass/fail JSON 생성 ② 중단 job 재실행 시 완료 산출물 skip ③ 실패 컷만 retry 표시.
 - `production_timer.py`와 job stage 연결
+  (재구현 아님 — 이미 있는 `ProductionTimer` 클래스/`step()` 컨텍스트매니저/`run`
+  서브커맨드를 오케스트레이터가 임포트해 stage 경계에 연결)
 
 완료 기준:
 
@@ -399,15 +623,17 @@ R11 postmortem/timing report
 
 구현:
 
-- `render_master_mix.py`
+- ~~`render_master_mix.py`~~ ✅ 구현 완료 (2026-07-02)
 - `build_capcut_reel_draft.py`
 - final 4K export helper
 - distribution symlink/package helper
 
 완료 기준:
 
-- EP03/EP04를 공용 renderer로 재현할 수 있다.
+- ~~EP03/EP04를 공용 renderer로 재현할 수 있다.~~ ✅ EP04 실렌더 원본 동일
+  (스트림·볼륨), EP03 dry-run 타임라인 일치
 - 새 EP는 개별 `render_epXX_master.py` 없이 최종 mp4를 만든다.
+  (렌더러 준비 완료 — 다음 EP 제작에서 실증)
 
 ### Phase 3 - Browser Workers
 
@@ -480,9 +706,14 @@ R11 postmortem/timing report
 - 먼저 job state, preflight, QA gate가 있어야 실패 위치와 재시작 위치가 명확해진다.
 - 그 다음 ChatGPT/Grok worker를 붙여야 디버깅 비용이 낮다.
 
+## Resolved Decisions
+
+- **Browser worker 기반: Playwright MCP 우선.** SKILL.md가 이미 Playwright MCP를
+  우선(로그인/파일업로드/`download.saveAs()` 지원), `chrome:control-chrome`을 폴백으로
+  확정했다. 남은 일은 방향 선택이 아니라 이 방향대로 worker를 **코드화**하는 것(§2·Phase 3).
+
 ## Open Decisions
 
-- Browser worker를 Node Playwright 기반으로 둘지, Codex MCP 호출 절차로 유지할지 결정해야 한다.
 - CapCut export를 앱 UI로 유지할지, FFmpeg 4K export를 공식 최종본으로 인정할지 결정해야 한다.
 - Instagram API 게시를 기본값으로 둘지, 웹 fallback을 운영자 승인 fallback으로만 둘지 결정해야 한다.
 - 기존 BarroTube S단계와 릴스 R단계를 통합할지, 별도 workflow로 유지할지 결정해야 한다.

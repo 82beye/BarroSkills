@@ -1,0 +1,4 @@
+interface:
+  display_name: "BarroTube Media Render"
+  short_description: "Render BarroTube reels through ChatGPT, Grok, FFmpeg, and CapCut"
+  default_prompt: "Use $barrotube-media-render to generate ChatGPT stills, animate them in Grok, merge the reel with FFmpeg, create a CapCut draft, and export the final MP4."
