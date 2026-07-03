@@ -1,51 +1,94 @@
-# BarroSkills — Claude Code Skills Collection
+# MultiAgent — Claude · Codex · Gemini Orchestration Starter
 
-> 사용자(beye) 자체 운영 스킬 모음 폴더. 각 스킬은 self-contained로 독립 운영 가능.
+Claude Code를 오케스트레이터로 두고 Claude·Codex·Gemini를 워커로 호출하는 **파일 기반 멀티에이전트 시스템**.
 
-## 구조
+## 핵심 아이디어
+
+- **Orchestrator = Claude Code 세션** (이 폴더 안에서 실행 시 `CLAUDE.md` 자동 적용)
+- **Workers** = 외부 모델 호출. 모두 승인 게이트 통과 필요.
+  - `claude-main` — 메인 코딩·디버깅·설계·아키텍처·전략
+  - `codex-main` — 보조 구현·코드 분석·테스트·로컬 검증·이미지 생성
+  - `codex-critic` — `claude-main` 산출물 리뷰·비평 (Codex의 주된 역할)
+  - `gemini` — 이미지·긴 문서·제3자 시각의 검토
+- **Memory = filesystem.** 런타임 상태 없음. 모든 결정·승인·검증이 파일로 남는다.
+
+## 폴더 구조
 
 ```
-/Users/beye/workspace/BarroSkills/
-└── .claude/skills/
-    ├── barrotube/                  ← YouTube 자동 회사 (마케팅·EP·업로드 corework)
-    │   ├── SKILL.md                  진입점 (/barrotube)
-    │   ├── scripts/                  자체 automation 60+
-    │   ├── config/                   거버넌스 JSON
-    │   ├── workspace/                EP 산출물
-    │   ├── logs/                     audit·budget·cron
-    │   ├── lib/                      install-cron.sh, doctor-cli.sh
-    │   ├── node_modules/             격리된 의존성
-    │   └── .env, package.json
-    │   └── references/{PIPELINE,MARKETING,SECRETS,ARCHITECTURE,DOCTOR,EP}.md
+<설치한-폴더>/
+├── CLAUDE.md              # 운영 규칙 전문 (이 폴더 안에서 claude 실행 시만 적용)
+├── _shared/
+│   ├── routing.md             # worker 선택 decision tree + 호출 명령
+│   ├── approval-policy.md     # 승인 게이트 정책 (claude-main 포함)
+│   ├── orchestrator-rules.md  # 세션 시작 시 자체 점검 규칙
+│   └── learnings.md           # 시스템 일반 재사용 교훈 (추적·공개, append-only)
+├── _templates/
+│   ├── task.md            # status, goal, constraints, planned_workers, workers_approved
+│   ├── context.md         # 현재 스냅샷 ≤ 1500자 / 300단어
+│   ├── worker-brief.md    # ≤ 1200자 / 240단어, target_repo + write_scope
+│   ├── worker-result.md   # Verification Checklist 포함
+│   ├── log.md             # append-only 이력
+│   └── task-folder.md     # 새 작업 폴더 생성 가이드
+└── tasks/                 # 작업별 폴더 (동적 생성)
+    └── <task-name>/
+        ├── task.md
+        ├── context.md
+        ├── log.md
+        ├── sources/       # 원본 자료 (선택)
+        ├── workers/<role>/
+        │   ├── brief.md
+        │   └── result.md
+        └── artifacts/     # 산출물 원본 (선택)
 ```
 
-## 사용
+> `_local/` (git 추적 안 함, clone 시 빈 폴더): 작성자의 **프로젝트 특화** 교훈
+> (`_local/learnings.md`)이 여기 쌓인다. 공개 starter에는 **시스템 일반** 교훈만
+> `_shared/learnings.md`로 배포된다. 분류 규칙은 `_shared/learnings.md` 헤더 참조.
 
-단일 스킬 `/barrotube`가 args 분기로 모든 기능 처리:
-- `/barrotube` — AskUserQuestion 5 모드 (신규 EP / 마케팅·시리즈 / EP 재개 / 진단 / Cron)
-- `/barrotube produce <topic>` — 신규 EP 부트스트랩
-- `/barrotube ep <subcmd> <EP-ID>` — 단일 EP 라이프사이클 (run/approve/publish/cancel/status)
-- `/barrotube doctor` — 시스템 진단
-- `/barrotube install-cron <routine>` — launchd 데몬
+## 사용 시작
 
-상세: `.claude/skills/barrotube/QUICKSTART.md` 또는 `.claude/skills/barrotube/SKILL.md`
-
-## 스킬 추가 (확장)
-
-새 스킬 추가 시:
 ```bash
-mkdir -p .claude/skills/<new-skill-name>
-# SKILL.md + 필요한 자산을 모두 그 폴더 안에 self-contained로 둠
+cd <설치한-폴더>
+claude
 ```
 
-각 스킬은 다른 스킬과 격리된 독립 폴더. 환경변수·secrets·node_modules 모두 자체 관리.
+자연어로 새 작업 요청:
+> "새 작업 만들어줘. 목표는 ○○이고 ○○ worker가 필요할 것 같아."
 
-## 17 글로벌 Agent
+Orchestrator가 `_templates/task-folder.md` 가이드에 따라 작업 폴더 생성 → worker 승인 요청 → 진행.
 
-`~/.claude/agents/barrotube-*.md` 17개는 BarroTube 스킬용. Task 위임 시 `subagent_type="barrotube-writer"` 등으로 호출. 다른 스킬은 다른 prefix(예: `barrotrade-*`)로 격리 권장.
+## 모니터링 (선택) — mat
 
-## 운영자 메모
+작업 진행을 터미널에서 지켜보고 싶다면 **[mat](https://github.com/netwaif/mat)** (MultiAgent Tracker)를 함께 쓴다.
+한 작업의 워커 상태(대기·실행 중·완료·에러)·goal·로그를 한 화면에서 본다.
+시스템을 **읽기만** 한다 — 작업 생성·승인·워커 호출은 하지 않으므로, 켜두거나 꺼도 진행에 영향이 없다.
 
-- 본 폴더는 `~/.claude/skills/`와 별개. 운영자 본인이 직접 관리하는 스킬 collection.
-- 본인 1명용 (1차). 일반 배포 v2 시 별도 init wizard 필요.
-- 다른 스킬 (예: BarroAiTrade, BarroUs) 같은 형식으로 추가 가능.
+```bash
+brew install netwaif/tap/mat
+MAT_ROOT=<설치한-폴더> mat
+```
+
+설치·키 조작 등 자세한 내용은 [mat 저장소](https://github.com/netwaif/mat) 참고.
+
+> ⚠️ mat에서 워커 한 줄 목적이 ` ```yaml `로 보이면 **알려진 경미 이슈**(KI-1)다.
+> 시스템·진행에는 영향 없다. [`KNOWN_ISSUES.md`](./KNOWN_ISSUES.md) 참고.
+
+## 알려진 이슈
+
+해결·보류 중인 알려진 결함은 [`KNOWN_ISSUES.md`](./KNOWN_ISSUES.md)에 추적한다.
+
+## 핵심 원칙
+
+| 원칙 | 강제 방식 |
+|------|---------|
+| 모든 worker 호출 전 승인 | `task.md`의 `workers_approved` 필드 |
+| 측정 가능한 컨텍스트 한도 | `wc -m` / `wc -w`로 검증 |
+| append-only 로그 | `log.md` 수정·삭제 금지 |
+| 최소 worker set | `routing.md` decision tree로 강제 |
+| codex-main 외부 repo 쓰기 4-조건 | `target_repo` + `write_scope` + 승인 + log [APPROVAL] |
+
+자세한 규칙은 [`CLAUDE.md`](./CLAUDE.md) 참고.
+
+## 라이선스
+
+개인 사용 및 학습 목적.
