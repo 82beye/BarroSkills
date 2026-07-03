@@ -46,14 +46,22 @@ topic, write the reel script first, then render.
    preflight `media_render_doctor.py`, 공용 렌더러 `render_master_mix.py` 포함)가
    이 모드 기준이다. 예: takitani.lab 인스타 릴 채널 운영.
 
-2. **barrotube EP 모드 (S6c 소비자).** barrotube 스킬의 에피소드 파이프라인이
-   S6c 씬 이미지·모션 클립 생성을 이 스킬에 위임한다. 브라우저 절차는 동일하되
-   **산출 경로만 EP 규약을 따른다**:
-   - 이미지 → `EP-YYYY-NNNN/40_assets/images/scene_NNN.png`
-   - 모션 클립(선택) → `EP-YYYY-NNNN/40_assets/videos/scene_NNN.mp4`
-   - Downloads 경유 시: `move_media.py --dest-dir <ep>/40_assets/images --slug scene_001`
-   - 프롬프트 소스는 `30_script.md`의 씬별 `image_prompt`. 나머지(엔진 선택·skip
+2. **barrotube EP 모드 (S6c 씬 + S6d 인트로 소비자).** barrotube 스킬의 에피소드
+   파이프라인이 씬 이미지·모션 클립·인트로 카드 생성을 이 스킬에 위임한다.
+   브라우저 절차는 동일하되 **산출 경로만 EP 규약을 따른다**
+   (v2 레이아웃은 `EP-YYYY-NNNN/platforms/<platform>/` 하위):
+   - 씬 이미지 → `40_assets/images/scene_NNN.png`
+   - 모션 클립(선택) → `40_assets/videos/scene_NNN.mp4`
+   - **인트로 카드 → `45_intro.png`** — 타이틀 대형 골드 타이포 + 채널 배지 +
+     다크 배경, 9:16. **저장 전 타이틀 철자를 확대(zoom) 검수** — AI 한글 렌더
+     오타가 실제로 발생한다(실사례: "메타"→"머타"). 오타면 재생성.
+   - Downloads 경유 시: `move_media.py --dest-dir <dir> --slug scene_001|45_intro`
+   - 씬 프롬프트 소스는 `30_script.md`의 `image_prompt`. 나머지(엔진 선택·skip
      로직)는 barrotube 쪽 `config/image-engines.json`이 관장한다.
+   - **Grok 스틸 첨부(CLI/claude-in-chrome)**: `file_upload`가 호스트 경로를 거부하고
+     localhost fetch는 CSP에 막힌다 — **macOS 클립보드로 우회**:
+     `osascript -e 'set the clipboard to (read (POSIX file "<png>") as «class PNGf»)'`
+     후 프롬프트창 클릭 + `Cmd+V`. 원본 무손실 첨부 확인됨.
 
 어느 모드든 브라우저 절차(`references/`)와 가드(Gotchas)는 공통이다.
 

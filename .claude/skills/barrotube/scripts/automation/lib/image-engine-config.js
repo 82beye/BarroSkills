@@ -43,7 +43,9 @@ function loadConfig() {
   return _cfgCache;
 }
 
-const VALID = new Set(['gemini', 'openai']);
+// 'media-render': barrotube-media-render 스킬(브라우저 ChatGPT, PD 수행)로 사전 생성.
+// API 호출 없음 — 소비 스크립트(generate-intro 등)는 산출물 존재 확인/게이트만 수행.
+const VALID = new Set(['gemini', 'openai', 'media-render']);
 function norm(v) {
   if (v == null) return null;
   const s = String(v).trim().toLowerCase();

@@ -15,7 +15,7 @@
 | S6a | TTS | `barrotube-voice-engineer` (또는 직접 호출) | script | `40_assets/tts/*.wav` | **$0.02/씬** (ElevenLabs) | 30초/씬 |
 | S6b | Duration Sync | (자동) `sync-durations.js` | tts metadata | `30_script.md` 갱신 | 0 | 5초 |
 | S6c | Scene Images | **기본: `barrotube-media-render` 스킬** (브라우저 ChatGPT, PD 수행) / 레거시: `barrotube-image-generator` API (`--image-engine openai\|gemini`) | script | `40_assets/images/*.png` (+선택 `40_assets/videos/*.mp4` Grok 모션 클립) | 기본 0 (브라우저) / 레거시 **$0.04/이미지** | 1~2분/씬 (브라우저) |
-| S6d | Intro Card | `barrotube-image-generator` | brand DNA | `45_intro.png` | ~$0.04 | 20초 |
+| S6d | Intro Card | **기본: `barrotube-media-render` 스킬** (브라우저 ChatGPT, PD가 타이틀 철자 검수) / 레거시: `generate-intro.js` v10 API (`--engine openai\|gemini`) | title + brand | `45_intro.png` | 기본 0 / 레거시 ~$0.18 | 1~2분 (브라우저) |
 | S6e | Thumbnail | `barrotube-image-generator` | brand + script | `47_thumbnail.png` | ~$0.04 | 20초 |
 | S7 | Render | (자동) `render-direct.js` — `videos/scene_NNN.mp4` 존재 씬은 모션 클립, 없으면 정지 이미지+Ken Burns(레거시), 씬별 혼합 가능 | assets + script | `55_render/video.mp4` | 0 (FFmpeg) | 1~2분 |
 | S7b | CapCut Draft | `barrotube-capcut-composer` (선택) | assets | `50_capcut_draft.json` | 0 | 1분 |

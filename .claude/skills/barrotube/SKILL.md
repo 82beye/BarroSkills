@@ -83,13 +83,17 @@ export PAPERCLIP_DISABLED=1
 
 6. **S6 자산 생성** (비용 발생 — 운영자 명시 승인 필요):
 
-   **S6c 씬 이미지·모션 클립 — 기본: `barrotube-media-render` 스킬** (config
-   `image-engines.json`의 `stages.S6c_scene: "media-render"`). PD가 브라우저를
-   조작해 씬별로 생성하고 **기존 산출물 경로에 그대로 저장**:
-   - 이미지 (ChatGPT): `EP-YYYY-NNNN/40_assets/images/scene_NNN.png` (1080×1920 세로)
-   - 모션 클립 (Grok image→video, 선택): `EP-YYYY-NNNN/40_assets/videos/scene_NNN.mp4`
+   **S6c 씬 이미지·모션 클립 + S6d 인트로 — 기본: `barrotube-media-render` 스킬**
+   (config `image-engines.json`의 `stages.S6c_scene`·`S6d_intro: "media-render"`).
+   PD가 브라우저를 조작해 생성하고 **기존 산출물 경로에 그대로 저장**
+   (v2 레이아웃은 `platforms/<platform>/` 하위):
+   - 씬 이미지 (ChatGPT): `40_assets/images/scene_NNN.png` (1080×1920 세로)
+   - 모션 클립 (Grok image→video, 선택): `40_assets/videos/scene_NNN.mp4`
      — 있으면 S7 렌더가 정지 이미지 대신 자동 사용
-   - 프롬프트는 `30_script.md`의 씬별 `image_prompt` 사용. 절차는
+   - **인트로 카드 (ChatGPT): `45_intro.png`** — 에피소드 타이틀 대형 골드 타이포 +
+     BarroTube 배지 + 다크 시네마틱 배경, 9:16. **저장 전 타이틀 철자를 확대 검수**
+     (AI 한글 렌더 오타 방지 — 실사례: 메타→머타). S7 렌더가 2초 무음 인트로로 prepend.
+   - 씬 프롬프트는 `30_script.md`의 `image_prompt` 사용. 절차는
      `barrotube-media-render` 스킬 (`references/chatgpt-image.md`, `grok-video.md`) 준수.
 
    이후 나머지 자산 일괄 (media-render 산출물이 있으면 S6c는 자동 skip):

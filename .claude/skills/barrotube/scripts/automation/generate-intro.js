@@ -301,6 +301,17 @@ async function main() {
   // 이미지 엔진: 전역 resolver(SSOT)로 통일. --engine / BT_INTRO_ENGINE / BT_INTRO_FORCE_GEMINI(legacy)
   // / BT_IMAGE_ENGINE / config/image-engines.json 순으로 해석. (OpenAI는 isV2 v10 경로에서만 의미)
   const introEngine = resolveImageEngine('S6d_intro', { cliOverride: opts.engine });
+  // media-render 모드 (2026-07-02): 인트로를 barrotube-media-render 스킬(브라우저 ChatGPT,
+  // PD 수행)로 사전 생성. API 호출 없음 — 여기 도달했다는 것은 45_intro.png 부재(또는 --force).
+  // PD가 텍스트 오타를 눈으로 검수한 뒤 저장하는 것이 이 모드의 핵심 (한글 렌더 오타 방지).
+  if (introEngine.engine === 'media-render') {
+    console.error(`\n❌ S6d Intro (media-render 기본 모드): ${outPath} 이(가) 없거나 재생성(--force)이 요청되었습니다.`);
+    console.error(`   → PD가 barrotube-media-render 스킬(브라우저 ChatGPT)로 인트로 카드를 생성해 위 경로에 저장한 뒤 재실행하세요.`);
+    console.error(`   → 프롬프트: 에피소드 타이틀 텍스트를 대형 골드 타이포로 + 채널 배지(BarroTube) + 다크 시네마틱 배경, 9:16.`);
+    console.error(`   → 저장 후 반드시 타이틀 철자를 확대 검수 (AI 한글 렌더 오타 방지 — 예: 메타→머타).`);
+    console.error(`   → 레거시 API 경로: --engine openai|gemini 또는 BT_INTRO_ENGINE 설정.`);
+    process.exit(3);
+  }
   const useOpenAI = introEngine.engine === 'openai';
   if (introEngine.downgraded) console.warn('   ⚠ OpenAI 요청됐으나 OPENAI_API_KEY 없음 → Gemini 사용');
   console.log(`   Engine: ${useOpenAI ? 'openai-gpt-image-1 (v10)' : 'gemini'} (source=${introEngine.source})`);

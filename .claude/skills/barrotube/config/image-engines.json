@@ -4,17 +4,18 @@
   "global": "openai",
   "stages": {
     "S6c_scene": "media-render",
-    "S6d_intro": "openai",
+    "S6d_intro": "media-render",
     "S6e_thumbnail": "auto"
   },
   "media_render": {
     "skill": "barrotube-media-render",
     "scene_image_out": "40_assets/images/scene_<id>.png",
     "scene_video_out": "40_assets/videos/scene_<id>.mp4",
-    "notes": "기본값: S6c 씬 이미지는 media-render(ChatGPT 브라우저)로 PD가 생성해 scene_image_out 경로에 저장. 씬 모션 클립(Grok image→video)을 scene_video_out에 두면 render-direct.js가 정지 이미지 대신 자동 사용. 레거시(API 이미지 + still 기반 렌더): --image-engine openai|gemini 또는 BT_IMAGE_ENGINE 설정."
+    "intro_out": "45_intro.png",
+    "notes": "기본값: S6c 씬 이미지와 S6d 인트로 카드는 media-render(ChatGPT 브라우저)로 PD가 생성해 각 경로에 저장(v2 레이아웃은 platforms/<platform>/ 하위). 인트로는 저장 전 타이틀 철자 확대 검수 필수(한글 렌더 오타 방지). 씬 모션 클립(Grok image→video)을 scene_video_out에 두면 render-direct.js가 정지 이미지 대신 자동 사용. 레거시(API): --image-engine(S6c) / --engine·BT_INTRO_ENGINE(S6d) openai|gemini."
   },
   "_notes": {
-    "values": "gemini | openai | auto | media-render(S6c 전용)",
+    "values": "gemini | openai | auto | media-render(S6c 씬·S6d 인트로)",
     "priority_high_to_low": "--image-engine(CLI) > BT_INTRO_ENGINE / BT_THUMBNAIL_ENGINE(단계별 env) > BT_INTRO_FORCE_GEMINI=1(legacy, 인트로 한정) > BT_IMAGE_ENGINE(전역 env) > config.stages[stage] > config.global > auto(현행 호환)",
     "openai_requires": "OPENAI_API_KEY (없으면 자동으로 gemini 강등)",
     "media_render_requires": "브라우저 세션(ChatGPT/Grok 로그인) — 헤드리스 스크립트로는 실행 불가, PD(Claude)가 스킬 절차로 수행",
