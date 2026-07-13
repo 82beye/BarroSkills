@@ -247,6 +247,20 @@ REPLICATE_API_KEY=              # 이미지 fallback
 - 다음 권장 action (다음 EP, 진단, 재개 등)
 - 알려진 이슈 (있으면 escalation 요약)
 
+## Episode Board (로컬 대시보드)
+
+에피소드 목록·상태 조회와 단계별 실행(생성~발행)을 브라우저에서 하는 로컬 보드.
+
+```bash
+node tools/board/server.js --port 8933 --open   # → http://127.0.0.1:8933
+```
+
+- 설계문서(파이프라인·폴더규격·상태모델·QA·CLI·env)와 실행 보드가 한 화면에 있다.
+- 127.0.0.1 전용 바인딩 + **화이트리스트 15개 명령**만 실행 (임의 쉘 실행 불가).
+- 발행(S11)은 `confirm: "PUBLISH"` 토큰 필수 — 되돌리기 어려운 액션이라 이중 확인.
+- 발행 판정은 `.episode_status.json`(갱신 누락 사례 있음)이 아니라 `80_publish_result.json`
+  존재를 우선하고, 없으면 `stage_history[].youtube_url`로 보강한다.
+
 ## Reference Files
 
 - `references/PIPELINE.md` — S0~S12 단계별 상세 (입출력·비용·시간)
