@@ -378,11 +378,16 @@ export function renderDirect({ episodeDir, outPath, canvas, platform: platformHi
   const workDir = mkdtempSync(join(tmpdir(), 'bt-render-'));
   const clipPaths = [];
 
-  // Optional: prepend 2s intro card if 45_intro.png exists in the base dir.
-  // Intro is silent (anullsrc 2s) and uses the same canvas as scenes.
-  const introPath = join(baseDir, '45_intro.png');
-  const INTRO_DURATION_SEC = 2;
-  if (existsSync(introPath)) {
+  // Optional: prepend a silent intro card. 45_intro.png 우선, 없으면 47_thumbnail.png.
+  // Shorts는 YouTube에서 커스텀 썸네일을 지정할 수 없으므로, 썸네일을 영상 앞에 몇 초
+  // 노출해 같은 역할(첫 인상·후킹)을 하게 한다. 길이는 BT_INTRO_SEC로 조절 (기본 2초).
+  const introCandidates = [
+    join(baseDir, '45_intro.png'),
+    join(baseDir, '47_thumbnail.png'),
+  ];
+  const introPath = introCandidates.find(p => existsSync(p));
+  const INTRO_DURATION_SEC = Number(process.env.BT_INTRO_SEC) || 2;
+  if (introPath) {
     const introClipPath = join(workDir, 'clip_000_intro.mp4');
     renderStillClip({
       imagePath: introPath,
@@ -392,7 +397,7 @@ export function renderDirect({ episodeDir, outPath, canvas, platform: platformHi
       outPath: introClipPath,
     });
     clipPaths.push(introClipPath);
-    console.log(`🎬 Intro card prepended (${INTRO_DURATION_SEC}s silent, from 45_intro.png)`);
+    console.log(`🎬 Intro card prepended (${INTRO_DURATION_SEC}s silent, from ${introPath.split('/').pop()})`);
   }
 
   console.log(`🎬 Rendering ${scenes.length} scenes at ${canvasDim.join('x')}...`);
@@ -491,7 +496,9 @@ export function renderDirect({ episodeDir, outPath, canvas, platform: platformHi
   // BGM은 concat 후 전체에 믹스되므로 엔드카드 구간에도 음악이 자연스럽게 이어진다.
   const endcardPath = join(baseDir, '48_endcard.png');
   if (existsSync(endcardPath)) {
-    const endcardDurationSec = chosenCanvas === 'vertical' ? 2.5 : 3.5;
+    // BT_ENDCARD_SEC로 조절 가능 (Shorts 60초 정합 등 미세 조정용).
+    const endcardDurationSec = Number(process.env.BT_ENDCARD_SEC)
+      || (chosenCanvas === 'vertical' ? 2.5 : 3.5);
     const endcardClipPath = join(workDir, 'clip_zzzz_endcard.mp4');
     renderStillClip({
       imagePath: endcardPath,
