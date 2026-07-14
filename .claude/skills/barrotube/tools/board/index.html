@@ -1,0 +1,489 @@
+<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BarroTube · 에피소드 제작·관리 보드</title>
+<style>
+:root{--bg:#f7f8fa;--card:#fff;--ink:#1f2937;--mut:#7b8494;--accent:#e8622a;--accent2:#2f6fd0;--line:#e4e7ec;--warm:#fdf1ea;--cool:#eef3fb;--ok:#2f9e63;--okbg:#e8f6ee;--warn:#c98a12;--warnbg:#fdf4e3;--bad:#d04545;--badbg:#fbeaea;--na:#c3c8d1}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;background:var(--bg);color:var(--ink);line-height:1.7}
+.top{position:sticky;top:0;z-index:20;background:#fff;border-bottom:1px solid var(--line);padding:12px 22px;display:flex;align-items:center;gap:12px}
+.top h1{font-size:15px;margin:0;font-weight:800}
+.top .em{font-size:19px}
+.top .sp{flex:1}
+.top .live{font-size:11.5px;color:var(--mut)}
+.layout{display:flex;max-width:1340px;margin:0 auto;gap:18px;padding:22px 18px 80px}
+nav.toc{position:sticky;top:60px;align-self:flex-start;width:170px;flex:none;font-size:12.5px}
+nav.toc a{display:block;color:var(--mut);text-decoration:none;padding:4px 9px;border-left:2px solid var(--line)}
+nav.toc a:hover{color:var(--accent);border-color:var(--accent)}
+nav.toc .g{font-weight:800;color:var(--accent2);padding:6px 9px;background:var(--cool);border-radius:8px;margin-top:12px}
+main{flex:1;min-width:0}
+.doc{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px 22px;margin-bottom:22px;box-shadow:0 1px 10px rgba(30,40,60,.05)}
+h1{font-size:23px;margin:2px 0 16px}
+h2{font-size:18px;margin:28px 0 12px;padding-bottom:8px;border-bottom:2px solid var(--warm);scroll-margin-top:66px}
+h3{font-size:15px;margin:20px 0 8px;color:#49505c}
+p{margin:8px 0}
+code{background:var(--warm);padding:1px 6px;border-radius:5px;font-size:.9em;font-family:ui-monospace,Menlo,monospace;color:#b5461e}
+pre{background:#22262e;color:#eef1f5;padding:13px 15px;border-radius:9px;overflow:auto;font-size:12.5px;line-height:1.5}
+pre code{background:none;color:inherit;padding:0}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top}
+th{background:var(--cool);font-weight:700;white-space:nowrap}
+.tw{overflow-x:auto;margin:10px 0}
+ul,ol{margin:8px 0;padding-left:22px}li{margin:3px 0}
+.callout{border-radius:10px;padding:10px 14px;margin:12px 0;font-size:13.2px;border:1px solid}
+.callout.warn{background:var(--warnbg);border-color:#eccd8c;color:#8a5f0b}
+.callout.note{background:var(--cool);border-color:#c4d6ef;color:#2b5487}
+.callout.bad{background:var(--badbg);border-color:#eeb9b9;color:#992a2a}
+.btn{border:1px solid var(--line);background:#fff;color:var(--ink);border-radius:8px;padding:5px 11px;font-size:12.5px;cursor:pointer;font-family:inherit}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary:hover{opacity:.9;color:#fff}
+.btn.danger{border-color:#e9b3b3;color:var(--bad)}
+.btn.danger:hover{background:var(--badbg)}
+.btn.sm{padding:3px 8px;font-size:11.5px}
+input,select,textarea{border:1px solid var(--line);border-radius:8px;padding:6px 9px;font-family:inherit;font-size:13px;background:#fff;color:var(--ink)}
+input:focus,select:focus{outline:2px solid #f0c6b1;outline-offset:0}
+label{font-size:12.5px;color:var(--mut);display:block;margin-bottom:3px}
+.summary{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0}
+.sumcard{flex:1;min-width:112px;background:var(--cool);border:1px solid var(--line);border-radius:10px;padding:9px 13px}
+.sumcard .n{font-size:21px;font-weight:800;line-height:1.2}
+.sumcard .l{font-size:11.5px;color:var(--mut)}
+.tools{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:12px 0;font-size:13px}
+.tools .sp{flex:1}
+.pill{display:inline-block;padding:1px 8px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap}
+.pill.ok{background:var(--okbg);color:var(--ok)}
+.pill.warn{background:var(--warnbg);color:var(--warn)}
+.pill.bad{background:var(--badbg);color:var(--bad)}
+.pill.na{background:#eef0f3;color:var(--mut)}
+.pill.pub{background:#fbe9e2;color:var(--accent)}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--na);margin-right:2px}
+.dot.on{background:var(--ok)}
+.dot.mid{background:var(--warn)}
+tr.ep{cursor:pointer}
+tr.ep:hover td{background:#fafbfd}
+tr.detail td{background:#fbfcfe;padding:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:7px;margin:8px 0}
+.stagebtn{display:flex;flex-direction:column;gap:2px;border:1px solid var(--line);border-radius:9px;padding:7px 9px;background:#fff;cursor:pointer;text-align:left;font-family:inherit}
+.stagebtn:hover{border-color:var(--accent)}
+.stagebtn .s{font-size:10.5px;color:var(--mut);font-weight:700}
+.stagebtn .t{font-size:12.5px}
+.log{background:#22262e;color:#e6ebf2;border-radius:9px;padding:11px 13px;font-family:ui-monospace,Menlo,monospace;font-size:11.7px;white-space:pre-wrap;max-height:280px;overflow:auto;margin-top:10px}
+.log:empty{display:none}
+.spin{display:inline-block;width:11px;height:11px;border:2px solid #f0c6b1;border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite;vertical-align:-1px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.form{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:11px;align-items:end}
+@media(max-width:860px){nav.toc{display:none}.layout{padding:14px 10px 60px}.doc{padding:18px 14px}}
+</style></head>
+<body>
+<div class="top">
+  <span class="em">🎬</span><h1>BarroTube · 에피소드 제작·관리 보드</h1>
+  <span class="sp"></span>
+  <span class="live" id="live">연결 확인 중…</span>
+  <button class="btn sm" onclick="load()">새로고침</button>
+</div>
+
+<div class="layout">
+<nav class="toc">
+  <div class="g">보드</div>
+  <a href="#board">에피소드 목록</a>
+  <a href="#new">신규 생성</a>
+  <div class="g">설계문서</div>
+  <a href="#d1">1. 개요·범위</a>
+  <a href="#d2">2. 파이프라인 S0~S12</a>
+  <a href="#d3">3. 폴더·자산 규격</a>
+  <a href="#d4">4. 상태 모델</a>
+  <a href="#d5">5. QA 체크리스트</a>
+  <a href="#d6">6. CLI 레퍼런스</a>
+  <a href="#d7">7. 렌더 env 옵션</a>
+  <a href="#d8">8. 리스크·함정</a>
+</nav>
+
+<main>
+
+<!-- ══════════ 보드 ══════════ -->
+<section class="doc">
+  <h1>에피소드 보드</h1>
+  <p style="color:var(--mut);font-size:13px;margin-top:-8px">
+    데이터: <code id="epdir">/Users/beye/BarroTubeData/workspace/episodes</code> ·
+    브리지가 실제 파일시스템을 읽고, 단계 버튼은 <strong>화이트리스트된 CLI</strong>만 실행합니다.
+  </p>
+
+  <div class="summary" id="sum"></div>
+
+  <h2 id="new">신규 에피소드 생성 (S0)</h2>
+  <div class="form">
+    <div><label>채널</label><input id="f-channel" value="econ-daily"></div>
+    <div><label>포맷</label><select id="f-format"><option value="shorts">shorts (60초·5씬·barro-alert)</option><option value="long-3min">long-3min (180초·7씬·barro-teacher)</option></select></div>
+    <div><label>길이(초)</label><input id="f-length" value="60" style="width:100%"></div>
+    <div style="grid-column:1/-1"><label>주제</label><input id="f-topic" placeholder="예: SK하이닉스, 나스닥에서 알리바바를 넘다" style="width:100%"></div>
+    <div style="grid-column:1/-1"><label>운영자 요구사항 (선택)</label><input id="f-notes" placeholder="예: 오프닝벨 씬 포함" style="width:100%"></div>
+    <div><button class="btn primary" id="f-btn" onclick="createEp()">에피소드 생성</button></div>
+  </div>
+  <div class="log" id="f-log"></div>
+
+  <h2 id="board">에피소드 목록</h2>
+  <div class="tools">
+    <select id="filter" onchange="render()">
+      <option value="all">전체</option>
+      <option value="wip">진행 중 (미발행)</option>
+      <option value="published">발행됨</option>
+      <option value="failed">실패·차단</option>
+    </select>
+    <input id="q" placeholder="검색 (EP 번호·주제)" oninput="render()" style="min-width:220px">
+    <span class="sp"></span>
+    <span style="font-size:12px;color:var(--mut)">행을 클릭하면 단계별 실행 패널이 열립니다</span>
+  </div>
+  <div class="tw">
+    <table id="tbl">
+      <thead><tr>
+        <th>EP</th><th>주제</th><th>포맷</th><th>단계</th><th>상태</th>
+        <th>산출물</th><th>발행</th>
+      </tr></thead>
+      <tbody id="rows"><tr><td colspan="7" style="color:var(--mut)">불러오는 중…</td></tr></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ══════════ 설계문서 ══════════ -->
+<section class="doc">
+<h1>설계문서</h1>
+
+<h2 id="d1">1. 개요 &amp; 범위</h2>
+<p>BarroTube는 경제 채널 <code>econ-daily</code>의 에피소드를 <strong>브리프 → 대본 → 자산 → 렌더 → QA → 메타 → 승인 → 발행</strong>까지 자동 산출하는 파이프라인이다. 이 문서는 그 파이프라인의 <strong>단일 진실 원천</strong>이자, 위 보드를 통해 <strong>실제로 실행</strong>하는 콘솔이다.</p>
+<ul>
+  <li><strong>In scope</strong> — 에피소드 생성·상태 조회·단계별 실행(대본/자산/렌더/QA/메타/승인/발행)</li>
+  <li><strong>Out of scope</strong> — 시리즈 기획(CEO 에이전트), 마케팅 분석, 재생목록 관리(S12는 발행 후처리 훅)</li>
+</ul>
+<div class="callout note"><strong>브리지가 필요합니다.</strong> 이 문서는 <code>node tools/board/server.js</code>가 띄운 로컬 서버(기본 <code>http://127.0.0.1:8933</code>)에서 열어야 목록·실행이 동작합니다. 파일을 직접 더블클릭하면 문서 부분만 보입니다.</div>
+
+<h2 id="d2">2. 제작 파이프라인 (S0~S12)</h2>
+<p>단계 정의가 코드 두 곳에 있고 서로 다르다. <strong>실행 경로인 <code>run-episode.js</code>가 진실</strong>이며, <code>workflow-engine.js</code>는 게이트(승인 주체)를 정의한다.</p>
+<div class="tw"><table>
+<thead><tr><th>ID</th><th>단계</th><th>산출물</th><th>에이전트</th><th>게이트</th></tr></thead>
+<tbody>
+<tr><td>S0</td><td>brief</td><td><code>00_brief.md</code></td><td>ceo</td><td>board</td></tr>
+<tr><td>S1</td><td>ticket_created</td><td>—</td><td>ceo</td><td>auto</td></tr>
+<tr><td>S2</td><td>market_research</td><td><code>10_market_research.md</code></td><td>market-researcher</td><td>producer</td></tr>
+<tr><td>S3</td><td>strategy</td><td><code>20_strategy.md</code></td><td>strategist</td><td>producer</td></tr>
+<tr><td>S4</td><td>script</td><td><code>30_script.md</code></td><td>writer</td><td>producer</td></tr>
+<tr><td>S5</td><td>factcheck</td><td><code>35_factcheck.md</code></td><td>fact-checker</td><td>producer</td></tr>
+<tr><td>S6</td><td>assets (S6a TTS → S6b sync → S6c 이미지 → S6d 인트로 → S6e 썸네일)</td><td><code>40_assets/</code>, <code>45_intro.png</code>, <code>47_thumbnail.png</code></td><td>asset-pm</td><td>asset-pm</td></tr>
+<tr><td>S7</td><td>render (ffmpeg 직행 — CapCut 우회)</td><td><code>55_render/video.mp4</code></td><td>capcut-composer</td><td>producer</td></tr>
+<tr><td>S8</td><td>qa_review</td><td><code>60_qa_report.md</code></td><td>qa-reviewer</td><td>producer</td></tr>
+<tr><td>S9</td><td>metadata</td><td><code>70_publish_meta.json</code></td><td>metadata-writer</td><td>producer</td></tr>
+<tr><td>S10</td><td>board_approval</td><td><code>75_board_approval.json</code></td><td>ceo</td><td>board</td></tr>
+<tr><td>S11</td><td>publish</td><td><code>80_publish_result.json</code></td><td>publisher</td><td>auto</td></tr>
+<tr><td>S12</td><td>playlist (시리즈 마지막 EP 발행 후처리 훅)</td><td>—</td><td>publisher</td><td>auto</td></tr>
+</tbody></table></div>
+<div class="callout warn"><strong>shorts는 S2·S3를 건너뜁니다</strong> (<code>config/formats.json</code>의 <code>pipeline.skip</code>). 속보성 포맷이라 리서치·전략 단계 없이 브리프 → 대본으로 직행합니다.</div>
+
+<h2 id="d3">3. 폴더 &amp; 자산 규격</h2>
+<p>현행은 <strong>v2 레이아웃</strong>(플랫폼 분기). 구 에피소드 일부는 v1 flat 구조로 남아 있다.</p>
+<pre><code>EP-YYYY-NNNN/
+├─ .episode_status.json          # 스테이지 이력 (루트에만)
+├─ 00_brief.md                   # 주제·포맷·인물 정책
+└─ platforms/&lt;shorts|long&gt;/
+   ├─ 30_script.md               # YAML frontmatter: scenes[] (narration/image_prompt/target_seconds/caption)
+   ├─ 35_factcheck.md
+   ├─ 40_assets/
+   │   ├─ images/scene_NNN.png   # 9:16 (1080×1920) 또는 16:9
+   │   ├─ videos/scene_NNN.mp4   # 선택 — Grok 모션 클립 (있으면 정지컷 대신 사용)
+   │   └─ tts/scene_NNN.wav      # (+ outro.wav → 아웃트로 슬롯 자동 인식)
+   ├─ 45_intro.png               # 인트로 카드 (없으면 47_thumbnail.png로 폴백)
+   ├─ 47_thumbnail.png / .jpg    # jpg = 업로드용 2MB 이하 압축본
+   ├─ 48_endcard.png             # 구독·좋아요 엔드카드
+   ├─ 55_render/video.mp4        # 최종 렌더
+   ├─ 60_qa_report.md
+   ├─ 70_publish_meta.json
+   ├─ 75_board_approval.json
+   └─ 80_publish_result.json</code></pre>
+<div class="tw"><table>
+<thead><tr><th>포맷</th><th>페르소나</th><th>길이</th><th>씬</th><th>캔버스</th><th>QA 허용</th></tr></thead>
+<tbody>
+<tr><td><code>shorts</code></td><td>barro-alert</td><td>60s ±2</td><td>5 (씬당 10~14s)</td><td>1080×1920</td><td>58~62s</td></tr>
+<tr><td><code>long-3min</code></td><td>barro-teacher</td><td>180s ±10</td><td>7 (씬당 10~40s)</td><td>1920×1080</td><td>170~190s</td></tr>
+</tbody></table></div>
+<div class="callout note"><strong>YouTube Shorts는 커스텀 썸네일을 지정할 수 없습니다.</strong> 그래서 렌더러가 <code>47_thumbnail.png</code>를 영상 앞 <code>BT_INTRO_SEC</code>초(기본 2초) 동안 노출해 썸네일 역할을 대신하게 합니다.</div>
+
+<h2 id="d4">4. 상태 모델</h2>
+<p><code>.episode_status.json</code>에 <code>current_stage</code> / <code>status</code> / <code>stage_history[]</code>가 기록된다.</p>
+<div class="tw"><table>
+<thead><tr><th>관측된 status</th><th>의미</th></tr></thead>
+<tbody>
+<tr><td><code>created</code></td><td>브리프만 생성됨</td></tr>
+<tr><td><code>in_progress</code> / <code>completed</code></td><td>해당 스테이지 진행/완료</td></tr>
+<tr><td><code>failed</code></td><td>스테이지 실패 (<code>stage_history[].error</code> 확인)</td></tr>
+<tr><td><code>awaiting_approval</code> / <code>in_review</code></td><td>S10 보드 승인 대기</td></tr>
+<tr><td><code>published</code> / <code>scheduled</code></td><td>발행 완료 / 예약</td></tr>
+<tr><td><code>deferred</code> / <code>blocked</code></td><td>보류 / 차단</td></tr>
+<tr><td><code>playlist_registered</code> / <code>playlist_pending</code></td><td>S12 재생목록 처리</td></tr>
+</tbody></table></div>
+<div class="callout bad"><strong>status 파일을 100% 믿지 마세요.</strong> 발행 후 갱신이 누락된 EP가 있습니다(예: EP-0059는 <code>S9b/completed</code>인데 실제로는 발행됨). 이 보드는 <strong><code>80_publish_result.json</code> 존재 여부</strong>로 발행을 판정합니다. 또 <code>.episode_status.json</code> 자체가 없는 EP도 있습니다.</div>
+
+<h2 id="d5">5. QA 체크리스트 (발행 전)</h2>
+<ol>
+  <li><strong>사양</strong>: shorts = 1080×1920 · 9:16 · H.264 · 58~62초 (<code>ffprobe</code>로 확인)</li>
+  <li><strong>오디오</strong>: 내레이션 라우드니스 ≈ −14 LUFS · BGM이 나레이션을 덮지 않음(사이드체인 덕킹)</li>
+  <li><strong>자막</strong>: 전 씬 노출 · 오탈자 없음 · 하단 UI 세이프존 침범 없음</li>
+  <li><strong>이미지 텍스트</strong>: AI 생성 한글은 오탈자 상습 → 인트로/썸네일 타이포는 <strong>확대 검수</strong> (실사례: "메타"→"머타")</li>
+  <li><strong>씬-내레이션 일치</strong>: 렌더된 클립이 해당 씬 내용인지 (다운로드 순서 꼬임으로 <strong>엉뚱한 영상이 섞인 사고</strong> 있었음)</li>
+  <li><strong>팩트</strong>: 수치·인용은 <code>35_factcheck.md</code>와 대조 · 단서 조건(예: "외국 기업 기준") 삭제 금지</li>
+  <li><strong>고지</strong>: 설명란에 "투자 조언 아님" 문구 포함</li>
+</ol>
+
+<h2 id="d6">6. CLI 레퍼런스</h2>
+<p>모두 <code>node scripts/automation/&lt;script&gt;</code>. 보드의 단계 버튼이 그대로 이 명령들을 실행한다.</p>
+<div class="tw"><table>
+<thead><tr><th>단계</th><th>명령</th></tr></thead>
+<tbody>
+<tr><td>S0 생성</td><td><code>create-episode.js --channel econ-daily --topic "주제" --format shorts --length 60</code></td></tr>
+<tr><td>S4 대본</td><td><code>generate-script.js --episode &lt;dir&gt; --platform shorts</code></td></tr>
+<tr><td>S5 팩트체크</td><td><code>run-factcheck.js --episode EP-YYYY-NNNN --platform shorts</code></td></tr>
+<tr><td>S6a TTS</td><td><code>generate-tts.js --script &lt;30_script.md&gt; --out-dir &lt;40_assets/tts&gt;</code></td></tr>
+<tr><td>S6b 길이 동기화</td><td><code>sync-durations.js --script &lt;30_script.md&gt; --tts-dir &lt;40_assets/tts&gt;</code></td></tr>
+<tr><td>S6c 씬 이미지</td><td><code>generate-image-gemini.js --script &lt;30_script.md&gt; --out-dir &lt;40_assets/images&gt; --aspect 9:16</code></td></tr>
+<tr><td>S6d 인트로</td><td><code>generate-intro.js --episode &lt;dir&gt;</code></td></tr>
+<tr><td>S6e 썸네일</td><td><code>generate-thumbnail.js --episode &lt;dir&gt; --platform shorts</code></td></tr>
+<tr><td>엔드카드</td><td><code>generate-endcard.js --episode &lt;epdir&gt; --platform shorts --base &lt;마지막 씬.png&gt;</code></td></tr>
+<tr><td>S7 렌더</td><td><code>render-direct.js --episode &lt;dir&gt; --out &lt;55_render/video.mp4&gt;</code></td></tr>
+<tr><td>S8 QA</td><td><code>generate-qa-report.js --episode &lt;dir&gt; --platform shorts</code></td></tr>
+<tr><td>S9 메타</td><td><code>generate-metadata.js --episode &lt;dir&gt; --platform shorts</code></td></tr>
+<tr><td>S10 승인</td><td><code>approve-episode.js --episode EP-YYYY-NNNN --platform shorts --by &lt;name&gt;</code></td></tr>
+<tr><td>S11 발행</td><td><code>publish-youtube.js --video &lt;mp4&gt; --meta &lt;70_publish_meta.json&gt; --thumbnail &lt;47_thumbnail.jpg&gt;</code></td></tr>
+</tbody></table></div>
+<div class="callout warn"><strong>썸네일은 JPG로.</strong> YouTube 썸네일 한도는 2MB인데 생성 PNG는 흔히 2MB를 넘습니다(<code>invalidImage</code> 에러). <code>sips -s format jpeg</code>로 변환한 <code>47_thumbnail.jpg</code>를 넘기세요.</div>
+
+<h2 id="d7">7. 렌더 env 옵션</h2>
+<div class="tw"><table>
+<thead><tr><th>env</th><th>기본</th><th>동작</th></tr></thead>
+<tbody>
+<tr><td><code>BT_INTRO_SEC</code></td><td>2</td><td>인트로(=Shorts 썸네일) 노출 초</td></tr>
+<tr><td><code>BT_ENDCARD_SEC</code></td><td>2.5 (세로) / 3.5 (가로)</td><td>엔드카드 노출 초</td></tr>
+<tr><td><code>BT_BGM_VOLUME</code></td><td>0.12</td><td>BGM 볼륨 (내레이션이 묻히면 0.07 권장)</td></tr>
+<tr><td><code>BT_CLIP_AMBIENT_VOLUME</code></td><td>0.25</td><td>Grok 모션 클립 자체 오디오 믹스 볼륨</td></tr>
+<tr><td><code>BT_NO_CLIP_AMBIENT</code></td><td>—</td><td><code>1</code>이면 클립 앰비언트 비활성</td></tr>
+<tr><td><code>BT_DISABLE_KEN_BURNS</code></td><td>—</td><td><code>1</code>이면 정지컷 줌인 비활성</td></tr>
+</tbody></table></div>
+
+<h2 id="d8">8. 리스크 &amp; 함정 (실사고 기록)</h2>
+<ul>
+  <li><strong>TTS 길이 ±15~20% 변동</strong> → 대본 <code>target_seconds</code>를 믿지 말고 <code>sync-durations.js</code>로 실측 반영.</li>
+  <li><strong>미디어 다운로드 레이스</strong> — 브라우저 다운로드가 끝나기 전에 "Downloads 최신 파일"을 집으면 <strong>이전 영상이 섞여 들어간다</strong>. 파일 도착을 폴링으로 확인하고, 렌더 후 컨택트시트로 씬 순서를 눈으로 검증할 것.</li>
+  <li><strong>AI 한글 타이포 오탈자</strong> — 인트로/썸네일 글자는 확대 검수 후 통과.</li>
+  <li><strong>발행은 되돌리기 어렵다</strong> — 이 보드의 발행 버튼은 확인 토큰(<code>PUBLISH</code>)을 요구한다. 유튜브는 업로드된 영상의 <strong>파일 교체가 불가</strong>하므로, 영상 수정 = 내리고 재업로드(조회수 초기화).</li>
+  <li><strong>OAuth 리프레시 토큰 만료</strong> — <code>invalid_grant</code>가 뜨면 <code>setup-youtube-oauth.js</code>로 재인증.</li>
+  <li><strong>produce-episode.js는 <code>--execute</code> 없이도 자산을 생성(=비용)</strong>할 수 있다. 보드는 이 스크립트를 화이트리스트에 넣지 않았다.</li>
+</ul>
+</section>
+
+</main>
+</div>
+
+<script>
+'use strict';
+var DATA = null;
+var OPEN = null;   // 펼쳐진 EP id
+var BUSY = {};
+
+var STAGES = [
+  ['script','S4','대본'], ['factcheck','S5','팩트체크'], ['tts','S6a','TTS'],
+  ['sync-durations','S6b','길이동기화'], ['images','S6c','씬 이미지'], ['intro','S6d','인트로'],
+  ['thumbnail','S6e','썸네일'], ['endcard','—','엔드카드'], ['render','S7','렌더'],
+  ['qa','S8','QA'], ['metadata','S9','메타'], ['approve','S10','승인'], ['publish','S11','발행']
+];
+
+function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+/* ── 데이터 ── */
+function load(){
+  fetch('/api/episodes').then(function(r){ return r.json(); }).then(function(d){
+    DATA = d;
+    document.getElementById('live').textContent = '브리지 연결됨 · EP ' + d.episodes.length + '개';
+    document.getElementById('epdir').textContent = d.episodes_dir;
+    summary(); render();
+  }).catch(function(){
+    document.getElementById('live').textContent = '⚠️ 브리지 미연결 — node tools/board/server.js 로 실행하세요';
+    document.getElementById('rows').innerHTML =
+      '<tr><td colspan="7" style="color:var(--bad)">브리지에 연결할 수 없습니다. 터미널에서 <code>node tools/board/server.js</code> 실행 후 http://127.0.0.1:8933 로 여세요.</td></tr>';
+  });
+}
+
+function summary(){
+  var eps = DATA.episodes;
+  var pub = eps.filter(function(e){ return e.published; }).length;
+  var fail = eps.filter(function(e){ return e.status === 'failed' || e.status === 'blocked'; }).length;
+  var wip = eps.length - pub - fail;
+  var cards = [[eps.length,'전체 에피소드'],[pub,'발행됨'],[wip,'진행 중'],[fail,'실패·차단']];
+  document.getElementById('sum').innerHTML = cards.map(function(c){
+    return '<div class="sumcard"><div class="n">' + c[0] + '</div><div class="l">' + c[1] + '</div></div>';
+  }).join('');
+}
+
+/* ── 목록 ── */
+function firstPlatform(ep){
+  var keys = Object.keys(ep.platforms);
+  return keys.length ? keys[0] : null;
+}
+function artifacts(p){
+  if (!p) return '';
+  var items = [['대본',p.script],['이미지',p.images>0],['TTS',p.tts>0],['렌더',p.render],['QA',p.qa],['메타',p.meta]];
+  return items.map(function(i){
+    return '<span class="dot ' + (i[1] ? 'on' : '') + '" title="' + i[0] + '"></span>';
+  }).join('');
+}
+function statusPill(ep){
+  if (ep.published) return '<span class="pill pub">발행</span>';
+  if (!ep.status) return '<span class="pill na">미기록</span>';
+  if (ep.status === 'failed' || ep.status === 'blocked') return '<span class="pill bad">' + esc(ep.status) + '</span>';
+  if (ep.status === 'completed') return '<span class="pill ok">completed</span>';
+  return '<span class="pill warn">' + esc(ep.status) + '</span>';
+}
+
+function render(){
+  if (!DATA) return;
+  var f = document.getElementById('filter').value;
+  var q = document.getElementById('q').value.trim().toLowerCase();
+  var eps = DATA.episodes.filter(function(e){
+    if (f === 'published' && !e.published) return false;
+    if (f === 'wip' && (e.published || e.status === 'failed' || e.status === 'blocked')) return false;
+    if (f === 'failed' && e.status !== 'failed' && e.status !== 'blocked') return false;
+    if (q && (e.id + ' ' + (e.topic || '')).toLowerCase().indexOf(q) < 0) return false;
+    return true;
+  });
+
+  var html = '';
+  eps.forEach(function(e){
+    var pk = firstPlatform(e);
+    var p = pk ? e.platforms[pk] : null;
+    var vid = (p && p.publish && p.publish.videoId) ? p.publish.videoId
+      : (e.history_url ? String(e.history_url).split('/').pop() : null);
+    var pub = vid
+      ? '<a href="https://youtu.be/' + esc(vid) + '" target="_blank" onclick="event.stopPropagation()">' + esc(vid) + '</a>' : '—';
+    html += '<tr class="ep" onclick="toggle(\'' + e.id + '\')">'
+      + '<td><strong>' + esc(e.id.replace('EP-2026-','')) + '</strong></td>'
+      + '<td>' + esc(e.topic || '(주제 없음)') + '</td>'
+      + '<td>' + esc(e.format || '—') + '</td>'
+      + '<td>' + esc(e.current_stage || '—') + '</td>'
+      + '<td>' + statusPill(e) + '</td>'
+      + '<td>' + artifacts(p) + '</td>'
+      + '<td>' + pub + '</td></tr>';
+    if (OPEN === e.id) html += detailRow(e);
+  });
+  document.getElementById('rows').innerHTML = html
+    || '<tr><td colspan="7" style="color:var(--mut)">조건에 맞는 에피소드가 없습니다.</td></tr>';
+}
+
+function detailRow(e){
+  var pk = firstPlatform(e);
+  var p = pk ? e.platforms[pk] : null;
+  var plats = Object.keys(e.platforms).join(' · ');
+  var counts = p ? ('이미지 ' + p.images + ' · 모션클립 ' + p.videos + ' · TTS ' + p.tts) : '';
+  var btns = STAGES.map(function(s){
+    var danger = s[0] === 'publish' ? ' danger' : '';
+    return '<button class="stagebtn' + danger + '" onclick="event.stopPropagation();run(\'' + e.id + '\',\'' + s[0] + '\')">'
+      + '<span class="s">' + s[1] + '</span><span class="t">' + s[2] + '</span></button>';
+  }).join('');
+  return '<tr class="detail"><td colspan="7">'
+    + '<div style="font-size:12.5px;color:var(--mut);margin-bottom:6px">'
+    + '레이아웃 ' + esc(e.layout) + ' · 플랫폼: ' + esc(plats) + (counts ? ' · ' + esc(counts) : '') + '</div>'
+    + '<div class="grid">' + btns + '</div>'
+    + '<div class="log" id="log-' + e.id + '"></div>'
+    + '</td></tr>';
+}
+
+function toggle(id){ OPEN = (OPEN === id) ? null : id; render(); }
+
+/* ── 실행 ── */
+function epPaths(e){
+  var pk = firstPlatform(e);
+  var base = DATA.episodes_dir + '/' + e.id;
+  var pdir = (e.layout === 'v2' && pk) ? base + '/platforms/' + pk : base;
+  return { base: base, pdir: pdir, platform: (pk && pk !== '(v1-flat)') ? pk : (e.format === 'long-3min' ? 'long' : 'shorts') };
+}
+
+function argsFor(cmd, e){
+  var P = epPaths(e);
+  switch (cmd) {
+    case 'script':         return ['--episode', P.base, '--platform', P.platform];
+    case 'factcheck':      return ['--episode', e.id, '--platform', P.platform];
+    case 'tts':            return ['--script', P.pdir + '/30_script.md', '--out-dir', P.pdir + '/40_assets/tts'];
+    case 'sync-durations': return ['--script', P.pdir + '/30_script.md', '--tts-dir', P.pdir + '/40_assets/tts'];
+    case 'images':         return ['--script', P.pdir + '/30_script.md', '--out-dir', P.pdir + '/40_assets/images',
+                                   '--aspect', P.platform === 'shorts' ? '9:16' : '16:9'];
+    case 'intro':          return ['--episode', P.pdir];
+    case 'thumbnail':      return ['--episode', P.base, '--platform', P.platform];
+    case 'endcard':        return ['--episode', P.base, '--platform', P.platform, '--force'];
+    case 'render':         return ['--episode', P.pdir, '--out', P.pdir + '/55_render/video.mp4'];
+    case 'qa':             return ['--episode', P.base, '--platform', P.platform];
+    case 'metadata':       return ['--episode', P.base, '--platform', P.platform];
+    case 'approve':        return ['--episode', e.id, '--platform', P.platform, '--by', 'board'];
+    case 'publish':        return ['--video', P.pdir + '/55_render/video.mp4',
+                                   '--meta', P.pdir + '/70_publish_meta.json',
+                                   '--thumbnail', P.pdir + '/47_thumbnail.jpg'];
+    default: return [];
+  }
+}
+
+function run(id, cmd){
+  var e = DATA.episodes.filter(function(x){ return x.id === id; })[0];
+  if (!e) return;
+  var key = id + ':' + cmd;
+  if (BUSY[key]) return;
+
+  var body = { command: cmd, args: argsFor(cmd, e) };
+  if (cmd === 'publish') {
+    var typed = prompt('발행은 되돌리기 어렵습니다(업로드 후 파일 교체 불가).\n진행하려면 PUBLISH 를 입력하세요.');
+    if (typed !== 'PUBLISH') return;
+    body.confirm = 'PUBLISH';
+  }
+
+  BUSY[key] = true;
+  var log = document.getElementById('log-' + id);
+  if (log) log.textContent = '실행 중… node ' + cmd + ' ' + body.args.join(' ') + '\n';
+
+  fetch('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      BUSY[key] = false;
+      if (!log) return;
+      if (d.error) { log.textContent += '\n❌ ' + d.error; return; }
+      log.textContent = '$ ' + d.cmd + '\n\n' + (d.stdout || '') + (d.stderr ? '\n[stderr]\n' + d.stderr : '')
+        + '\n\n' + (d.code === 0 ? '✅ exit 0' : '❌ exit ' + d.code);
+      load();
+    })
+    .catch(function(err){ BUSY[key] = false; if (log) log.textContent += '\n❌ ' + err; });
+}
+
+/* ── 신규 생성 ── */
+function createEp(){
+  var topic = document.getElementById('f-topic').value.trim();
+  var log = document.getElementById('f-log');
+  if (!topic) { log.textContent = '주제를 입력하세요.'; return; }
+  var args = [
+    '--channel', document.getElementById('f-channel').value.trim(),
+    '--topic', topic,
+    '--format', document.getElementById('f-format').value,
+    '--length', document.getElementById('f-length').value.trim(),
+  ];
+  var notes = document.getElementById('f-notes').value.trim();
+  if (notes) args.push('--notes', notes);
+
+  var btn = document.getElementById('f-btn');
+  btn.disabled = true;
+  log.textContent = '생성 중…';
+  fetch('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ command: 'create-episode', args: args }) })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      btn.disabled = false;
+      log.textContent = '$ ' + (d.cmd || '') + '\n\n' + (d.stdout || d.error || '')
+        + (d.stderr ? '\n[stderr]\n' + d.stderr : '');
+      load();
+    })
+    .catch(function(e){ btn.disabled = false; log.textContent = '❌ ' + e; });
+}
+
+load();
+</script>
+</body></html>
