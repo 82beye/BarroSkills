@@ -243,8 +243,46 @@ python scripts/reel_render_plan.py "$REEL/script.md"     # -> [{cut, slug, image
 ```
 Report final `56_capcut_export/video.mp4`, contact sheet, and stream validation.
 
+## Carousel mode (1:1, 4~5 slides) — `scripts/carousel_job.py`
+
+A carousel is **not a reel with square crops** — it is its own C0~C4 state machine, and its
+default source of imagery is **assets you already shipped**, not new generations:
+
+```bash
+CAR=~/BarroAiFactory/today.myo/daily/first-week
+python3 scripts/carousel_job.py autopilot "$CAR" --episode BT-EP07
+#   C0 script.md ('## SLIDE n' blocks)  → C1 slides/slide-N.png (1080x1080)
+#   → C2 60_qa_report.carousel.json     → C3 70_publish_meta.instagram.json + caption.md
+#   → C4 publish = HITL (this script never posts)
+```
+
+Each slide declares its **이미지 소스** and that decides whether a browser is needed at all:
+
+| source | meaning | browser? |
+|---|---|---|
+| `../../barrotube/ep01_x/Image/ep01-cut1.png` | reuse a QA-passed reel still | ❌ no |
+| `video:../../barrotube/ep04_x/video/ep04-cut5.mp4#t=1.4` | pull a frame from a shipped clip (ffmpeg) | ❌ no |
+| `generate:<prompt>` | genuinely new art | ✅ ChatGPT |
+
+Recap/album/manual-style carousels (weekly recap, growth album, "how to use my human")
+should use the first two: **zero character drift, zero generation cost, and the recap
+narrative literally wants the old shots.** `build` renders the 1:1 canvas, cover-crops with a
+per-slide `크롭` anchor (`upper` by default — cat faces sit high in 9:16 frames), lays a
+gradient caption band, and stamps the episode badge + `n/N` page indicator.
+
+`qa` writes the §6-carousel 5-item report: 1:1 spec / count / order / md5-dupes / caption
+forbidden-phrases are **automatic**; the **DNA 3요소** check is *inherited* when a slide's
+source reel has `60_qa_report.images.json: ok` and otherwise left as "human must look".
+`sync --json` is what a board/bridge reads — it derives C0~C4 purely from files on disk.
+
 ## Gotchas learned the hard way (read these — they save a lot of flailing)
 
+- **No still anchor = character drift.** A reel whose clips were made text→video (empty
+  `Image/`) will silently change the character. Measured on today.myo ep04: 4 of 6 Grok
+  clips came back as a *different cat* (fluffy white long-hair instead of the locked silver
+  tabby short-hair). Always image→video, and if `Image/` is empty for a reel that has clips,
+  treat those clips as unverified — check frames before reusing them anywhere (e.g. a recap
+  carousel).
 - **Don't curl ChatGPT image URLs.** `backend-api/estuary/content?...` URLs usually
   require browser cookies and return 403 from terminal. Use the page's download
   button with Playwright `download.saveAs()`.
