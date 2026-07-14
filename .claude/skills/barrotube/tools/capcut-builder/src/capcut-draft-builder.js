@@ -689,3 +689,6 @@ export function buildCapCutProject(options) {
     totalDurationSec: (totalDurationUs / 1_000_000).toFixed(1),
   };
 }
+
+// --- adapter exports (caption-reel) — 재사용 도구가 헬퍼를 임포트 ---
+export { uuid, createVideoMaterial, createAudioMaterial, createTextMaterial, createSupportMaterials, createSegment, CANVAS_PRESETS, CAPCUT_PROJECTS_DIR };

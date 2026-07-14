@@ -67,10 +67,15 @@ them in `<reel>/prompts.md` before generating.
 
 For each cut:
 1. Send a prompt beginning with `Create a single vertical 9:16 cinematic image.
-   No text, no subtitles, no watermark.` Then add:
-   `Use a wide-angle 24mm lens look inside the vertical 9:16 frame. Show the full
-   body or full key object, include the surrounding environment, leave headroom and
-   footroom, no tight close-up, no cropped limbs or props.`
+   No text, no subtitles, no watermark.` Then add composition **by the cut's shot
+   role** (see `barrotube-reels-pipeline.md` → Image Prompt Rule; the cut's
+   `framing` field carries this):
+   - `EW/W`: `wide-angle 24mm lens look, show the full body/object and surrounding
+     environment, headroom and footroom, no cropped limbs or props.`
+   - `M/CU`: `medium (waist-up) or close-up (head-and-shoulders), one clear focal
+     point, environment softly present.`
+   - `ECU / detail insert`: `macro extreme close-up of ONE detail (eye reflection,
+     paw pad, whiskers), shallow depth of field — tight crop is intentional here.`
 2. Wait until a new portrait image appears.
 3. Download through **이 이미지 공유 → 다운로드**.
 4. Save with Playwright `download.saveAs("<reel>/Image/<slug>.png")`.

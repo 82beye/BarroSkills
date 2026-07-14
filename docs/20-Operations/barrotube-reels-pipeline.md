@@ -73,16 +73,35 @@ Final reports should include total wall-clock time and the longest step.
   80_publish_result.instagram.json
 ```
 
-## Image Prompt Rule
+## Image Prompt Rule (shot-role aware)
 
-Every scene should request:
+The old blanket "wide 24mm, no tight close-up" rule made every cut look the same
+(see today.myo EP01: three identical palm close-ups → loose). Branch by the cut's
+**shot role** instead — a reel needs a scale spread, not one scale repeated.
+
+Every scene always requests: `single vertical 9:16 cinematic image. No text, no
+subtitles, no watermark.` Then, by shot type:
 
 ```text
-Create a single vertical 9:16 cinematic image. No text, no subtitles, no watermark.
+# EW / W  (establishing/wide — at least 1 per reel)
 Use a wide-angle 24mm lens look inside the vertical 9:16 frame.
 Show the full body or full key object, include the surrounding environment,
-leave headroom and footroom, no tight close-up, no cropped limbs or props.
+leave headroom and footroom, no cropped limbs or props.
+
+# M / CU  (medium / close-up)
+Frame the subject from the waist up (M) or head-and-shoulders (CU);
+keep one clear focal point, natural depth, environment softly present.
+
+# ECU / detail insert  (at least 2 per reel — the spice)
+Macro / extreme close-up of ONE detail (eye reflection, paw pad, gripping
+toes, twitching nose, trembling whiskers). Shallow depth of field, tight crop
+intentional. This is where cropped framing is CORRECT, not a defect.
 ```
+
+Rule: **no two adjacent cuts share the same shot size + angle** (jump ≥2 sizes or
+change the angle), and every reel carries ≥1 EW/W plus ≥2 ECU inserts. Vary the
+Grok camera move per cut too (push-in / pull-back / tilt / whip-pan / pan /
+tracking / rack-focus / top-down). Full system: today.myo 설계문서 §4 / §6.
 
 ## BGM Rule
 

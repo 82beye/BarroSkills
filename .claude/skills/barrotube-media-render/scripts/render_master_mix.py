@@ -9,6 +9,8 @@ scene durations, volumes and slugs):
   - trim each scene to its timeline duration
   - chain xfade transitions (default smoothleft / 0.35s)
   - lay ONE continuous BGM bed (looped, faded in/out) under the whole reel
+  - keep each clip's OWN audio (Grok ambient) as a lowered-volume layer,
+    delayed to its timeline position (default volume 0.25; --no-clip-audio to drop)
   - place a whoosh SFX at every transition point
   - master the mix with loudnorm (I=-16, TP=-1.5, LRA=11)
   - write 55_render/video.mp4, master-bgm-mix.m4a sidecar,
@@ -77,6 +79,19 @@ def find_audio(reel: Path, kind: str) -> Path | None:
     return files[0] if files else None
 
 
+def has_audio_stream(path: Path) -> bool:
+    if not shutil.which("ffprobe"):
+        return False
+    try:
+        out = subprocess.check_output(
+            ["ffprobe", "-v", "error", "-select_streams", "a",
+             "-show_entries", "stream=codec_name", "-of", "csv=p=0", str(path)],
+            stderr=subprocess.DEVNULL, timeout=30)
+        return bool(out.strip())
+    except (subprocess.SubprocessError, OSError):
+        return False
+
+
 def offsets_from_durations(durations: list[float], transition: float) -> list[float]:
     """Transition start times on the final timeline (SFX placement points)."""
     offsets = []
@@ -89,8 +104,13 @@ def offsets_from_durations(durations: list[float], transition: float) -> list[fl
 
 def build_filter(n: int, durations: list[float], transition: float, xfade: str,
                  final_duration: float, bgm_volume: float, sfx_volume: float,
-                 with_sfx: bool) -> tuple[str, str]:
-    """Return (filter_complex, video_out_label)."""
+                 with_sfx: bool, clip_audio_flags: list[bool] | None = None,
+                 clip_audio_volume: float = 0.25) -> tuple[str, str]:
+    """Return (filter_complex, video_out_label).
+
+    clip_audio_flags[i]=True keeps clip i's own audio (Grok ambient) as a
+    lowered-volume layer delayed to its timeline start — the BGM bed and SFX
+    stay exactly as before; ambient is an additional amix input."""
     parts: list[str] = []
     for idx, dur in enumerate(durations):
         parts.append(
@@ -118,6 +138,24 @@ def build_filter(n: int, durations: list[float], transition: float, xfade: str,
         f"afade=t=out:st={max(0, final_duration - 0.8):.3f}:d=0.8[bgm]"
     )
 
+    # 클립 자체 음성(앰비언트) — 씬 시작 오프셋에 맞춰 낮은 볼륨으로 깔기
+    amb_labels: list[str] = []
+    if clip_audio_flags and any(clip_audio_flags):
+        starts = [0.0]
+        for i in range(1, n):
+            starts.append(starts[i - 1] + durations[i - 1] - transition)
+        for i in range(n):
+            if not clip_audio_flags[i]:
+                continue
+            ms = int(starts[i] * 1000)
+            parts.append(
+                f"[{i}:a]atrim=0:{durations[i]},asetpts=PTS-STARTPTS,"
+                f"volume={clip_audio_volume},afade=t=out:st={max(0, durations[i] - 0.4):.3f}:d=0.4,"
+                f"adelay={ms}|{ms}[camb{i}]"
+            )
+            amb_labels.append(f"[camb{i}]")
+
+    mix_labels: list[str] = []
     if with_sfx and offsets:
         sfx_idx = n + 1
         k = len(offsets)
@@ -129,9 +167,12 @@ def build_filter(n: int, durations: list[float], transition: float, xfade: str,
                 f"[w{i}]atrim=0:0.75,asetpts=PTS-STARTPTS,"
                 f"volume={sfx_volume},adelay={ms}|{ms}[s{i}]"
             )
-        slabels = "".join(f"[s{i}]" for i in range(1, k + 1))
+        mix_labels = [f"[s{i}]" for i in range(1, k + 1)]
+
+    extra = mix_labels + amb_labels
+    if extra:
         parts.append(
-            f"[bgm]{slabels}amix=inputs={k + 1}:duration=first:"
+            f"[bgm]{''.join(extra)}amix=inputs={len(extra) + 1}:duration=first:"
             f"dropout_transition=0:normalize=0,{AUDIO_MASTER}[aout]"
         )
     else:
@@ -156,6 +197,10 @@ def main() -> int:
     parser.add_argument("--sfx", default=None,
                         help="transition whoosh (default: first audio under <reel>/40_assets/sfx; omit with --no-sfx)")
     parser.add_argument("--no-sfx", action="store_true", help="skip transition SFX")
+    parser.add_argument("--clip-audio-volume", type=float, default=0.25,
+                        help="volume for each clip's own audio laid under the BGM (default 0.25)")
+    parser.add_argument("--no-clip-audio", action="store_true",
+                        help="drop the clips' own audio entirely (pre-2026-07-04 behavior)")
     parser.add_argument("--transition", type=float, default=0.35, help="xfade seconds (default 0.35)")
     parser.add_argument("--xfade", default="smoothleft", help="xfade transition type (default smoothleft)")
     parser.add_argument("--bgm-volume", type=float, default=0.82)
@@ -172,11 +217,13 @@ def main() -> int:
     if not shutil.which("ffmpeg"):
         raise SystemExit("ffmpeg not found on PATH (run media_render_doctor.py)")
 
+    # cut plan — single source of truth for slugs AND per-cut durations
+    plan = load_cut_plan(reel)
+
     # clips: explicit or derived from the cut plan
     if args.clips:
         clips = [(reel / c if not Path(c).is_absolute() else Path(c)) for c in args.clips]
     else:
-        plan = load_cut_plan(reel)
         clips = [reel / "video" / f"{c['slug']}.mp4" for c in plan]
         if not clips:
             raise SystemExit("no --clips given and no cuts parsed from script.md")
@@ -185,13 +232,18 @@ def main() -> int:
         raise SystemExit(f"missing clips: {missing}")
     n = len(clips)
 
-    # durations
+    # durations: explicit CLI wins; else per-cut 길이/duration from script.md;
+    # else a flat fallback. Per-cut durations are how the shot-composition system
+    # trims each source clip (6~10s) down to its 2~4s cut length.
     if args.durations:
         durations = [float(x) for x in args.durations.split(",") if x.strip()]
     elif args.duration_each:
         durations = [args.duration_each] * n
+    elif plan and all(c.get("duration") for c in plan) and len(plan) == n:
+        durations = [float(c["duration"]) for c in plan]
     else:
-        raise SystemExit("provide --durations or --duration-each")
+        raise SystemExit("provide --durations or --duration-each "
+                         "(script.md has no complete per-cut 길이/duration fields)")
     if len(durations) != n:
         raise SystemExit(f"{len(durations)} durations for {n} clips")
 
@@ -211,9 +263,14 @@ def main() -> int:
     final_duration = sum(durations) - transition * (n - 1)
     offsets = offsets_from_durations(durations, transition) if n > 1 else []
 
+    clip_audio_flags = [False] * n
+    if not args.no_clip_audio:
+        clip_audio_flags = [has_audio_stream(c) for c in clips]
+
     filter_complex, vout = build_filter(
         n, durations, transition, args.xfade, final_duration,
-        args.bgm_volume, args.sfx_volume, with_sfx=bool(sfx))
+        args.bgm_volume, args.sfx_volume, with_sfx=bool(sfx),
+        clip_audio_flags=clip_audio_flags, clip_audio_volume=args.clip_audio_volume)
 
     cmd = ["ffmpeg", "-y", "-hide_banner", "-nostdin"]
     for clip in clips:
@@ -275,6 +332,11 @@ def main() -> int:
             "markdown": str(reel / "90_timing" / "production-timing.md"),
         },
         "bgm": {"source": str(bgm), "volume": args.bgm_volume},
+        "clip_audio": {
+            "enabled": any(clip_audio_flags),
+            "volume": args.clip_audio_volume,
+            "clips_with_audio": sum(clip_audio_flags),
+        },
         "audio_master": AUDIO_MASTER,
         "sfx": ([{
             "source": str(sfx), "volume": args.sfx_volume,

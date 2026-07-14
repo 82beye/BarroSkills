@@ -48,8 +48,11 @@ REPORT_FILES = {
 }
 # Grok nominally renders 720x1280, but real downloads measure 720x1264 —
 # both are known-good. Anything else portrait is a warning, landscape an error.
+# Grok clips are either 6s or 10s (the only two options); the shot-composition
+# system trims them down in the render, so a 6s source is fully valid. Only a
+# sub-3s source signals a real truncation.
 GROK_EXPECT = {"width": 720, "heights": (1280, 1264),
-               "dur_warn": (8.0, 12.0), "dur_min": 3.0}
+               "dur_warn": (5.5, 12.0), "dur_min": 3.0}
 
 
 def now_iso() -> str:
@@ -350,7 +353,9 @@ def qa_final(reel: Path, force_contact_sheet: bool = False) -> dict:
     else:
         rep.warn("volumedetect", "no volume stats parsed")
 
-    sheet = reel / "56_capcut_export" / "contact_sheet_6cuts.jpg"
+    # contact sheet: one tile per cut (N-aware; falls back to 6 if no cut plan)
+    n_cuts = len(load_cut_plan(reel)) or 6
+    sheet = reel / "56_capcut_export" / f"contact_sheet_{n_cuts}cuts.jpg"
     if sheet.is_file() and not force_contact_sheet:
         rep.passed("contact_sheet", f"exists: {sheet}")
     elif not shutil.which("ffmpeg"):
@@ -359,11 +364,11 @@ def qa_final(reel: Path, force_contact_sheet: bool = False) -> dict:
         rep.warn("contact_sheet", "unknown duration — cannot sample frames")
     else:
         sheet.parent.mkdir(parents=True, exist_ok=True)
-        rate = 6.0 / dur
+        rate = n_cuts / dur
         try:
             subprocess.run(
                 ["ffmpeg", "-y", "-hide_banner", "-nostdin", "-i", str(final),
-                 "-vf", f"fps={rate:.6f},scale=270:480,tile=6x1",
+                 "-vf", f"fps={rate:.6f},scale=270:480,tile={n_cuts}x1",
                  "-frames:v", "1", "-update", "1", str(sheet)],
                 capture_output=True, timeout=300, check=True)
             rep.passed("contact_sheet", f"generated: {sheet}")

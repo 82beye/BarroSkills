@@ -59,6 +59,18 @@ function probeDuration(mediaPath) {
   return parseFloat(r.stdout.trim()) || 0;
 }
 
+function probeHasAudio(mediaPath) {
+  const r = spawnSync('ffprobe', ['-v', 'error', '-select_streams', 'a',
+    '-show_entries', 'stream=codec_name', '-of', 'csv=p=0', mediaPath], { encoding: 'utf-8' });
+  return r.status === 0 && r.stdout.trim().length > 0;
+}
+
+// 모션 클립(media-render Grok) 자체 음성을 나레이션 밑에 앰비언트로 깔 때의 볼륨.
+// 기존 BGM 믹스 단계는 그대로 유지 — 이 층은 씬 클립 렌더 시 TTS와 함께 amix된다.
+// BT_CLIP_AMBIENT_VOLUME 로 조절, BT_NO_CLIP_AMBIENT=1 로 비활성 (2026-07-04 추가).
+const CLIP_AMBIENT_VOLUME = parseFloat(process.env.BT_CLIP_AMBIENT_VOLUME || '0.25');
+const CLIP_AMBIENT_DISABLED = /^(1|true|yes)$/i.test(process.env.BT_NO_CLIP_AMBIENT || '');
+
 /**
  * Scene 단위로 이미지+TTS를 mp4 클립으로 렌더
  */
@@ -149,10 +161,21 @@ function renderScene({ imagePath, videoPath = null, ttsPath, durationSec, narrat
   });
   const finalLabel = overlays.length > 0 ? `v${overlays.length}` : 'v0';
 
+  // 모션 클립 자체 음성(앰비언트)을 나레이션 밑에 낮은 볼륨으로 amix.
+  // 클립에 오디오가 없거나 still 렌더면 기존과 동일하게 TTS만 (1:a).
+  const withAmbient = !!videoPath && !CLIP_AMBIENT_DISABLED && probeHasAudio(videoPath);
+  let audioMap = '1:a';
+  if (withAmbient) {
+    filter += `;[0:a]atrim=0:${durationSec},asetpts=PTS-STARTPTS,volume=${CLIP_AMBIENT_VOLUME},`
+      + `afade=t=out:st=${Math.max(0, durationSec - 0.4).toFixed(3)}:d=0.4[amb]`
+      + `;[1:a][amb]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]`;
+    audioMap = '[aout]';
+  }
+
   args.push(
     '-filter_complex', filter,
     '-map', `[${finalLabel}]`,
-    '-map', '1:a',
+    '-map', audioMap,
     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-r', '30',
     '-c:a', 'aac', '-b:a', '128k', '-ar', '44100',
     '-t', String(durationSec),

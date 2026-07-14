@@ -113,6 +113,9 @@ export PAPERCLIP_DISABLED=1
    - `40_assets/videos/scene_NNN.mp4` (media-render Grok 클립)가 있는 씬은 모션 클립
      기반, 없는 씬은 기존 정지 이미지+Ken Burns 기반(레거시)으로 렌더 — 씬별 혼합 가능.
      산출물은 동일하게 `55_render/video.mp4`.
+   - 모션 클립의 **자체 음성(앰비언트)은 나레이션 밑에 낮은 볼륨(0.25)으로 자동 믹스**
+     — 기존 글로벌 BGM 믹스는 그대로 유지. 조절 `BT_CLIP_AMBIENT_VOLUME`,
+     비활성 `BT_NO_CLIP_AMBIENT=1`.
 
 8. **S8 QA** — Task 위임 (`subagent_type: barrotube-qa-reviewer`)
    - prompt: "55_render/video.mp4 ffprobe 검사 + 자막·자산 정합 → 60_qa_report.md. FAIL이면 어떤 stage로 회귀할지 명시."

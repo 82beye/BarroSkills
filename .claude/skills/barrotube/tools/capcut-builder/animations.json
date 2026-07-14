@@ -1,0 +1,24 @@
+{
+  "chalk_in": {
+    "label": "초크 인",
+    "note": "in 애니메이션, ~0.97s. CapCut에서 시드해 확보(2026-07-09).",
+    "entry": {
+      "id": "7644672068604218625",
+      "type": "in",
+      "start": 0,
+      "duration": 966666,
+      "path": "/Users/beye/Library/Containers/com.lemon.lvoverseas/Data/Movies/CapCut/User Data/Cache/effect/7644672068604218625/32a632ec067ef3ba7dd9d644f91fef29",
+      "platform": "all",
+      "resource_id": "7644672068604218625",
+      "third_resource_id": "0",
+      "source_platform": 1,
+      "name": "초크 인",
+      "category_id": "ruchang",
+      "category_name": "인",
+      "panel": "",
+      "material_type": "sticker",
+      "anim_adjust_params": null,
+      "request_id": ""
+    }
+  }
+}

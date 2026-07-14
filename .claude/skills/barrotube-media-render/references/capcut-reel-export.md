@@ -10,9 +10,13 @@ Create `55_render/video.mp4` from the Grok clips with:
 - trimmed scene durations to the reel timeline
 - short xfade/beat transitions
 - one continuous master BGM/SFX track
+- each Grok clip's OWN audio kept as a lowered-volume ambient layer under the
+  BGM (2026-07-04 — `render_master_mix.py` default, volume 0.25, per-scene
+  timeline offset + fade-out; drop with `--no-clip-audio`)
 
 Keep music as one master audio bed. Do not merge separately generated per-scene BGM
-tracks; they sound disconnected.
+tracks; they sound disconnected. The clip-ambient layer is NOT a per-scene BGM —
+it is the scene's diegetic sound (wind, crowd, machines) laid quietly under the bed.
 
 Timing:
 

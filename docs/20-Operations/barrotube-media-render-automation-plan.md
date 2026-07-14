@@ -12,6 +12,33 @@ tags:
 
 # BarroTube Media Render 자동 운영 갭 분석 및 구현 계획
 
+## Status Update — 2026-07-12 (오토파일럿 + director 완성, today.myo 편입)
+
+- **`reel_autopilot.py` 구현 완료** — director 지휘 루프의 *결정론 안전 절반*을 코드화.
+  render-job.json을 읽어 브라우저·사람·비가역 액션 없이 완주 가능한 단계
+  (R3/R5/R8 QA · R6 CapCut-route skip 또는 FFmpeg master · R9 distribution+게시메타 ·
+  R11 postmortem)를 한 번에 몰고, 처음 만나는 브라우저(R2/R4)·GUI(R7)·HITL(R10)·QA fail
+  게이트에서 멈춰 `blocked_kind` + `next_action`을 JSON으로 반환. 게시·삭제·결제·로그인
+  대행은 절대 안 함.
+- **`barrotube-reel-director` 에이전트 구현 완료** — `~/.claude/agents/barrotube-reel-director.md`
+  (형제 barrotube-* 에이전트와 동일 discovery 경로). 지휘 루프 = "오토파일럿 먼저 →
+  blocked_kind별 대응(browser는 barrotube-media-render 위임, GUI는 CapCut, hitl_publish는
+  사람 승인)". Layer1(판단)+Layer2(상태) 분리 원칙 그대로.
+- **today.myo 편입 검증**: 정본 스크립트가 takitani.lab뿐 아니라 today.myo 폴더에서도
+  동작 확인. `reel_render_plan.py`가 today.myo script.md를 정상 파싱, 상태머신이 R단계를
+  정확 감지. 실증: **EP01 = 13/13 DONE**(게시 완료본 편입), **EP02 = 11/13**(QA 3게이트
+  통과·distribution·게시메타 자동 생성, **R10 게시(HITL)만 잔여** — 계획서가 EP04에서
+  달성한 종착점과 동일).
+  - today.myo route 반영: 클립→CapCut(합성+자막+1080화)→export 이므로 **R6(FFmpeg master)는
+    CapCut export 존재 시 auto-skip**. CapCut export는 표준 경로 `56_capcut_export/video.mp4`에
+    하드링크(디스크 중복 0).
+  - 보드 연동: today.myo `tools/autopilot.sh <day>` 래퍼 + bridge 읽기전용
+    `/api/reel/state?day=N`(render-job.json 상태를 보드에 노출, localStorage 추정 대체).
+- **남은 결정론 미구현**(Phase 2~4): `build_capcut_reel_draft.py`, browser workers 코드화,
+  publish duplicate-guard. R7 CapCut/R2·R4 브라우저는 여전히 인터랙티브 세션 필요.
+
+---
+
 ## Purpose
 
 `barrotube-media-render` 스킬을 현재의 절차형 운영에서 반복 가능한 자동 운영 시스템으로 올리기 위한 갭 분석과 구현 계획이다.
@@ -528,10 +555,11 @@ Layer 2  상태/실행 (결정론)
 즉 **"주제를 정하는 뇌"와 dispatch 대상은 이미 존재**하고, director가 새로 하는 일은
 *릴스 전용 지휘 루프 + 상태 머신 연결*뿐이다.
 
-### 에이전트 정의 스케치
+### 에이전트 정의 (✅ 구현됨 2026-07-12)
 
-`~/workspace/BarroSkills/.claude/skills/barrotube-media-render/agents/reel-director.md`
-(Claude Code subagent). frontmatter + 지휘 루프를 system prompt로 둔다.
+구현 위치는 스킬 내부가 아니라 **형제 barrotube-* 에이전트와 동일한 discovery 경로**로
+확정: `~/.claude/agents/barrotube-reel-director.md`. 아래 스케치대로 frontmatter +
+지휘 루프(= reel_autopilot.py 먼저 → blocked_kind별 대응)를 system prompt로 둔다.
 
 ```yaml
 ---

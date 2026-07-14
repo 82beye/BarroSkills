@@ -29,13 +29,18 @@ For the chosen scene, build two prompts:
 **image_prompt** = subject/setting from `narration` + `broll_keywords`, plus a concrete
 look driven by `style`:
 
-Always include this composition rule before the style look:
+Include a composition rule **by the cut's shot role** before the style look (see
+`barrotube-reels-pipeline.md` → Image Prompt Rule for the full branching). Default
+(EW/W hero cuts):
 
 `vertical 9:16 frame, wide-angle 24mm lens look, full-body or full-object view, show
 the surrounding environment clearly, keep the main subject fully inside frame with
-headroom and footroom, no tight close-up, no cropped body parts or key props`
+headroom and footroom, no cropped body parts or key props`
 
-This prevents the vertical crop from losing the location, props, or full character.
+For `ECU / detail insert` cuts, invert it: `macro extreme close-up of one detail,
+shallow depth of field, tight crop intentional`. A reel needs a scale spread
+(≥1 EW/W + ≥2 ECU), not one scale repeated — blanket "no tight close-up" made
+today.myo EP01 loose (three identical close-ups).
 
 | style      | look appended to the image prompt                                  |
 |------------|--------------------------------------------------------------------|

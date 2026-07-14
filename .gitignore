@@ -69,3 +69,11 @@ tasks/*
 # MultiAgent 프로젝트 특화 교훈 — 작성자 사적 누적물, git 추적 안 함 (폴더만 유지)
 _local/*
 !_local/.gitkeep
+
+# 로컬 가상환경·캐시 (capcut-builder/pycapcut 등) — 소스만 추적
+**/.venv/
+**/__pycache__/
+*.pyc
+
+# git worktree 작업 폴더 (EnterWorktree)
+.claude/worktrees/
