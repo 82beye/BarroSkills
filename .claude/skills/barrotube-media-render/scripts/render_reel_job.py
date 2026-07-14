@@ -194,8 +194,18 @@ class RenderJob:
             ok = (r / "script.md").is_file() and len(cuts) > 0
             return ok, ([str(r / "script.md")] if ok else []), []
         if stage_id == "R2":
-            pend = [c["cut"] for c in cuts if not Path(c["image"]).is_file()]
-            outs = [c["image"] for c in cuts if Path(c["image"]).is_file()]
+            # A cut's still can be gone from disk while its clip is right there
+            # (stills get cleaned up after animation). Demanding the still back
+            # would send the operator to a paid image run to re-make something
+            # the pipeline already consumed — the clip IS the downstream proof.
+            def has_still(c) -> bool:
+                return Path(c["image"]).is_file()
+
+            def has_clip(c) -> bool:
+                return (r / "video" / f"{c['slug']}.mp4").is_file()
+
+            pend = [c["cut"] for c in cuts if not has_still(c) and not has_clip(c)]
+            outs = [c["image"] for c in cuts if has_still(c)]
             return (len(cuts) > 0 and not pend), outs, pend
         if stage_id == "R4":
             pend, outs = [], []
@@ -262,6 +272,22 @@ class RenderJob:
                 st["status"] = "failed"
                 st["error"] = {"type": "qa_failed", "message": f"{QA_REPORTS[st['stage']]} ok=false",
                                "cut": None, "recoverable": True, "at": now_iso()}
+
+        # Image QA needs stills. If every clip exists but the stills are gone,
+        # R3 can never run — and it is a gate, so the reel would sit blocked
+        # forever. Skip it explicitly (with the reason on the record) and let
+        # R5 video QA carry the quality gate; the clips are what ships anyway.
+        if cuts:
+            stills = [c for c in cuts if Path(c["image"]).is_file()]
+            clips = [c for c in cuts if (self.reel / "video" / f"{c['slug']}.mp4").is_file()]
+            if not stills and len(clips) == len(cuts):
+                r3 = self.stage_of(data, "R3")
+                if r3["status"] in ("pending", "in_progress"):
+                    r3["status"] = "skipped"
+                    r3["ended_at"] = r3["ended_at"] or now_iso()
+                    r3["notes"].append(
+                        "auto: stills absent but all clips present — image QA cannot run; "
+                        "quality gate falls to R5 video QA (do NOT regenerate stills for this)")
         return data
 
     # ---------- queries ----------
