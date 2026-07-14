@@ -69,6 +69,24 @@ tr.detail td{background:#fbfcfe;padding:14px}
 .stagebtn .t{font-size:12.5px}
 .log{background:#22262e;color:#e6ebf2;border-radius:9px;padding:11px 13px;font-family:ui-monospace,Menlo,monospace;font-size:11.7px;white-space:pre-wrap;max-height:280px;overflow:auto;margin-top:10px}
 .log:empty{display:none}
+/* ── 자산 미리보기 ── */
+.asec{margin-top:12px}
+.asec h4{margin:12px 0 6px;font-size:12.5px;color:var(--accent2);font-weight:800;display:flex;align-items:center;gap:6px}
+.asec h4 .c{font-weight:600;color:var(--mut);font-size:11px}
+.thumbs{display:grid;grid-template-columns:repeat(auto-fill,minmax(116px,1fr));gap:8px}
+.thumb{border:1px solid var(--line);border-radius:9px;overflow:hidden;background:#fff;cursor:zoom-in;position:relative}
+.thumb img,.thumb video{display:block;width:100%;height:150px;object-fit:cover;background:#111}
+.thumb .cap{font-size:10.5px;color:var(--mut);padding:3px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vids{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:9px}
+.vid video{width:100%;border-radius:9px;background:#111;max-height:330px}
+.vid .cap{font-size:10.5px;color:var(--mut);margin-top:2px}
+.auds{display:flex;flex-direction:column;gap:4px}
+.auds audio{width:100%;height:30px}
+.txtbox{background:#fbfcfd;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-size:12.2px;
+  white-space:pre-wrap;font-family:ui-monospace,Menlo,monospace;max-height:260px;overflow:auto}
+.aempty{font-size:12px;color:var(--mut);padding:4px 0}
+.lb{position:fixed;inset:0;z-index:50;background:rgba(16,18,22,.86);display:flex;align-items:center;justify-content:center;padding:24px;cursor:zoom-out}
+.lb img,.lb video{max-width:92vw;max-height:92vh;border-radius:8px}
 .spin{display:inline-block;width:11px;height:11px;border:2px solid #f0c6b1;border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite;vertical-align:-1px}
 @keyframes sp{to{transform:rotate(360deg)}}
 .form{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:11px;align-items:end}
@@ -253,6 +271,17 @@ tr.detail td{background:#fbfcfe;padding:14px}
 </tbody></table></div>
 <div class="callout warn"><strong>썸네일은 JPG로.</strong> YouTube 썸네일 한도는 2MB인데 생성 PNG는 흔히 2MB를 넘습니다(<code>invalidImage</code> 에러). <code>sips -s format jpeg</code>로 변환한 <code>47_thumbnail.jpg</code>를 넘기세요.</div>
 
+<h3>브리지 API</h3>
+<div class="tw"><table>
+<thead><tr><th>엔드포인트</th><th>동작</th></tr></thead>
+<tbody>
+<tr><td><code>GET /api/episodes</code></td><td>EP 전체 스캔(파일시스템 실측) + 명령 라벨</td></tr>
+<tr><td><code>POST /api/run</code></td><td><code>{command, args[], confirm}</code> — 화이트리스트 명령만. <code>publish</code>는 <code>confirm:"PUBLISH"</code> 필수(없으면 428)</td></tr>
+<tr><td><code>GET /api/assets?ep=&amp;platform=</code></td><td>EP 자산을 종류별로(대본·카드·씬 이미지·모션 클립·TTS·최종 렌더·리포트)</td></tr>
+<tr><td><code>GET /api/asset/file?ep=&amp;rel=</code></td><td>자산 바이트. <strong>Range(206) 지원</strong> → 영상 seek 가능</td></tr>
+</tbody></table></div>
+<div class="callout note"><strong>자산 미리보기.</strong> 목록의 산출물 점(●)은 "있다/없다"만 알려줄 뿐 <em>쓸 만한지</em>는 말해주지 않습니다. EP 행을 펼치면 실제 이미지·클립·TTS·대본을 바로 확인할 수 있습니다(썸네일 클릭 = 원본 확대). 서빙 대상은 <code>workspace/episodes/&lt;EP&gt;</code> 안쪽 + 허용 확장자로만 제한되고, <code>../</code>·절대경로는 차단됩니다.</div>
+
 <h2 id="d7">7. 렌더 env 옵션</h2>
 <div class="tw"><table>
 <thead><tr><th>env</th><th>기본</th><th>동작</th></tr></thead>
@@ -302,6 +331,7 @@ function load(){
     document.getElementById('live').textContent = '브리지 연결됨 · EP ' + d.episodes.length + '개';
     document.getElementById('epdir').textContent = d.episodes_dir;
     summary(); render();
+    if (OPEN) preview(OPEN);   // 단계 실행 후 새로고침돼도 미리보기를 유지한다
   }).catch(function(){
     document.getElementById('live').textContent = '⚠️ 브리지 미연결 — node tools/board/server.js 로 실행하세요';
     document.getElementById('rows').innerHTML =
@@ -388,11 +418,105 @@ function detailRow(e){
     + '<div style="font-size:12.5px;color:var(--mut);margin-bottom:6px">'
     + '레이아웃 ' + esc(e.layout) + ' · 플랫폼: ' + esc(plats) + (counts ? ' · ' + esc(counts) : '') + '</div>'
     + '<div class="grid">' + btns + '</div>'
+    + '<div class="asec" id="prev-' + e.id + '"><div class="aempty">자산 불러오는 중…</div></div>'
     + '<div class="log" id="log-' + e.id + '"></div>'
     + '</td></tr>';
 }
 
-function toggle(id){ OPEN = (OPEN === id) ? null : id; render(); }
+function toggle(id){
+  OPEN = (OPEN === id) ? null : id;
+  render();
+  if (OPEN) preview(OPEN);
+}
+
+/* ── 자산 미리보기 ──
+ * 점(dot)만으로는 "이미지가 6장 있다"는 사실만 알 뿐 그게 쓸 만한지 알 수 없다.
+ * 실제 바이트를 브리지에서 받아 눈으로 확인한다. (영상은 Range 지원 → seek 가능)
+ */
+function assetUrl(ep, rel){
+  return '/api/asset/file?ep=' + encodeURIComponent(ep) + '&rel=' + encodeURIComponent(rel);
+}
+
+function preview(id){
+  var e = DATA.episodes.filter(function(x){ return x.id === id; })[0];
+  if (!e) return;
+  var box = document.getElementById('prev-' + id);
+  if (!box) return;
+  var pk = firstPlatform(e) || '';
+
+  fetch('/api/assets?ep=' + encodeURIComponent(id) + '&platform=' + encodeURIComponent(pk))
+    .then(function(r){ return r.json(); })
+    .then(function(a){
+      if (a.error) { box.innerHTML = '<div class="aempty">❌ ' + esc(a.error) + '</div>'; return; }
+      var g = a.groups, html = '';
+
+      // 대본·브리프 — 본문을 바로 읽을 수 있어야 다음 단계를 판단할 수 있다
+      if (g.script.length) {
+        html += sect('대본·브리프', g.script.length);
+        g.script.forEach(function(f){
+          html += '<div style="margin-bottom:8px"><div class="cap" style="font-size:11px;color:var(--mut)">'
+            + esc(f.name) + '</div><div class="txtbox" id="t-' + id + '-' + slugId(f.rel) + '">불러오는 중…</div></div>';
+        });
+      }
+      if (g.cards.length)  html += sect('카드 (인트로·썸네일·엔드카드)', g.cards.length) + thumbs(id, g.cards);
+      if (g.images.length) html += sect('씬 이미지', g.images.length) + thumbs(id, g.images);
+      if (g.render.length) html += sect('최종 렌더', g.render.length) + vids(id, g.render);
+      if (g.videos.length) html += sect('모션 클립', g.videos.length) + vids(id, g.videos);
+      if (g.tts.length)    html += sect('TTS', g.tts.length) + auds(id, g.tts);
+      if (g.reports.length) {
+        html += sect('리포트·메타', g.reports.length)
+          + '<div style="font-size:12px">' + g.reports.map(function(f){
+              return '<a href="' + assetUrl(id, f.rel) + '" target="_blank" style="margin-right:10px">'
+                + esc(f.name) + '</a>';
+            }).join('') + '</div>';
+      }
+      box.innerHTML = html || '<div class="aempty">아직 만들어진 자산이 없습니다. 위 단계 버튼으로 생성하세요.</div>';
+
+      // 텍스트는 별도 fetch (목록 API 를 무겁게 만들지 않는다)
+      g.script.forEach(function(f){
+        var el = document.getElementById('t-' + id + '-' + slugId(f.rel));
+        if (!el) return;
+        fetch(assetUrl(id, f.rel)).then(function(r){ return r.text(); })
+          .then(function(t){ el.textContent = t.length > 4000 ? t.slice(0, 4000) + '\n\n… (생략)' : t; })
+          .catch(function(){ el.textContent = '(읽기 실패)'; });
+      });
+    })
+    .catch(function(err){ box.innerHTML = '<div class="aempty">❌ ' + esc(err) + '</div>'; });
+}
+
+function slugId(rel){ return rel.replace(/[^a-zA-Z0-9]/g, '_'); }
+function sect(title, n){
+  return '<h4>' + esc(title) + ' <span class="c">' + n + '</span></h4>';
+}
+function thumbs(id, files){
+  return '<div class="thumbs">' + files.map(function(f){
+    var u = assetUrl(id, f.rel);
+    return '<div class="thumb" onclick="event.stopPropagation();lightbox(\'' + u + '\',\'img\')">'
+      + '<img loading="lazy" src="' + u + '" alt="' + esc(f.name) + '">'
+      + '<div class="cap">' + esc(f.name) + '</div></div>';
+  }).join('') + '</div>';
+}
+function vids(id, files){
+  return '<div class="vids">' + files.map(function(f){
+    var u = assetUrl(id, f.rel);
+    return '<div class="vid" onclick="event.stopPropagation()">'
+      + '<video src="' + u + '" controls preload="metadata" playsinline></video>'
+      + '<div class="cap">' + esc(f.name) + ' · ' + Math.round(f.size / 1024 / 1024 * 10) / 10 + 'MB</div></div>';
+  }).join('') + '</div>';
+}
+function auds(id, files){
+  return '<div class="auds">' + files.map(function(f){
+    return '<div onclick="event.stopPropagation()"><div class="cap" style="font-size:10.5px;color:var(--mut)">'
+      + esc(f.name) + '</div><audio controls preload="none" src="' + assetUrl(id, f.rel) + '"></audio></div>';
+  }).join('') + '</div>';
+}
+function lightbox(url, kind){
+  var d = document.createElement('div');
+  d.className = 'lb';
+  d.innerHTML = kind === 'img' ? '<img src="' + url + '">' : '<video src="' + url + '" controls autoplay></video>';
+  d.onclick = function(){ document.body.removeChild(d); };
+  document.body.appendChild(d);
+}
 
 /* ── 실행 ── */
 function epPaths(e){

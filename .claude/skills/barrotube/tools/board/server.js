@@ -17,8 +17,8 @@
  */
 
 import { createServer } from 'node:http';
-import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
-import { join, dirname, resolve, extname } from 'node:path';
+import { readFileSync, existsSync, readdirSync, statSync, createReadStream } from 'node:fs';
+import { join, dirname, resolve, extname, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, execSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
@@ -146,6 +146,118 @@ function scanEpisodes() {
 }
 
 /* ─────────────────────────────────────────────
+ * 1-b. 자산 미리보기 (목록 + 바이트 서빙)
+ *
+ * 보드는 산출물을 점(dot)으로만 보여줬다 — 실제로 무엇이 만들어졌는지는
+ * 파일을 열어봐야 알 수 있었다. 여기서 EP 폴더 안의 자산을 분류해 목록으로
+ * 주고(/api/assets), 실제 바이트를 Range 지원으로 서빙한다(/api/asset/file).
+ * 서빙 대상은 EPISODES_DIR 안쪽 + 허용 확장자로만 제한한다.
+ * ───────────────────────────────────────────── */
+
+const EP_RE = /^EP-\d{4}-\d{4}$/;
+
+const PREVIEW_MIME = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
+  '.mp4': 'video/mp4', '.mov': 'video/quicktime',
+  '.wav': 'audio/wav', '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4',
+  '.md': 'text/markdown; charset=utf-8', '.json': 'application/json; charset=utf-8',
+  '.txt': 'text/plain; charset=utf-8', '.srt': 'text/plain; charset=utf-8',
+};
+
+/** EPISODES_DIR 밖으로 나가는 경로(../, 절대경로, 심볼릭 링크 탈출)를 차단하고 실경로를 돌려준다. */
+function safeEpisodePath(ep, rel) {
+  if (!EP_RE.test(ep || '')) return null;
+  if (!rel || isAbsolute(rel)) return null;
+  const root = resolve(EPISODES_DIR, ep);
+  const target = resolve(root, rel);
+  const inside = relative(root, target);
+  if (inside.startsWith('..') || isAbsolute(inside)) return null;
+  if (!existsSync(target) || !statSync(target).isFile()) return null;
+  if (!PREVIEW_MIME[extname(target).toLowerCase()]) return null;   // 허용 확장자만
+  return target;
+}
+
+/** dir 안의 파일을 {rel,name,size} 로 (EP 루트 기준 상대경로) */
+function listFiles(epRoot, subdir, exts) {
+  const dir = join(epRoot, subdir);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter(f => exts.includes(extname(f).toLowerCase()))
+    .filter(f => !/\.bak\.|_bak/.test(f))          // 백업본은 미리보기에서 제외
+    .sort()
+    .map(f => {
+      const p = join(dir, f);
+      return { rel: join(subdir, f), name: f, size: statSync(p).size };
+    });
+}
+
+function oneFile(epRoot, rel) {
+  const p = join(epRoot, rel);
+  if (!existsSync(p) || !statSync(p).isFile()) return [];
+  return [{ rel, name: rel.split('/').pop(), size: statSync(p).size }];
+}
+
+/**
+ * EP + 플랫폼의 자산을 종류별로 분류.
+ * v2 는 platforms/<p>/ 아래, v1 은 EP 루트에 그대로 있다 → prefix 로 흡수.
+ */
+function listAssets(ep, platform) {
+  const epRoot = join(EPISODES_DIR, ep);
+  if (!existsSync(epRoot)) return null;
+  const hasPlatforms = existsSync(join(epRoot, 'platforms'));
+  const pfx = (hasPlatforms && platform && platform !== '(v1-flat)')
+    ? join('platforms', platform) : '';
+  const at = (sub) => (pfx ? join(pfx, sub) : sub);
+
+  const IMG = ['.png', '.jpg', '.jpeg', '.webp'];
+  return {
+    ep,
+    platform: pfx || '(v1-flat)',
+    dir: pfx ? join(epRoot, pfx) : epRoot,
+    groups: {
+      script:  [...oneFile(epRoot, at('30_script.md')), ...oneFile(epRoot, at('35_factcheck.md')),
+                ...oneFile(epRoot, '00_brief.md')],
+      images:  listFiles(epRoot, at(join('40_assets', 'images')), IMG),
+      videos:  listFiles(epRoot, at(join('40_assets', 'videos')), ['.mp4', '.mov']),
+      tts:     listFiles(epRoot, at(join('40_assets', 'tts')), ['.wav', '.mp3', '.m4a']),
+      cards:   [...oneFile(epRoot, at('45_intro.png')), ...oneFile(epRoot, at('47_thumbnail.png')),
+                ...oneFile(epRoot, at('47_thumbnail.jpg')), ...oneFile(epRoot, at('48_endcard.png'))],
+      render:  [...listFiles(epRoot, at('55_render'), ['.mp4', '.mov'])],
+      reports: [...oneFile(epRoot, at('60_qa_report.md')), ...oneFile(epRoot, at('70_publish_meta.json')),
+                ...oneFile(epRoot, at('75_board_approval.json')), ...oneFile(epRoot, at('80_publish_result.json'))],
+    },
+  };
+}
+
+/** Range(206) 지원 — 영상은 seek 가 되어야 미리보기라 부를 수 있다. */
+function serveFile(req, res, path) {
+  const size = statSync(path).size;
+  const type = PREVIEW_MIME[extname(path).toLowerCase()] || 'application/octet-stream';
+  const range = req.headers.range;
+  const m = range && /^bytes=(\d*)-(\d*)$/.exec(range);
+
+  if (m) {
+    let start = m[1] ? parseInt(m[1], 10) : 0;
+    let end = m[2] ? parseInt(m[2], 10) : size - 1;
+    if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= size) {
+      res.writeHead(416, { 'Content-Range': `bytes */${size}` });
+      return res.end();
+    }
+    end = Math.min(end, size - 1);
+    res.writeHead(206, {
+      'Content-Type': type,
+      'Content-Range': `bytes ${start}-${end}/${size}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': end - start + 1,
+    });
+    return createReadStream(path, { start, end }).pipe(res);
+  }
+
+  res.writeHead(200, { 'Content-Type': type, 'Content-Length': size, 'Accept-Ranges': 'bytes' });
+  return createReadStream(path).pipe(res);
+}
+
+/* ─────────────────────────────────────────────
  * 2. 화이트리스트 명령
  *    args 는 문자열 배열로만 전달 (쉘 미경유 → 인젝션 불가)
  * ───────────────────────────────────────────── */
@@ -240,8 +352,27 @@ const server = createServer(async (req, res) => {
     }
   }
 
-  const filePath = join(__dirname, url.pathname.replace(/^\//, ''));
-  if (existsSync(filePath) && statSync(filePath).isFile()) {
+  // 자산 목록 — EP 폴더 안의 산출물을 종류별로
+  if (url.pathname === '/api/assets') {
+    const ep = url.searchParams.get('ep') || '';
+    if (!EP_RE.test(ep)) return json(res, 400, { error: `잘못된 에피소드 id: ${ep}` });
+    const a = listAssets(ep, url.searchParams.get('platform') || '');
+    if (!a) return json(res, 404, { error: `없는 에피소드: ${ep}` });
+    return json(res, 200, a);
+  }
+
+  // 자산 바이트 — 이미지/영상/오디오/텍스트. Range 지원(영상 seek)
+  if (url.pathname === '/api/asset/file') {
+    const p = safeEpisodePath(url.searchParams.get('ep') || '', url.searchParams.get('rel') || '');
+    if (!p) return json(res, 400, { error: '허용되지 않은 경로입니다.' });
+    return serveFile(req, res, p);
+  }
+
+  // 정적 파일 — __dirname 밖으로 나가지 못하게 명시적으로 가드
+  const filePath = resolve(__dirname, url.pathname.replace(/^\//, ''));
+  const insideBoard = relative(__dirname, filePath);
+  if (!insideBoard.startsWith('..') && !isAbsolute(insideBoard)
+      && existsSync(filePath) && statSync(filePath).isFile()) {
     res.writeHead(200, { 'Content-Type': MIME[extname(filePath)] || 'application/octet-stream' });
     return res.end(readFileSync(filePath));
   }
