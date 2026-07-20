@@ -27,7 +27,7 @@ export function stripEmoji(s) {
     .trim();
 }
 
-export async function generateTTS({ text, outPath, voiceId = DEFAULT_VOICE_ID, model = DEFAULT_MODEL, settings = {}, costContext = {} }) {
+export async function generateTTS({ text, outPath, voiceId = DEFAULT_VOICE_ID, model = DEFAULT_MODEL, settings = {}, costContext = {}, withTimestamps = true }) {
   const apiKey = getSecret('ELEVENLABS_API_KEY');
   if (!apiKey) throw new Error('ELEVENLABS_API_KEY not set in .env');
 
@@ -39,27 +39,60 @@ export async function generateTTS({ text, outPath, voiceId = DEFAULT_VOICE_ID, m
     ...settings,
   };
 
-  // Starter tier는 MP3만 가능. WAV가 필요하면 후처리로 ffmpeg 변환
-  const url = `${API_URL}/${voiceId}?output_format=mp3_44100_128`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'xi-api-key': apiKey,
-      'Content-Type': 'application/json',
-      'Accept': 'audio/mpeg',
-    },
-    body: JSON.stringify({ text, model_id: model, voice_settings: voiceSettings }),
-  });
+  mkdirSync(dirname(outPath), { recursive: true });
+  // 자막 발화 싱크용 문자단위 정렬 저장 경로 (scene_NNN.timestamps.json)
+  const tsPath = outPath.replace(/\.(wav|mp3)$/, '.timestamps.json');
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`ElevenLabs TTS failed: ${res.status} ${err}`);
+  let mp3 = null;
+  let alignment = null;
+
+  // 1) with-timestamps 엔드포인트 우선 — audio_base64 + 문자단위 정렬(시간) 반환.
+  //    정렬은 여기 보낸 `text`(= phoneme override 적용된 TTS 입력) 기준이다. 자막은 원본
+  //    narration을 표시하므로, 소비 측(render)에서 override diff로 매핑한다. text도 함께 저장.
+  if (withTimestamps) {
+    try {
+      const url = `${API_URL}/${voiceId}/with-timestamps?output_format=mp3_44100_128`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({ text, model_id: model, voice_settings: voiceSettings }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.audio_base64) mp3 = Buffer.from(data.audio_base64, 'base64');
+        const a = data.alignment || data.normalized_alignment;
+        if (a && Array.isArray(a.characters) && a.characters.length) {
+          alignment = {
+            text,
+            characters: a.characters,
+            start: a.character_start_times_seconds,
+            end: a.character_end_times_seconds,
+          };
+        }
+      } else {
+        console.warn(`  ⚠ with-timestamps ${res.status} — plain TTS로 폴백(정렬 없음)`);
+      }
+    } catch (e) {
+      console.warn(`  ⚠ with-timestamps 오류(${e.message}) — plain TTS로 폴백`);
+    }
   }
 
-  const mp3 = Buffer.from(await res.arrayBuffer());
-  mkdirSync(dirname(outPath), { recursive: true });
+  // 2) 폴백/기본: plain 엔드포인트 (Starter tier는 MP3만 가능)
+  if (mp3 === null) {
+    const url = `${API_URL}/${voiceId}?output_format=mp3_44100_128`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json', 'Accept': 'audio/mpeg' },
+      body: JSON.stringify({ text, model_id: model, voice_settings: voiceSettings }),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`ElevenLabs TTS failed: ${res.status} ${err}`);
+    }
+    mp3 = Buffer.from(await res.arrayBuffer());
+  }
 
-  // 확장자 기반: .wav이면 ffmpeg로 변환, .mp3이면 그대로 저장
+  // 확장자 기반: .wav이면 ffmpeg로 변환(길이 불변 → 정렬 시간 유효), .mp3이면 그대로 저장
   if (outPath.endsWith('.wav')) {
     const mp3Tmp = outPath.replace(/\.wav$/, '.tmp.mp3');
     writeFileSync(mp3Tmp, mp3);
@@ -71,6 +104,9 @@ export async function generateTTS({ text, outPath, voiceId = DEFAULT_VOICE_ID, m
     writeFileSync(outPath, mp3);
   }
 
+  // 정렬 JSON 저장(있을 때만) — 없으면 render가 기존 char-비례 타이밍으로 폴백
+  if (alignment) writeFileSync(tsPath, JSON.stringify(alignment));
+
   // Cost tracking — best-effort (2026-04-27)
   // ElevenLabs charges by input characters (not bytes). Use text.length as proxy.
   recordCost('voice-engineer', {
@@ -81,7 +117,7 @@ export async function generateTTS({ text, outPath, voiceId = DEFAULT_VOICE_ID, m
     note: costContext.note || null,
   });
 
-  return { path: outPath, bytes: mp3.length };
+  return { path: outPath, bytes: mp3.length, timestamps: alignment ? tsPath : null };
 }
 
 function parseFrontmatter(mdPath) {
