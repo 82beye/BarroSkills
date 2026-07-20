@@ -127,10 +127,26 @@ function renderScene({ imagePath, videoPath = null, ttsPath, durationSec, narrat
     }
   }
 
-  // 입력 0 = 씬 소스: 모션 클립(media-render Grok)이면 TTS 길이까지 무한 루프,
-  // 아니면 기존 정지 이미지 (-t 로 최종 길이 캡)
+  // 입력 0 = 씬 소스. 모션 클립(Grok)은 보통 10초 고정이라 TTS 길이와 다르다.
+  // 예전: -stream_loop -1 로 클립을 반복 재생해 프레임을 채움 → 같은 영상이 반복되어 보임.
+  // 개선: setpts 리타임으로 클립을 "한 번만" 재생하되 재생속도를 조절해 씬(TTS) 길이에 정확히
+  //   맞춘다 — 씬보다 짧으면 늘려서(slow) 채우고, 길면 압축(fast). 반복 없이 프레임을 채운다.
+  //   극단 배율(기본 >3x 또는 <1/3x)은 부자연스러워 루프로 폴백. BT_CLIP_FIT_MODE=loop 로 예전
+  //   반복 동작 복구, BT_CLIP_MAX_SPEED_FACTOR 로 폴백 임계 조정.
+  const CLIP_FIT_MODE = (process.env.BT_CLIP_FIT_MODE || 'speed').toLowerCase();
+  const clipDur = videoPath ? probeDuration(videoPath) : 0;
+  const MAX_SPEED_FACTOR = Number(process.env.BT_CLIP_MAX_SPEED_FACTOR) || 3.0;
+  let speedFactor = 1;       // 비디오 PTS 배율 (>1 느리게 늘림, <1 빠르게 압축)
+  let retimeClip = false;
+  if (videoPath && CLIP_FIT_MODE === 'speed' && clipDur > 0.1) {
+    speedFactor = durationSec / clipDur;
+    retimeClip = speedFactor <= MAX_SPEED_FACTOR && speedFactor >= 1 / MAX_SPEED_FACTOR;
+  }
+
   const args = videoPath
-    ? ['-y', '-stream_loop', '-1', '-i', videoPath, '-i', ttsPath]
+    ? (retimeClip
+        ? ['-y', '-i', videoPath, '-i', ttsPath]                         // 단일 재생 + setpts 리타임
+        : ['-y', '-stream_loop', '-1', '-i', videoPath, '-i', ttsPath])  // 폴백: 반복 재생
     : ['-y', '-loop', '1', '-i', imagePath, '-i', ttsPath];
   overlays.forEach(o => args.push('-loop', '1', '-i', o.png));
 
@@ -141,8 +157,14 @@ function renderScene({ imagePath, videoPath = null, ttsPath, durationSec, narrat
 
   let filter;
   if (videoPath) {
-    // 모션 클립: 이미 움직임이 있으므로 Ken Burns 없이 캔버스 normalize만
-    filter = `[0:v]scale=${canvasW}:${canvasH}:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH},fps=30,setpts=PTS-STARTPTS[v0]`;
+    // 모션 클립: 이미 움직임이 있으므로 Ken Burns 없이 캔버스 normalize만.
+    if (retimeClip) {
+      // setpts로 재생속도를 조절 → 클립 한 번 재생이 durationSec를 채움(반복 없음). 이후 fps=30 정규화.
+      filter = `[0:v]scale=${canvasW}:${canvasH}:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH},setpts=${speedFactor.toFixed(6)}*(PTS-STARTPTS),fps=30[v0]`;
+    } else {
+      // 폴백(루프 재생): 기존 동작 유지
+      filter = `[0:v]scale=${canvasW}:${canvasH}:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH},fps=30,setpts=PTS-STARTPTS[v0]`;
+    }
   } else if (KEN_BURNS_ENABLED) {
     // Ken Burns: 입력 110%로 scale 후 zoompan으로 1.0→1.05 점진 줌인 (씬 길이 전체)
     const scaledW = Math.floor(canvasW * 1.10);
@@ -163,7 +185,9 @@ function renderScene({ imagePath, videoPath = null, ttsPath, durationSec, narrat
 
   // 모션 클립 자체 음성(앰비언트)을 나레이션 밑에 낮은 볼륨으로 amix.
   // 클립에 오디오가 없거나 still 렌더면 기존과 동일하게 TTS만 (1:a).
-  const withAmbient = !!videoPath && !CLIP_AMBIENT_DISABLED && probeHasAudio(videoPath);
+  // retimeClip이면 비디오를 늘리/줄여 재생하므로 클립 앰비언트는 desync 방지를 위해 생략
+  // (0.25 저볼륨이라 나레이션+BGM 밑에서 체감 영향 미미).
+  const withAmbient = !!videoPath && !retimeClip && !CLIP_AMBIENT_DISABLED && probeHasAudio(videoPath);
   let audioMap = '1:a';
   if (withAmbient) {
     filter += `;[0:a]atrim=0:${durationSec},asetpts=PTS-STARTPTS,volume=${CLIP_AMBIENT_VOLUME},`
