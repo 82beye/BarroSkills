@@ -172,9 +172,53 @@ Mapping details and editable rules: `references/barrotube-schema.md`.
 ### Step 1 — Generate the image on ChatGPT
 
 Follow `references/chatgpt-image.md` for the exact, verified UI steps. In short:
-open chatgpt.com, type an explicit image-generation prompt, wait for a portrait
-image to appear, open the image share/download modal, then save it directly to
-`Image/<slug>.png` with Playwright `download.saveAs()` when available.
+open chatgpt.com, **attach the channel character sheet** (see below), type an
+explicit image-generation prompt, wait for a portrait image to appear, open the
+image share/download modal, then save it to `Image/<slug>.png` (Playwright
+`download.saveAs()` when available; claude-in-chrome uses the History+Finder
+retrieval, see "Downloads land on disk" gotcha).
+
+**Attach the character reference (REQUIRED when the channel has a sheet).** Before
+typing the prompt, attach the channel's official character sheet so the mascot
+matches exactly — 바로경제 = `~/BarroTubeData/workspace/docs/바로경제_캐릭터시트.png`
+(constants: `~/BarroTubeData/CLAUDE.md`, channel `character-dna.md`, `role.md`).
+Attach via macOS clipboard, then paste into the composer:
+`osascript -e 'set the clipboard to (read (POSIX file "<sheet.png>") as «class PNGf»)'`
+→ click composer → Cmd+V (retry once if the first paste no-ops). Then start the
+prompt with `Use the attached character sheet as the exact reference for the mascot`
+and describe only scene/pose/expression/props. Full steps + fallback:
+`references/chatgpt-image.md` Step 0.
+
+**Consistency rules that actually held up (EP-2026-0065/0066, 마시):**
+- **Re-anchor once per episode, then let context carry it.** Attach the sheet for
+  **scene 1** in a fresh/continuing ChatGPT conversation; scenes 2–N in that **same
+  chat** stay on-model from conversation context without re-attaching. Re-attach only
+  if the mascot visibly drifts.
+- **Background is SEPARATE from the character.** The sheet defines the character *only*.
+  Put the scene's look in an explicit `BACKGROUND (…, SEPARATE from the character): …`
+  block (channel navy-cinematic palette — see the channel `scene-backgrounds.md` /
+  `CLAUDE.md`), so a plain-white "clean light background" doesn't leak in. This was an
+  explicit operator correction: "배경은 캐릭터 시트와 별개로 진행되어야 해".
+- **⚠️ Retrieval trap — the attached sheet pollutes "grab the last portrait image".**
+  ChatGPT **generated** images come back at the model's portrait size (observed
+  **941×1672**), but the **attached character sheet** sits in the DOM at its *own*
+  size (observed **1024×1535**), and a long conversation also holds cached/older
+  portrait `<img>` layers. A JS "download the last portrait `<img>`" heuristic then
+  silently saves the **sheet** (or a previous scene) instead of the new render.
+  → **Use the detail-view download, which is unambiguous:** click the new image to open
+  its detail/editor view (title like "…의 순간"), click the **top-right ⬇**, then retrieve
+  the newest `ChatGPT Image *.png` via History+Finder (Downloads gotcha below). Always
+  **eyeball the saved file** — if it's the turnaround sheet or the wrong scene, re-grab.
+  (The JS `<a download>` blob-fetch trick works for ChatGPT stills *if* you filter to the
+  generated size and confirm it's the newest, but it is fragile in long chats — prefer
+  detail-view download.)
+- **Intro/outro cards: navy background from ChatGPT, Korean title composited, not typed.**
+  ChatGPT garbles Korean text, so generate the card as a **text-free** navy 마스코트
+  background (mascot lower-center, top ~55% left empty) and burn the Korean title +
+  channel badge (+ 구독/좋아요 CTA on the endcard) with PIL (`AppleSDGothicNeo` Bold,
+  index 6). Brand intro/outro backgrounds can be **reused across episodes** — only the
+  title text changes. `48_outro.png` doubles as `48_endcard.png` so render-direct
+  appends it with BGM continuing.
 
 Timing rule: start `chatgpt_image_cutN` before sending the prompt and end it only
 after the file has been saved and validated.
@@ -243,8 +287,46 @@ python scripts/reel_render_plan.py "$REEL/script.md"     # -> [{cut, slug, image
 ```
 Report final `56_capcut_export/video.mp4`, contact sheet, and stream validation.
 
+## Carousel mode (1:1, 4~5 slides) — `scripts/carousel_job.py`
+
+A carousel is **not a reel with square crops** — it is its own C0~C4 state machine, and its
+default source of imagery is **assets you already shipped**, not new generations:
+
+```bash
+CAR=~/BarroAiFactory/today.myo/daily/first-week
+python3 scripts/carousel_job.py autopilot "$CAR" --episode BT-EP07
+#   C0 script.md ('## SLIDE n' blocks)  → C1 slides/slide-N.png (1080x1080)
+#   → C2 60_qa_report.carousel.json     → C3 70_publish_meta.instagram.json + caption.md
+#   → C4 publish = HITL (this script never posts)
+```
+
+Each slide declares its **이미지 소스** and that decides whether a browser is needed at all:
+
+| source | meaning | browser? |
+|---|---|---|
+| `../../barrotube/ep01_x/Image/ep01-cut1.png` | reuse a QA-passed reel still | ❌ no |
+| `video:../../barrotube/ep04_x/video/ep04-cut5.mp4#t=1.4` | pull a frame from a shipped clip (ffmpeg) | ❌ no |
+| `generate:<prompt>` | genuinely new art | ✅ ChatGPT |
+
+Recap/album/manual-style carousels (weekly recap, growth album, "how to use my human")
+should use the first two: **zero character drift, zero generation cost, and the recap
+narrative literally wants the old shots.** `build` renders the 1:1 canvas, cover-crops with a
+per-slide `크롭` anchor (`upper` by default — cat faces sit high in 9:16 frames), lays a
+gradient caption band, and stamps the episode badge + `n/N` page indicator.
+
+`qa` writes the §6-carousel 5-item report: 1:1 spec / count / order / md5-dupes / caption
+forbidden-phrases are **automatic**; the **DNA 3요소** check is *inherited* when a slide's
+source reel has `60_qa_report.images.json: ok` and otherwise left as "human must look".
+`sync --json` is what a board/bridge reads — it derives C0~C4 purely from files on disk.
+
 ## Gotchas learned the hard way (read these — they save a lot of flailing)
 
+- **No still anchor = character drift.** A reel whose clips were made text→video (empty
+  `Image/`) will silently change the character. Measured on today.myo ep04: 4 of 6 Grok
+  clips came back as a *different cat* (fluffy white long-hair instead of the locked silver
+  tabby short-hair). Always image→video, and if `Image/` is empty for a reel that has clips,
+  treat those clips as unverified — check frames before reusing them anywhere (e.g. a recap
+  carousel).
 - **Don't curl ChatGPT image URLs.** `backend-api/estuary/content?...` URLs usually
   require browser cookies and return 403 from terminal. Use the page's download
   button with Playwright `download.saveAs()`.
@@ -275,6 +357,30 @@ Report final `56_capcut_export/video.mp4`, contact sheet, and stream validation.
   later.
 - **Grok file upload may not expose a modal.** If `browser_file_upload` says there is
   no modal state, use `page.locator('input[type="file"]').first().setInputFiles(path)`.
+- **claude-in-chrome: attach an image via macOS clipboard, not file paths.** `file_upload`
+  rejects host paths and `localhost`/`base64` bridges are blocked. To attach a still or the
+  character sheet to ChatGPT or Grok: `osascript -e 'set the clipboard to (read (POSIX file
+  "<png>") as «class PNGf»)'` then click the composer + **Cmd+V**. The **first paste right
+  after a fresh page load no-ops** — retry the click+Cmd+V in a separate action and confirm
+  the thumbnail. Same flakiness applies to the first text `type` after navigation.
+- **claude-in-chrome: downloads DO land on disk — Bash just can't `ls` them.** macOS TCC
+  blocks the Bash process from readdir/read of `~/Downloads` (so `ls` shows empty, `cp` gives
+  "Operation not permitted"), but the browser download itself succeeds. Retrieve it by reading
+  the exact path from Chrome's History DB and copying via Finder (which has TCC access):
+  `sqlite3 <~/Library/Application Support/Google/Chrome/Default/History copy> "SELECT target_path
+  FROM downloads WHERE target_path LIKE '%ChatGPT Image%' (or '%grok-video%') ORDER BY start_time
+  DESC LIMIT 1"` → `osascript -e 'tell application "Finder" to set name of (duplicate ((POSIX
+  file "<src>") as alias) to ((POSIX file "<destdir>") as alias) with replacing) to "scene_001.png"'`.
+  (Grok public **images** are also curl-able at `imagine-public.x.ai/imagine-public/images/<postid>.jpg`;
+  Grok **videos** and ChatGPT estuary URLs need this download+Finder path.)
+  **⚠️ Copy the WAL too, or a just-finished download is invisible.** A freshly completed
+  download's `downloads` row often lives only in Chrome's **History-wal**, not yet in the
+  `History` file — so `cp History <tmp>.db` alone returns the *previous* download. Copy all
+  three next to each other before querying: `cp History <tmp>.db; cp History-wal <tmp>.db-wal;
+  cp History-shm <tmp>.db-shm`. Bit me on every Grok video (the button downloads fine but the
+  row hadn't flushed). Also: **the JS `<a download>` blob-fetch does NOT work for Grok videos**
+  — they play via MediaSource (MSE), so `fetch(video.currentSrc)` returns **0 bytes**. Grok
+  videos must use the on-page **다운로드** button + this History(+WAL)+Finder retrieval.
 - **CapCut 2 vs CapCut.** Open drafts with CapCut 2. The older CapCut app may show an
   update-required dialog for projects created by newer CapCut.
 

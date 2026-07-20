@@ -5,6 +5,33 @@ Goal: produce one still PNG from `image_prompt` and save it as
 Playwright MCP when it is already logged in; it can save downloads directly to
 the project path with `download.saveAs()`.
 
+## Step 0 — Attach the channel character reference (REQUIRED when a sheet exists)
+
+If the channel has an **official character sheet**, attach that image to the
+image-generation request so the mascot matches exactly — do not rely on text alone.
+
+- **바로경제(econ-daily) 시트**: `~/BarroTubeData/workspace/docs/바로경제_캐릭터시트.png`.
+  Character constants: `~/BarroTubeData/CLAUDE.md` (auto-loaded policy),
+  `~/BarroTubeData/workspace/channels/<channel>/character-dna.md` (DNA, single source of truth),
+  `.../role.md` (role/identity). Other channels: `workspace/docs/<brand>_캐릭터시트.png`.
+- **How to attach (macOS clipboard — verified for claude-in-chrome & Playwright):**
+  ```bash
+  osascript -e 'set the clipboard to (read (POSIX file "/Users/beye/BarroTubeData/workspace/docs/바로경제_캐릭터시트.png") as «class PNGf»)'
+  ```
+  Then click the ChatGPT composer and paste with **Cmd+V**. A thumbnail attaches to
+  the composer (an inline `<img>` / attachment chip appears). `file_upload` host-path
+  and `localhost`/`base64` bridges do NOT work here — use the clipboard paste.
+- ⚠️ **First paste right after a fresh page load often no-ops** — click the composer +
+  Cmd+V again in a *separate* action and confirm the thumbnail before typing.
+- **Prompt wording with the attachment:** start the prompt with
+  `Use the attached character sheet as the exact reference for the mascot — identical body,
+  face, eyes, cheeks, colors and proportions.` then describe only the **scene, pose,
+  expression and props** (do not re-invent the character). Pick pose/expression from the
+  sheet's named set (neutral/happy/surprised/worried/determined/crying;
+  standing/walking/running/pointing/cheering/presenting).
+- If clipboard attach is genuinely unavailable, fall back to embedding the full DNA block
+  from `character-dna.md` as text in the prompt (less exact, still on-model).
+
 ## Steps
 
 1. **Open the tab.** Navigate to `https://chatgpt.com/`. Wait ~3s and inspect the
@@ -42,8 +69,22 @@ the project path with `download.saveAs()`.
      `download.saveAs('/.../Image/<slug>.png')`.
    This avoids guessing the browser Downloads path.
 
+   **claude-in-chrome (no `download.saveAs`): use the detail-view download — it is the
+   only unambiguous grab.** Click the finished image to open its **detail/editor view**
+   (a titled lightbox, e.g. "…의 순간"), then click the **top-right ⬇** download icon. Then
+   retrieve the newest `ChatGPT Image *.png` from `~/Downloads` via the History(+WAL)+Finder
+   method (see SKILL.md gotcha). Press **Esc** to close the detail view before the next
+   prompt. Why not a JS "grab the last image" shortcut: when a **character sheet is
+   attached**, that sheet is an `<img>` in the DOM at its own size (e.g. `1024×1535`) while
+   generated stills are `941×1672`, and long chats keep cached/older portrait layers — a
+   "last/largest portrait" grab silently saves the **sheet or a previous scene**. The
+   detail-view download acts on exactly the image you clicked, so it can't pick the sheet.
+   **Always eyeball the saved PNG** and re-grab if it's the turnaround sheet or wrong scene.
+
 7. **Validate.** `file Image/<slug>.png` should show a portrait PNG. Typical
-   ChatGPT output is `941 x 1672`.
+   ChatGPT output is `941 x 1672`. If it reads `1024×1535` you grabbed the **attached
+   character sheet**, not a scene — re-download via the detail view. Also open the image
+   and confirm it's the intended scene (not a repeat of an earlier cut).
 
 ## Playwright MCP pattern
 
@@ -87,6 +128,13 @@ await download.saveAs('/Users/beye/.../Image/<slug>.png');
   re-`navigate` to the conversation URL — ChatGPT restores it from the server.
 
 ## Fallback: programmatic download (only if the UI download is unavailable)
+
+⚠️ **Only when no character sheet is attached and the chat is short.** The selector below
+picks the largest-area `<img>`, which can be the **attached sheet** (`1024×1535`) or a
+cached older still rather than the new render — the exact failure the detail-view download
+avoids. When a sheet is attached, prefer the detail-view download in Step 6. If you must use
+this, filter to the generated size (`naturalWidth === 941`), pick the **last** match in DOM
+order, and verify the saved PNG visually before trusting it.
 
 In the page context, build a Blob from the rendered image and click a temporary
 `<a download>`. This still lands in the browser download area:
