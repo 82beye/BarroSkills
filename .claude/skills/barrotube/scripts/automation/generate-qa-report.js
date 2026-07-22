@@ -140,11 +140,37 @@ async function main() {
     } catch { /* probe fail은 silent */ }
   }
 
+  // 렌더 부가 구간 보정 (2026-07-22): render-direct.js가 씬 클립 앞뒤에 붙이는 길이를
+  // target에 반영하지 않아 Duration이 구조적으로 항상 FAIL하던 문제를 해결한다.
+  //   - 씬 클립은 TTS 실측 길이로 잘리므로 기준을 TTS 합계로 잡는다
+  //     (target_total_seconds는 씬별 padding을 포함한 값이라 실제보다 크다)
+  //   - 인트로 카드 prepend / outro freeze pad / 엔드카드 append 를 더한다
+  let renderPadNote = '';
+  const ttsSum = scenes.reduce((sum, s) => {
+    const p = join(baseDir, '40_assets', 'tts', `scene_${s.scene_id}.wav`);
+    if (!existsSync(p)) return sum;
+    const d = parseFloat(probe(p)?.format?.duration || 0);
+    return sum + (d > 0 ? d : 0);
+  }, 0);
+  if (ttsSum > 0) {
+    const introExists = ['45_intro.png', '47_thumbnail.png']
+      .some(f => existsSync(join(baseDir, f)));
+    const introSec = introExists ? (Number(process.env.BT_INTRO_SEC) || 2) : 0;
+    const endcardExists = ['48_outro.png', '48_endcard.png']
+      .some(f => existsSync(join(baseDir, f)));
+    const endcardSec = endcardExists
+      ? (Number(process.env.BT_ENDCARD_SEC) || (spec.aspect_h > spec.aspect_w ? 2.5 : 3.5))
+      : 0;
+    const padSec = outroSlotPath ? 0.3 : 1.0;   // render-direct OUTRO_PAD_SEC
+    target = ttsSum + introSec + padSec + endcardSec + outroSlotAdded;
+    renderPadNote = ` [tts ${ttsSum.toFixed(2)}s + intro ${introSec}s + pad ${padSec}s + endcard ${endcardSec}s]`;
+  }
+
   const checks = [];
 
-  // Duration (format별 tolerance, outro slot 반영)
+  // Duration (format별 tolerance, outro slot + 렌더 부가 구간 반영)
   const dDiff = Math.abs(actualDur - target);
-  const durNote = outroSlotAdded > 0 ? ` [outro slot +${outroSlotAdded.toFixed(2)}s]` : '';
+  const durNote = (outroSlotAdded > 0 ? ` [outro slot +${outroSlotAdded.toFixed(2)}s]` : '') + renderPadNote;
   checks.push({
     item: 'Duration',
     mark: dDiff < spec.duration_tolerance ? OK : (dDiff < spec.duration_tolerance * 1.5 ? WARN : FAIL),
