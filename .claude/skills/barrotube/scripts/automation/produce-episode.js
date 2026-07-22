@@ -336,10 +336,11 @@ async function main() {
       }
     }
 
-    // S6f Endcard (구독/좋아요/알림 CTA 카드) — 2026-06-27 추가.
-    // render-direct.js(S7)가 48_endcard.png 존재 시 영상 끝에 정지 클립으로 붙인다(자산 게이트).
+    // S6f Outro/Endcard (구독/좋아요/알림 CTA 카드).
+    // 브라우저 생성 48_outro.png가 있으면 그대로 사용하고, 없을 때만 로컬 CTA 카드를 만든다.
     const endcardPath = join(p.base, '48_endcard.png');
-    if (!exists(endcardPath) || force) {
+    const outroPath = join(p.base, '48_outro.png');
+    if ((!exists(endcardPath) && !exists(outroPath)) || force) {
       runTracked(absEp, episodeId, 'S6f', 'S6f Endcard (구독/좋아요)', '08-image-generator',
         'scripts/automation/generate-endcard.js', [
           '--episode', relEp,
@@ -347,7 +348,7 @@ async function main() {
           ...(force ? ['--force'] : []),
         ]);
     } else {
-      console.log(`\n⏭  S6f Endcard: 이미 있음 (skip)`);
+      console.log(`\n⏭  S6f Outro/Endcard: 이미 있음 (skip)`);
     }
 
     // S7 Render

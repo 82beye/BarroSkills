@@ -51,6 +51,27 @@ args가 있으면 곧장 해당 흐름으로:
 4. `workspace/.in-flight.json` stale lock 확인 (있으면 `node scripts/automation/in-flight-lock.js status` 호출)
 5. macOS Keychain `YOUTUBE_OAUTH_REFRESH_TOKEN` 존재 (S11 진입 시점에 다시 검증 가능)
 
+## 신규 에피소드 자동 파이프라인 (우선 규칙)
+
+사용자가 **"신규 에피소드 생성"**, "새 에피소드", "EP 하나 뽑아줘", 또는
+`/barrotube produce <topic>`을 요청하면 아래 6단계를 **확인 질문 없이 순서대로** 수행한다.
+주제가 없으면 최신 마케팅/뉴스 후보에서 하나를 자동 선정한다. 이 규칙은 Mode A의
+일반 설명 및 단계별 비용 확인보다 우선하며, 최초 요청은 S0~S9 실행 승인으로 간주한다.
+단, 외부 공개인 6단계만 최종 사용자 확인을 남긴다.
+
+| # | 자동 단계 | 완료 조건 |
+|---|---|---|
+| 1 | 주제 검색·분석 → 전략·팩트체크 → 스크립트 | `10_market_research.md`, `20_strategy.md`, `30_script.md`, `35_factcheck.md` 생성. 최신 사실 검색은 `agent-reach`로 수행하고 HIGH 팩트체크는 중단한다. |
+| 2 | 스크립트 → TTS·길이 동기화 | `40_assets/tts/scene_NNN.wav`와 동기화된 스크립트 생성. |
+| 3 | 캐릭터 시트 첨부 → ChatGPT 씬 이미지 | `바로경제_캐릭터시트.png`를 각 생성 전에 첨부해 `40_assets/images/scene_NNN.png`에 저장. |
+| 4 | 씬 이미지 → Grok 9:16 영상 | 각 이미지를 Grok Imagine에 첨부해 `40_assets/videos/scene_NNN.mp4`로 저장. |
+| 5 | 인트로·아웃트로 추가 → 최종 렌더·QA·메타 | ChatGPT에서 `45_intro.png`, `48_outro.png`를 생성·검수하고 FFmpeg/CapCut으로 `55_render/video.mp4`를 만든다. QA 통과 후 `70_publish_meta.json`을 생성한다. |
+| 6 | 발행 여부 확인 → YouTube 발행 | QA 통과본·제목·설명·예약 시각을 요약해 발행 여부만 묻는다. 승인 시 S10 토큰을 만들고 S11로 업로드한다. |
+
+3~5단계는 `barrotube-media-render` 스킬의 브라우저 절차를 사용한다. 브라우저 로그인,
+생성 한도, 결제 벽처럼 실제 진행을 막는 상태만 즉시 보고하고, 사용자가 해결하면 마지막
+완료 산출물부터 재개한다. `48_outro.png`가 있으면 렌더러가 로컬 `48_endcard.png`보다 우선 사용한다.
+
 ### Step 3 — 모드별 흐름
 
 #### Mode A. 신규 EP (가장 중요)
@@ -207,7 +228,7 @@ bash $BARROTUBE_HOME/lib/install-cron.sh uninstall daily-producer
 
 ## Key Rules
 
-1. **비용 발생 단계 가드**: S6a(TTS), S6c(Image), S11(Publish)는 **반드시 `--execute` 플래그 필요**. 누락 시 dry-run echo만.
+1. **비용·공개 가드**: 신규 에피소드 생성 요청은 S0~S9(TTS·이미지 포함) 실행 승인이다. S11(Publish)은 QA 통과 후 사용자 발행 확인이 별도로 필요하다.
 2. **직렬 처리 락**: `workspace/.in-flight.json` 보유 중이면 다른 EP 시도 거부. `node scripts/automation/in-flight-lock.js status` 또는 `force-release`로 관리.
 3. **Audit log 필수**: 모든 단계 종료 시 `logs/audit/YYYY-MM-DD.jsonl`에 JSONL 한 줄 append.
 4. **월 예산 한도**: `config/budget-policy.json`의 role별 한도 초과 시 자동 정지. `node scripts/automation/budget-report.js`로 사용량 확인.

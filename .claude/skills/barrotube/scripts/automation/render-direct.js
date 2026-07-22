@@ -514,10 +514,13 @@ export function renderDirect({ episodeDir, outPath, canvas, platform: platformHi
     console.log(`🎬 Outro slot clip appended (${outroClipDur.toFixed(2)}s, TTS=${outroTtsDur.toFixed(2)}s) from ${outroTtsPath.split('/').slice(-1)[0]}`);
   }
 
-  // Endcard (구독/좋아요 CTA): 48_endcard.png 존재 시 영상 끝에 정지 클립으로 추가 (자산 게이트).
-  // 2026-06-27 추가: 채널 심볼 + 구독/좋아요 엔드카드. 자산 없으면 무동작(기존 에피소드 안전).
+  // Outro/Endcard: 브라우저 생성 48_outro.png를 우선하고, 없으면 로컬 48_endcard.png를 사용한다.
+  // 자산이 없으면 무동작(기존 에피소드 안전).
   // BGM은 concat 후 전체에 믹스되므로 엔드카드 구간에도 음악이 자연스럽게 이어진다.
-  const endcardPath = join(baseDir, '48_endcard.png');
+  const endcardPath = [
+    join(baseDir, '48_outro.png'),
+    join(baseDir, '48_endcard.png'),
+  ].find(p => existsSync(p));
   if (existsSync(endcardPath)) {
     // BT_ENDCARD_SEC로 조절 가능 (Shorts 60초 정합 등 미세 조정용).
     const endcardDurationSec = Number(process.env.BT_ENDCARD_SEC)
@@ -531,7 +534,7 @@ export function renderDirect({ episodeDir, outPath, canvas, platform: platformHi
       outPath: endcardClipPath,
     });
     clipPaths.push(endcardClipPath);
-    console.log(`🎬 Endcard appended (+${endcardDurationSec}s, from 48_endcard.png)`);
+    console.log(`🎬 Outro/Endcard appended (+${endcardDurationSec}s, from ${endcardPath.split('/').pop()})`);
   }
 
   // Concat
