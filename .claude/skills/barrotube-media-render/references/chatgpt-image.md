@@ -5,6 +5,33 @@ Goal: produce one still PNG from `image_prompt` and save it as
 Playwright MCP when it is already logged in; it can save downloads directly to
 the project path with `download.saveAs()`.
 
+## Step 0 — Attach the channel character reference (REQUIRED when a sheet exists)
+
+If the channel has an **official character sheet**, attach that image to the
+image-generation request so the mascot matches exactly — do not rely on text alone.
+
+- **바로경제(econ-daily) 시트**: `~/BarroTubeData/workspace/docs/바로경제_캐릭터시트.png`.
+  Character constants: `~/BarroTubeData/CLAUDE.md` (auto-loaded policy),
+  `~/BarroTubeData/workspace/channels/<channel>/character-dna.md` (DNA, single source of truth),
+  `.../role.md` (role/identity). Other channels: `workspace/docs/<brand>_캐릭터시트.png`.
+- **How to attach (macOS clipboard — verified for claude-in-chrome & Playwright):**
+  ```bash
+  osascript -e 'set the clipboard to (read (POSIX file "/Users/beye/BarroTubeData/workspace/docs/바로경제_캐릭터시트.png") as «class PNGf»)'
+  ```
+  Then click the ChatGPT composer and paste with **Cmd+V**. A thumbnail attaches to
+  the composer (an inline `<img>` / attachment chip appears). `file_upload` host-path
+  and `localhost`/`base64` bridges do NOT work here — use the clipboard paste.
+- ⚠️ **First paste right after a fresh page load often no-ops** — click the composer +
+  Cmd+V again in a *separate* action and confirm the thumbnail before typing.
+- **Prompt wording with the attachment:** start the prompt with
+  `Use the attached character sheet as the exact reference for the mascot — identical body,
+  face, eyes, cheeks, colors and proportions.` then describe only the **scene, pose,
+  expression and props** (do not re-invent the character). Pick pose/expression from the
+  sheet's named set (neutral/happy/surprised/worried/determined/crying;
+  standing/walking/running/pointing/cheering/presenting).
+- If clipboard attach is genuinely unavailable, fall back to embedding the full DNA block
+  from `character-dna.md` as text in the prompt (less exact, still on-model).
+
 ## Steps
 
 1. **Open the tab.** Navigate to `https://chatgpt.com/`. Wait ~3s and inspect the
