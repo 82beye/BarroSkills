@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hash-bound HITL approval and duplicate gate for media rendering.
+"""Hash-bound HITL approval and duplicate prevention for media rendering.
 
 macOS only: approval signatures use the user's Keychain item. This core gate
 does not publish; the experimental publisher executor is held separately.
@@ -282,7 +282,7 @@ class ContractArgumentParser(argparse.ArgumentParser):
 
 def build_parser() -> argparse.ArgumentParser:
     parser = ContractArgumentParser(description=__doc__); commands = parser.add_subparsers(dest="command", required=True)
-    for name, function in (("approve", "record interactive approval"), ("verify", "verify approval and duplicate gate")):
+    for name, function in (("approve", "record approval and prevent duplicates"), ("verify", "verify approval artifacts and expiry")):
         sub = commands.add_parser(name, help=function); sub.add_argument("reel"); sub.add_argument("--video"); sub.add_argument("--meta"); sub.add_argument("--channel")
         if name == "approve": sub.add_argument("--approver", required=True); sub.add_argument("--ttl", type=float, default=DEFAULT_TTL_HOURS)
     return parser

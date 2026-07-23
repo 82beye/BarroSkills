@@ -11,11 +11,13 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "render_reel_job.py"
+sys.path.insert(0, str(SCRIPT.parent))
 PNG_HEADER = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
               + (1080).to_bytes(4, "big") + (1920).to_bytes(4, "big"))
 SPEC = importlib.util.spec_from_file_location("render_reel_job", SCRIPT)
@@ -408,11 +410,50 @@ class RenderJobV2Test(unittest.TestCase):
             target.mkdir(parents=True)
             original = source.read_bytes(); (target / "render-job.json").write_bytes(original)
             store = JOB.RenderJob(target)
+            before = json.loads(original)
+            before_completed = sum(stage.get("status") == "completed" for stage in before["stages"])
+            before_statuses = [stage.get("status") for stage in before["stages"]]
+            before_notes = [stage.get("notes", []) for stage in before["stages"]]
+            before_cuts = [{key: cut.get(key) for key in ("cut", "slug", "image", "motion", "caption")}
+                           for cut in before.get("cuts", [])]
             self.assertEqual(original, store.path.read_bytes())
             data = store.sync(store.load()); store.save(data)
             self.assertEqual(JOB.SCHEMA, data["schema"])
+            self.assertEqual(before_completed, sum(stage.get("status") == "completed" for stage in data["stages"]))
+            self.assertEqual(before_statuses, [stage.get("status") for stage in data["stages"]])
+            self.assertEqual(before_notes, [stage.get("notes", []) for stage in data["stages"]])
+            after_cuts = [{key: cut.get(key) for key in ("cut", "slug", "image", "motion", "caption")}
+                          for cut in data.get("cuts", [])]
+            self.assertEqual(before_cuts, after_cuts)
             self.assertEqual(original, (target / JOB.BACKUP_FILE).read_bytes())
             self.assertNotEqual(original, (target / "render-job.json").read_bytes())
+
+    def test_consumed_clip_replacement_downgrades_r4(self) -> None:
+        self.write_script(image=True, cuts=2)
+        self.make_clip("cut1", 4, "black"); self.make_clip("cut2", 4, "white")
+        self.assertEqual(0, self.run_cli("init", self.reel)[0])
+        self.complete_prefix("R5"); self.assertEqual(0, self.run_cli("sync", self.reel)[0])
+        replacement = self.reel / "video" / "cut1.mp4"
+        replacement.unlink(); self.make_clip("cut1", 4, "red")
+        self.assertEqual(0, self.run_cli("sync", self.reel)[0])
+        r4 = self.raw_job()["stages"][JOB.STAGE_INDEX["R4"]]
+        self.assertEqual("pending", r4["status"])
+        self.assertTrue(r4["stale"])
+
+    def test_r10_end_uses_approval_verifier(self) -> None:
+        self.assertEqual(0, self.run_cli("init", self.reel)[0])
+        self.complete_prefix("R9")
+        args = SimpleNamespace(reel=self.reel, stage="R10", approve="operator: checked", cut=None, note=None)
+        with patch("publish_gate.verify", return_value={"ok": True, "reason": "approval valid"}):
+            code, _ = JOB.cmd_end(args)
+        self.assertEqual(0, code)
+        self.assertEqual("completed", self.raw_job()["stages"][JOB.STAGE_INDEX["R10"]]["status"])
+
+        self.assertEqual(0, self.run_cli("init", self.reel)[0])
+        self.complete_prefix("R9")
+        with patch("publish_gate.verify", return_value={"ok": False, "reason": "approval expired"}):
+            with self.assertRaises(JOB.ConfigError):
+                JOB.cmd_end(args)
 
     def test_last_clip_and_still_cleanup_completes_in_progress_r4(self) -> None:
         self.write_script(image=True, cuts=2)

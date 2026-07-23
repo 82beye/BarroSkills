@@ -768,7 +768,7 @@ class RenderJob:
                         continue
                     # A replaced output is the new owner evidence and only makes
                     # consumers stale. A missing output makes its owner stale too.
-                    start = index + 1 if complete_by_stage[sid] else index
+                    start = index if sid == "R4" else (index + 1 if complete_by_stage[sid] else index)
                     if start < len(STAGES):
                         candidate = (start, f"{sid} output SHA-256 changed")
                         if earliest is None or candidate[0] < earliest[0]:
