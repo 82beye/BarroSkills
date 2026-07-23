@@ -36,6 +36,32 @@ def _field(block, *labels):
     return m.group(1).strip().rstrip("*").strip() if m else ""
 
 
+def _block_field(block, *labels):
+    """Read a same-line value or the following non-empty markdown block."""
+    pat = "|".join(labels)
+    match = re.search(
+        r"(?mi)^[ \t\-*>]*\**[ \t]*(?:%s)[^:：\n]*[:：]\**[ \t]*(.*)$" % pat,
+        block,
+    )
+    if not match:
+        return ""
+    first = match.group(1).strip().rstrip("*").strip()
+    if first:
+        return first
+
+    tail = block[match.end():]
+    tail = tail[2:] if tail.startswith("\r\n") else tail[1:] if tail.startswith("\n") else tail
+    lines = []
+    for line in tail.splitlines():
+        value = line.strip()
+        if not value or value.startswith("#"):
+            break
+        if re.match(r"^[\s\-*>]*\*\*[^*\n]+(?:[:：]\*\*|\*\*[:：])", line):
+            break
+        lines.append(value)
+    return " ".join(lines)
+
+
 def _to_float(s):
     m = re.search(r"[\d]+(?:\.[\d]+)?", s or "")
     return float(m.group(0)) if m else None
@@ -70,7 +96,6 @@ def main():
                  or re.search(r"`([^`]+\.(?:png|jpe?g))`", b, re.I))
         if not img_m:
             continue  # not a renderable cut block
-        mot_m = re.search(r"(?:Grok\s*모션|motion)\s*[:：]\s*(.+)", b)
         cap_m = re.search(r"자막[^:：\n]*[:：]\s*(.+)", b)
 
         def clean(s):
@@ -81,7 +106,7 @@ def main():
         if not os.path.isabs(img):
             img = os.path.normpath(os.path.join(root, img))
         slug = os.path.splitext(os.path.basename(img))[0]
-        motion = clean(mot_m.group(1)) if mot_m else ""
+        motion = clean(_block_field(b, r"Grok\s*모션", "motion"))
         caption = clean(cap_m.group(1)) if cap_m else ""
 
         # shot-composition fields (all optional)

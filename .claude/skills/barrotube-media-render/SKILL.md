@@ -347,6 +347,19 @@ source reel has `60_qa_report.images.json: ok` and otherwise left as "human must
 
 ## Output
 
+## Render job termination contract
+
+`render_reel_job.py` ends every command with compact JSON. Exit codes are stable:
+
+- `0` — completed or accepted
+- `2` — invalid usage/configuration, missing approval, or missing evidence
+- `3` — blocked by prerequisite, stale state, or gate decision
+- `4` — recoverable failure (retry is safe)
+- `5` — fatal failure (manual intervention required)
+
+`end` never clears unrelated stale cut records; resolve each cut explicitly first.
+R11 cannot be skipped and requires a separate `90_timing/postmortem.md` before end.
+
 - `Image/<slug>.png` — the still (ChatGPT).
 - `video/<slug>.mp4` — the 9:16 / 720p / ~10s clip (Grok).
 - `55_render/video.mp4` — FFmpeg master merge.
