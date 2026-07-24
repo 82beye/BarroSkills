@@ -363,7 +363,7 @@ function resolveBgmPath(epAssetsDir, scriptFm) {
   return null;
 }
 
-export function renderDirect({ episodeDir, outPath, canvas, platform: platformHint }) {
+export function renderDirect({ episodeDir, outPath, canvas, platform: platformHint, allowStills = false }) {
   if (!hasFfmpeg()) {
     throw new Error('ffmpeg not found. Install: brew install ffmpeg');
   }
@@ -398,6 +398,24 @@ export function renderDirect({ episodeDir, outPath, canvas, platform: platformHi
   const canvasDim = chosenCanvas === 'vertical' ? [1080, 1920] : [1920, 1080];
 
   console.log(`📐 Format: ${format} → canvas=${chosenCanvas} (${canvasDim.join('x')}), layout=${usingV2 ? 'v2' : 'v1'}, base=${baseDir.replace(episodeDir + '/', '') || '.'}`);
+
+  // 2026-07-24: 파이프라인 단계 누락(Grok 영상화 건너뛰기) 방지 게이트.
+  // media-render 정상 흐름은 ①이미지 생성 → ②Grok image→video 영상화
+  // (40_assets/videos/scene_NNN.mp4) → ③렌더. 클립이 없으면 예전 코드는 조용히
+  // 정지 이미지 Ken Burns로 폴백했는데, 이 때문에 EP-2026-0069가 모션 없이 발행됐다.
+  // 이제 클립이 하나라도 빠지면 기본 중단하고, 의도적 정지 이미지 렌더는 --allow-stills 로만.
+  const missingMotion = scenes
+    .map((s, i) => s.scene_id || String(i + 1).padStart(3, '0'))
+    .filter(sid => !existsSync(join(assetsDir, 'videos', `scene_${sid}.mp4`)));
+  if (missingMotion.length && !allowStills) {
+    console.error(`❌ Grok 모션 클립 누락 (${missingMotion.length}/${scenes.length} 씬): ${missingMotion.join(', ')}`);
+    console.error(`   media-render 파이프라인은 [이미지 → Grok 영상화 → 렌더] 순서입니다.`);
+    console.error(`   barrotube-media-render 스킬로 각 씬 이미지를 image→video 변환해`);
+    console.error(`   ${join(assetsDir, 'videos')}/scene_NNN.mp4 를 먼저 만든 뒤 다시 렌더하세요.`);
+    console.error(`   (비권장) 정지 이미지로만 렌더하려면 --allow-stills 를 붙이세요.`);
+    process.exit(3);
+  }
+
   const workDir = mkdtempSync(join(tmpdir(), 'bt-render-'));
   const clipPaths = [];
 
@@ -578,8 +596,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
 
   if (!opts.episode || !opts.out) {
-    console.error('Usage: render-direct.js --episode <dir> --out <path.mp4> [--canvas vertical|horizontal]');
+    console.error('Usage: render-direct.js --episode <dir> --out <path.mp4> [--canvas vertical|horizontal] [--allow-stills]');
     console.error('  (canvas auto-inferred from script frontmatter.format if omitted)');
+    console.error('  --allow-stills: Grok 모션 클립 없이 정지 이미지로 렌더 허용 (비권장 — 기본은 클립 필수)');
     process.exit(1);
   }
 
@@ -598,6 +617,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       outPath: resolve(opts.out),
       canvas: opts.canvas,
       platform: opts.platform,
+      allowStills: Boolean(opts['allow-stills']),
     });
   } catch (e) {
     console.error(`❌ Render failed: ${e.message}`);
