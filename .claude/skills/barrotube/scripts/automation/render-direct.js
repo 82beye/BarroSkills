@@ -26,6 +26,7 @@
 
 import { readFileSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { parse as parseYAML } from 'yaml';
@@ -109,21 +110,77 @@ function renderSubtitlePng(text, outPath) {
   return outPath;
 }
 
+// ── Karaoke 자막 (옵션, 채널별) ──────────────────────────────────────────
+// config/subtitles.json 으로 켠다. mode=karaoke 면 문구를 단어 단위로 쪼개 TTS 시간에
+// 맞춰 앞에서부터 강조색으로 칠하는 PNG를 여러 장 그려 오버레이한다 (이 ffmpeg 빌드는
+// libass/drawtext 가 없어 텍스트는 전부 PNG). 해석 우선순위: env > channel > default.
+// 채널로 고정하지 않고, config 에 채널을 추가하면 그 채널도 켜진다.
+const KARAOKE_PY = existsSync(join(process.env.HOME, 'youtube-co/.venv/bin/python3'))
+  ? join(process.env.HOME, 'youtube-co/.venv/bin/python3') : 'python3';
+const KARAOKE_SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'render-karaoke-png.py');
+
+function resolveSubtitleStyle(channelId) {
+  const DEFAULT = {
+    mode: 'static', base_color: '#FFFFFF', highlight_color: '#FF9A1F',
+    outline_color: '#081320', font_size: 60,
+  };
+  let cfg = {};
+  try { cfg = JSON.parse(readFileSync(resolve('config/subtitles.json'), 'utf-8')); } catch { /* 없으면 static */ }
+  const chan = (cfg.channels && channelId && cfg.channels[channelId]) || {};
+  const style = { ...DEFAULT, ...(cfg.default || {}), ...chan };
+  if (process.env.BT_SUBTITLE_MODE) style.mode = process.env.BT_SUBTITLE_MODE; // 테스트 override
+  return style;
+}
+
+function renderKaraokePng(text, highlight, style, outPath, width) {
+  const r = spawnSync(KARAOKE_PY, [KARAOKE_SCRIPT, text, outPath,
+    '--highlight', String(highlight), '--width', String(width),
+    '--fontsize', String(style.font_size || 60),
+    '--base', style.base_color || '#FFFFFF',
+    '--hl', style.highlight_color || '#FF9A1F',
+    '--outline', style.outline_color || '#081320'], { stdio: 'pipe' });
+  if (r.status !== 0) return null;
+  return outPath;
+}
+
 // Ken Burns Zoom 설정 (2026-05-16, B2)
 // 정적 PNG가 음성 길이만큼 정지하던 단조로움 → 5% 천천히 줌인
 const KEN_BURNS_ENABLED = process.env.BT_DISABLE_KEN_BURNS !== '1';
 const KEN_BURNS_ZOOM_MAX = 1.05;
 const KEN_BURNS_FPS = 30;
 
-function renderScene({ imagePath, videoPath = null, ttsPath, durationSec, narration, workDir, sceneId, outPath, canvasW = 1080, canvasH = 1920 }) {
+function renderScene({ imagePath, videoPath = null, ttsPath, durationSec, narration, workDir, sceneId, outPath, canvasW = 1080, canvasH = 1920, subtitle = null }) {
   // 나레이션을 시간 기반 phrase로 분할 → 자막 PNG 여러 개 생성 → 시간 오버레이
   const phrases = narration ? splitNarrationByTime(narration, durationSec) : [];
   const overlays = [];
+  const karaoke = subtitle && subtitle.mode === 'karaoke';
   for (let i = 0; i < phrases.length; i++) {
     const p = phrases[i];
-    const png = join(workDir, `sub_${sceneId}_${i}.png`);
-    if (renderSubtitlePng(p.text, png)) {
-      overlays.push({ png, start: p.start, end: p.end });
+    if (karaoke) {
+      // 문구를 단어(공백 분리)로 쪼개 각 단어의 시간창을 잡고, 앞에서부터 k+1개 단어를
+      // 강조색으로 칠한 PNG를 그 창에 오버레이 → TTS 싱크로 글자색이 순차로 바뀐다.
+      // ponytail: 단어 시간은 글자수 비례 추정(기존 문구 자막과 동일 정밀도). 정확 싱크는
+      // ElevenLabs with-timestamps 사이드카가 생기면 이 분배만 교체하면 된다.
+      const words = p.text.split(/\s+/).filter(Boolean);
+      if (!words.length) continue;
+      const chars = words.map(w => w.length);
+      const totalC = chars.reduce((a, b) => a + b, 0) || 1;
+      const span = p.end - p.start;
+      let t = p.start;
+      for (let k = 0; k < words.length; k++) {
+        const wStart = t;
+        const wEnd = (k === words.length - 1) ? p.end : t + (chars[k] / totalC) * span;
+        t = wEnd;
+        const png = join(workDir, `ka_${sceneId}_${i}_${k}.png`);
+        if (renderKaraokePng(p.text, k + 1, subtitle, png, canvasW)) {
+          overlays.push({ png, start: wStart, end: wEnd });
+        }
+      }
+    } else {
+      const png = join(workDir, `sub_${sceneId}_${i}.png`);
+      if (renderSubtitlePng(p.text, png)) {
+        overlays.push({ png, start: p.start, end: p.end });
+      }
     }
   }
 
@@ -423,6 +480,12 @@ export function renderDirect({ episodeDir, outPath, canvas, platform: platformHi
     console.log(`🎬 Intro card prepended (${INTRO_DURATION_SEC}s silent, from ${introPath.split('/').pop()})`);
   }
 
+  // 자막 모드 해석 (채널별 옵션). config/subtitles.json 없거나 채널 미등록이면 static(무변화).
+  const subtitleStyle = resolveSubtitleStyle(meta.channel_id);
+  if (subtitleStyle.mode === 'karaoke') {
+    console.log(`💬 Subtitle: karaoke (channel=${meta.channel_id || '?'}, base=${subtitleStyle.base_color} → hl=${subtitleStyle.highlight_color})`);
+  }
+
   console.log(`🎬 Rendering ${scenes.length} scenes at ${canvasDim.join('x')}...`);
 
   for (let i = 0; i < scenes.length; i++) {
@@ -456,6 +519,7 @@ export function renderDirect({ episodeDir, outPath, canvas, platform: platformHi
       outPath: clipPath,
       canvasW: canvasDim[0],
       canvasH: canvasDim[1],
+      subtitle: subtitleStyle,
     });
 
     clipPaths.push(clipPath);
