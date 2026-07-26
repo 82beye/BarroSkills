@@ -22,6 +22,7 @@
 import { readFileSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import { parse as parseYAML } from 'yaml';
 import {
@@ -94,6 +95,7 @@ async function main() {
   const baseDir = scriptPath.replace(/\/30_script\.md$/, '');
   const videoPath = join(baseDir, '55_render/video.mp4');
   if (!existsSync(videoPath)) { console.error(`❌ Missing 55_render/video.mp4 under ${baseDir}`); process.exit(1); }
+  const videoSha256 = createHash('sha256').update(readFileSync(videoPath)).digest('hex');
 
   const md = readFileSync(scriptPath, 'utf-8');
   const fm = parseYAML(md.match(/^---\n([\s\S]*?)\n---/)[1]);
@@ -398,6 +400,7 @@ async function main() {
     fm.series_id ? `**Series**: \`${fm.series_id}\` [${fm.series_episode}/?]` : '',
     fm.persona ? `**Persona**: \`${fm.persona}\`` : '',
     `**Video**: \`55_render/video.mp4\` (${actualDur.toFixed(2)}s, ${w}×${h}, ${vStream?.codec_name}, ${sizeMB}MB)`,
+    `**Video SHA-256**: \`${videoSha256}\``,
     `**Risk**: \`${riskLevel}\``,
     '',
     '## Technical Checks',

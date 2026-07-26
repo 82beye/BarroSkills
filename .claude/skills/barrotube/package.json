@@ -5,7 +5,11 @@
   "type": "module",
   "private": true,
   "scripts": {
+    "test": "node --test tests/*.test.js",
     "bootstrap": "node scripts/automation/bootstrap.js",
+    "board": "node tools/board/server.js",
+    "channel:migrate": "node scripts/automation/channel-migrate.js",
+    "channel:document": "node scripts/automation/render-channel-document.js",
     "episode:create": "node scripts/automation/create-episode.js",
     "episode:run": "node scripts/automation/run-episode.js",
     "episode:status": "node scripts/automation/episode-status.js",

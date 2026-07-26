@@ -1,0 +1,240 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://barrotube.local/schemas/channel.schema.json",
+  "title": "BarroTube channel manifest",
+  "description": "Canonical channel manifest plus read-only compatibility for the legacy nested channel format.",
+  "oneOf": [
+    { "$ref": "#/$defs/canonical" },
+    { "$ref": "#/$defs/legacy" }
+  ],
+  "$defs": {
+    "channelId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9](?:[a-z0-9.-]{0,62}[a-z0-9])?$"
+    },
+    "schemaVersion": {
+      "oneOf": [
+        { "type": "integer", "minimum": 1 },
+        { "type": "string", "pattern": "^[0-9]+(?:\\.[0-9]+)*$" }
+      ]
+    },
+    "pathValue": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        { "type": "null" },
+        {
+          "type": "array",
+          "items": { "$ref": "#/$defs/pathValue" }
+        },
+        {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/pathValue" }
+        }
+      ]
+    },
+    "credentialTree": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        },
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/credentialTree" }
+        }
+      ]
+    },
+    "formatEntry": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "object",
+          "required": ["id"],
+          "properties": {
+            "id": { "type": "string", "minLength": 1 },
+            "enabled": { "type": "boolean" },
+            "persona": { "type": "string", "minLength": 1 },
+            "pipeline_profile": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "conflict": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "object",
+          "properties": {
+            "code": { "type": "string" },
+            "field": { "type": "string" },
+            "path": { "type": "string" },
+            "message": { "type": "string" },
+            "resolved": { "type": "boolean" },
+            "status": { "type": "string" },
+            "resolution": {}
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "canonical": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "id",
+        "revision",
+        "status",
+        "identity",
+        "paths"
+      ],
+      "properties": {
+        "schema_version": { "$ref": "#/$defs/schemaVersion" },
+        "id": { "$ref": "#/$defs/channelId" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "status": {
+          "enum": ["needs_review", "active", "paused", "archived"]
+        },
+        "identity": {
+          "type": "object",
+          "anyOf": [
+            { "required": ["display_name"] },
+            { "required": ["name"] }
+          ],
+          "properties": {
+            "display_name": { "type": "string", "minLength": 1 },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Read/import alias only; canonical writes use display_name."
+            },
+            "description": { "type": "string" },
+            "language": { "type": "string", "minLength": 2 },
+            "target_country": { "type": "string", "minLength": 2 },
+            "brand_name": { "type": "string" }
+          },
+          "additionalProperties": true
+        },
+        "platforms": {
+          "type": "object",
+          "additionalProperties": {
+            "oneOf": [
+              { "type": "boolean" },
+              { "type": "object", "additionalProperties": true }
+            ]
+          }
+        },
+        "pipeline": {
+          "type": "object",
+          "properties": {
+            "profile": { "enum": ["barrotube-s12", "media-render-r11", "carousel-c4"] },
+            "adapter": { "enum": ["barrotube-s12", "media-render-r11", "carousel-c4"] },
+            "additional_profiles": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "enum": ["barrotube-s12", "media-render-r11", "carousel-c4"] }
+            },
+            "stages": {
+              "oneOf": [
+                { "type": "array", "items": { "type": "string" } },
+                { "type": "object", "additionalProperties": true }
+              ]
+            }
+          },
+          "additionalProperties": true
+        },
+        "formats": {
+          "oneOf": [
+            {
+              "type": "array",
+              "items": { "$ref": "#/$defs/formatEntry" }
+            },
+            {
+              "type": "object",
+              "additionalProperties": true
+            }
+          ]
+        },
+        "personas": {
+          "oneOf": [
+            { "type": "array" },
+            { "type": "object" }
+          ]
+        },
+        "cadence": { "type": "object", "additionalProperties": true },
+        "paths": {
+          "type": "object",
+          "required": ["project_root"],
+          "properties": {
+            "project_root": { "type": "string", "minLength": 1 },
+            "episodes_root": { "$ref": "#/$defs/pathValue" },
+            "series_index": {
+              "oneOf": [
+                { "type": "string", "minLength": 1 },
+                { "type": "null" }
+              ]
+            },
+            "reference_docs": { "$ref": "#/$defs/pathValue" },
+            "character_dna": { "$ref": "#/$defs/pathValue" },
+            "character_sheets": { "$ref": "#/$defs/pathValue" },
+            "style_guides": { "$ref": "#/$defs/pathValue" },
+            "policies": { "$ref": "#/$defs/pathValue" }
+          },
+          "additionalProperties": { "$ref": "#/$defs/pathValue" }
+        },
+        "document": {
+          "type": "object",
+          "properties": {
+            "output_path": { "type": "string", "minLength": 1, "pattern": "\\.html$" },
+            "title": { "type": "string" },
+            "template": { "type": "string" }
+          },
+          "additionalProperties": true
+        },
+        "credentials": { "$ref": "#/$defs/credentialTree" },
+        "migration": {
+          "type": "object",
+          "properties": {
+            "sources": { "type": "array" },
+            "provenance": {},
+            "conflicts": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/conflict" }
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "legacy": {
+      "type": "object",
+      "required": ["channel"],
+      "properties": {
+        "channel": {
+          "type": "object",
+          "required": ["id"],
+          "properties": {
+            "id": { "$ref": "#/$defs/channelId" },
+            "name": { "type": "string" },
+            "description": { "type": "string" },
+            "language": { "type": "string" },
+            "target_country": { "type": "string" }
+          },
+          "additionalProperties": true
+        },
+        "revision": { "type": "integer", "minimum": 1 },
+        "status": {
+          "enum": ["needs_review", "active", "paused", "archived"]
+        },
+        "formats": {},
+        "cadence": { "type": "object" },
+        "credentials": { "$ref": "#/$defs/credentialTree" }
+      },
+      "additionalProperties": true
+    }
+  }
+}
