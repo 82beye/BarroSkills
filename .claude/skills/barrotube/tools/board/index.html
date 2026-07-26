@@ -804,6 +804,17 @@
         <select id="stageFilter" class="filter-select" aria-label="진행 단계 필터">
           <option value="">전체 단계</option>
         </select>
+        <select id="episodeSort" class="filter-select" aria-label="정렬 기준">
+          <option value="id">정렬: 에피소드 ID</option>
+          <option value="episode_no">정렬: Day/회차</option>
+          <option value="stage">정렬: 진행 단계</option>
+          <option value="updated_at">정렬: 최근 수정</option>
+          <option value="title">정렬: 제목</option>
+        </select>
+        <select id="episodeSortDir" class="filter-select" aria-label="정렬 방향">
+          <option value="desc">내림차순 ↓</option>
+          <option value="asc">오름차순 ↑</option>
+        </select>
       </div>
       <div id="episodeProductionSummary" class="production-summary" aria-label="에피소드 제작 요약"></div>
       <div class="episode-table-wrap">
@@ -1550,14 +1561,54 @@ function renderEpisodeProductionSummary() {
     + '<span class="generated" style="width:' + (generatedOnly / total * 100) + '%"></span></span>';
 }
 
+/* ── 정렬 ──
+ * 단계는 알파벳 비교가 무의미하다 — approval < assets < planned < published 로 정렬돼
+ * 제작 진행 순서가 뒤섞인다. stageLabel 이 정의한 진행 순서를 그대로 순위로 쓴다.
+ * 값이 없는 필드(episode_no 는 64개 중 17개만, updated_at 도 누락 가능)는 -1 로 밀어
+ * 내림차순에서 항상 뒤로 보낸다.
+ */
+var STAGE_ORDER = ['planned', 'script', 'assets', 'production', 'render', 'qa', 'qa-passed', 'approval', 'published'];
+
+function episodeSortValue(entry, key) {
+  var episode = entry.episode || {};
+  if (key === 'stage') return STAGE_ORDER.indexOf(entry.stage);
+  if (key === 'episode_no') {
+    var no = Number(episode.episode_no);
+    return isFinite(no) ? no : -1;
+  }
+  if (key === 'updated_at') {
+    var at = Date.parse(episode.updated_at || '');
+    return isNaN(at) ? -1 : at;
+  }
+  if (key === 'title') return String(episode.title || '');
+  return String(entry.group.id || '');
+}
+
+function sortEpisodeEntries(entries, key, dir) {
+  var d = dir === 'asc' ? 1 : -1;
+  return entries.sort(function (a, b) {
+    var x = episodeSortValue(a, key);
+    var y = episodeSortValue(b, key);
+    var c = typeof x === 'string'
+      ? x.localeCompare(y, 'ko')
+      : (x < y ? -1 : x > y ? 1 : 0);
+    if (!c) c = String(a.group.id).localeCompare(String(b.group.id), 'ko');  // 동점은 EP ID 로 갈음
+    return c * d;
+  });
+}
+
 function renderEpisodes() {
   var term = document.getElementById('episodeSearch').value.trim().toLowerCase();
   var stageFilter = document.getElementById('stageFilter').value;
   var visible = EPISODE_GROUPS.map(function (group, index) {
-    return { group: group, index: index, episode: selectedVariant(group) };
+    var variant = selectedVariant(group);
+    return {
+      group: group, index: index, episode: variant,
+      stage: episodeDisplayStage(group, variant),
+    };
   }).filter(function (entry) {
     var episode = entry.episode;
-    var stage = episodeDisplayStage(entry.group, episode);
+    var stage = entry.stage;
     var haystack = [
       entry.group.id,
       episode.title,
@@ -1579,6 +1630,8 @@ function renderEpisodes() {
     ].join(' ').toLowerCase();
     return (!term || haystack.indexOf(term) >= 0) && (!stageFilter || stage === stageFilter);
   });
+  sortEpisodeEntries(visible, document.getElementById('episodeSort').value,
+                              document.getElementById('episodeSortDir').value);
   document.getElementById('episodeCount').textContent =
     visible.length + ' / ' + EPISODE_GROUPS.length + '개';
   renderEpisodeProductionSummary();
@@ -2148,6 +2201,8 @@ function bindEvents() {
   document.getElementById('renderDocumentButton').addEventListener('click', renderDocument);
   document.getElementById('episodeSearch').addEventListener('input', renderEpisodes);
   document.getElementById('stageFilter').addEventListener('change', renderEpisodes);
+  document.getElementById('episodeSort').addEventListener('change', renderEpisodes);
+  document.getElementById('episodeSortDir').addEventListener('change', renderEpisodes);
   document.getElementById('settingsForm').addEventListener('submit', saveChannel);
   document.getElementById('activateButton').addEventListener('click', activateChannel);
   document.getElementById('newForm').addEventListener('submit', createChannel);

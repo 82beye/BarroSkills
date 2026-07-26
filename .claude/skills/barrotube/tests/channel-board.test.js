@@ -991,3 +991,70 @@ test('action timeout terminates descendants that ignore SIGTERM', { skip: proces
   await new Promise(resolve => setTimeout(resolve, 200));
   assert.equal((await readFile(heartbeat, 'utf8')).length, stoppedSize);
 });
+
+// ── 에피소드 목록 정렬 ──
+// 단계는 알파벳 비교가 무의미하고(approval < assets < planned < published), episode_no·
+// updated_at 은 누락된 EP 가 많다. 기본값은 EP ID 내림차순이어야 한다.
+function sortEntries(context, items, key, dir) {
+  const entries = items.map((item, index) => ({
+    group: { id: item.id },
+    index,
+    episode: item,
+    stage: item.stage,
+  }));
+  return context.sortEpisodeEntries(entries, key, dir).map(entry => entry.group.id);
+}
+
+test('episode list sorts by ID descending by default', async () => {
+  const { context, html } = await boardClientContext();
+  assert.match(html, /<select id="episodeSort"/);
+  assert.match(html, /<select id="episodeSortDir"/);
+  // 방향 select 의 첫 option 이 기본값 — 내림차순이어야 한다
+  const dir = html.match(/<select id="episodeSortDir"[\s\S]*?<option value="([a-z]+)"/);
+  assert.equal(dir[1], 'desc');
+  const items = [{ id: 'EP-2026-0007' }, { id: 'EP-2026-0065' }, { id: 'EP-2026-0012' }];
+  assert.deepEqual(sortEntries(context, items, 'id', 'desc'),
+    ['EP-2026-0065', 'EP-2026-0012', 'EP-2026-0007']);
+  assert.deepEqual(sortEntries(context, items, 'id', 'asc'),
+    ['EP-2026-0007', 'EP-2026-0012', 'EP-2026-0065']);
+});
+
+test('stage sort follows production order, not alphabetical order', async () => {
+  const { context } = await boardClientContext();
+  const items = [
+    { id: 'EP-1', stage: 'published' },
+    { id: 'EP-2', stage: 'planned' },
+    { id: 'EP-3', stage: 'approval' },
+    { id: 'EP-4', stage: 'assets' },
+    { id: 'EP-5', stage: 'qa-passed' },
+  ];
+  // 알파벳순이면 approval 이 맨 앞으로 온다 — 진행 순서는 planned 가 맨 뒤(내림차순)
+  assert.deepEqual(sortEntries(context, items, 'stage', 'desc'),
+    ['EP-1', 'EP-3', 'EP-5', 'EP-4', 'EP-2']);
+});
+
+test('missing episode_no and updated_at fall to the end when descending', async () => {
+  const { context } = await boardClientContext();
+  const byNo = [{ id: 'EP-1', episode_no: null }, { id: 'EP-2', episode_no: 7 }, { id: 'EP-3', episode_no: 3 }];
+  assert.deepEqual(sortEntries(context, byNo, 'episode_no', 'desc'), ['EP-2', 'EP-3', 'EP-1']);
+
+  const byDate = [
+    { id: 'EP-1', updated_at: null },
+    { id: 'EP-2', updated_at: '2026-07-02T12:34:08+09:00' },
+    { id: 'EP-3', updated_at: '2026-07-26T14:53:52+09:00' },
+  ];
+  assert.deepEqual(sortEntries(context, byDate, 'updated_at', 'desc'), ['EP-3', 'EP-2', 'EP-1']);
+});
+
+test('ties fall back to episode ID and honour the chosen direction', async () => {
+  const { context } = await boardClientContext();
+  const items = [
+    { id: 'EP-2026-0010', stage: 'published' },
+    { id: 'EP-2026-0044', stage: 'published' },
+    { id: 'EP-2026-0027', stage: 'published' },
+  ];
+  assert.deepEqual(sortEntries(context, items, 'stage', 'desc'),
+    ['EP-2026-0044', 'EP-2026-0027', 'EP-2026-0010']);
+  assert.deepEqual(sortEntries(context, items, 'stage', 'asc'),
+    ['EP-2026-0010', 'EP-2026-0027', 'EP-2026-0044']);
+});
