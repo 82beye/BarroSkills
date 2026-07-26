@@ -452,11 +452,15 @@ def cmd_sync(d, as_json=False):
     return out
 
 
-def cmd_autopilot(d, episode=None):
-    """headless 로 갈 수 있는 데까지: plan → build → qa → meta. 게시(C4)는 절대 안 함."""
+def cmd_autopilot(d, episode=None, force=False):
+    """headless 로 갈 수 있는 데까지: plan → build → qa → meta. 게시(C4)는 절대 안 함.
+
+    force 를 넘기지 않으면 이미 있는 슬라이드는 건너뛴다 — script.md 를 고친 뒤
+    재실행하면 job 은 갱신되는데 PNG 는 옛것이 남고, QA 는 슬라이드 내용과 job 정의의
+    일치까지는 보지 않아 그대로 통과한다. 그래서 --force 를 build 까지 전달한다."""
     print("── 캐러셀 오토파일럿: %s" % d)
     cmd_plan(d, episode)
-    done = cmd_build(d)
+    done = cmd_build(d, force)
     if not done:
         print("⏸ 멈춤 — generate 소스(브라우저 필요) 또는 렌더 실패. 위 목록 처리 후 재실행.")
         cmd_sync(d)
@@ -493,7 +497,7 @@ def main():
     elif a.cmd == "sync":
         cmd_sync(a.dir, a.json)
     else:
-        sys.exit(0 if cmd_autopilot(a.dir, a.episode) else 2)
+        sys.exit(0 if cmd_autopilot(a.dir, a.episode, a.force) else 2)
 
 
 if __name__ == "__main__":
