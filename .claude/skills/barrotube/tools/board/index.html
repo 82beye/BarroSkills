@@ -147,6 +147,16 @@ tr.detail td{background:#fbfcfe;padding:14px}
       <option value="published">발행됨</option>
       <option value="failed">실패·차단</option>
     </select>
+    <select id="sortkey" onchange="render()">
+      <option value="id">정렬: EP 번호</option>
+      <option value="updated">정렬: 최근 수정</option>
+      <option value="stage">정렬: 진행 단계</option>
+      <option value="topic">정렬: 주제</option>
+    </select>
+    <select id="sortdir" onchange="render()">
+      <option value="desc">내림차순 ↓</option>
+      <option value="asc">오름차순 ↑</option>
+    </select>
     <input id="q" placeholder="검색 (EP 번호·주제)" oninput="render()" style="min-width:220px">
     <span class="sp"></span>
     <span style="font-size:12px;color:var(--mut)">행을 클릭하면 단계별 실행 패널이 열립니다</span>
@@ -370,6 +380,30 @@ function statusPill(ep){
   return '<span class="pill warn">' + esc(ep.status) + '</span>';
 }
 
+/* ── 정렬 ──
+ * 단계는 문자열 비교가 틀린다 — "S10" < "S9" < "S9b" 로 정렬돼 진행 순서가 뒤집힌다.
+ * S<번호><접미사> 를 숫자로 환산해 비교한다 (S9=90 · S9b=92 · S10=100 · S12=120).
+ * updated 는 미기록(null) EP 가 많아 -1 로 밀어 항상 끝에 오게 한다.
+ */
+function stageRank(s){
+  var m = /^S(\d+)([a-z]?)$/.exec(s || '');
+  return m ? parseInt(m[1], 10) * 10 + (m[2] ? m[2].charCodeAt(0) - 96 : 0) : -1;
+}
+function sortValue(e, k){
+  if (k === 'updated') return e.updated ? Date.parse(e.updated) : -1;
+  if (k === 'stage')   return stageRank(e.current_stage);
+  if (k === 'topic')   return e.topic || '';
+  return e.id;
+}
+function sortEpisodes(eps, k, dir){
+  var d = dir === 'asc' ? 1 : -1;
+  return eps.sort(function(a, b){
+    var x = sortValue(a, k), y = sortValue(b, k);
+    var c = (typeof x === 'string') ? x.localeCompare(y, 'ko') : (x < y ? -1 : x > y ? 1 : 0);
+    return (c || a.id.localeCompare(b.id)) * d;   // 동점은 EP 번호로 갈음
+  });
+}
+
 function render(){
   if (!DATA) return;
   var f = document.getElementById('filter').value;
@@ -381,6 +415,8 @@ function render(){
     if (q && (e.id + ' ' + (e.topic || '')).toLowerCase().indexOf(q) < 0) return false;
     return true;
   });
+  sortEpisodes(eps, document.getElementById('sortkey').value,
+                    document.getElementById('sortdir').value);
 
   var html = '';
   eps.forEach(function(e){
