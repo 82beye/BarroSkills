@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -45,9 +46,85 @@ FPS = 30
 AUDIO_MASTER = "loudnorm=I=-16:TP=-1.5:LRA=11"
 AUDIO_EXTS = (".mp3", ".m4a", ".wav", ".aac", ".flac")
 
+# 자막(온스크린 캡션) 번인 — 무음+자막 채널의 나레이션이라 렌더 단계에서 구워야 한다.
+# 이 ffmpeg 빌드에는 libass/drawtext 가 없어 텍스트는 PIL PNG 로 그려 overlay 한다.
+# 스타일은 발행본(EP01) 룩에 맞춤: 흰 굵은 글씨 + 검정 외곽선, 배경 박스 없음.
+CAPTION_MARGIN_BOTTOM = 300   # 프레임 하단에서 자막까지 (릴스 UI 안전영역)
+CAPTION_FONT_SIZE = 72
+CAPTION_FONTS = [
+    ("/System/Library/Fonts/AppleSDGothicNeo.ttc", 6),          # Bold
+    ("/System/Library/Fonts/Supplemental/NanumGothicBold.ttf", 0),
+    ("/System/Library/Fonts/Helvetica.ttc", 1),
+]
+EMOJI_RE = re.compile(
+    "[\U0001F000-\U0001FAFF☀-➿⬀-⯿⌀-⏿"
+    "\U0001F1E6-\U0001F1FF︀-️‍]", flags=re.UNICODE)
+
 
 def now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def clean_caption(raw: str) -> str:
+    """script.md 의 `자막:` 값에서 백틱 래핑과 이모지를 벗겨 표시용 텍스트만 남긴다.
+
+    한글 폰트에 이모지 글리프가 없어 그대로 그리면 두부박스(⊠)가 찍힌다 —
+    barrotube 자막 파이프라인의 stripEmoji 와 같은 규칙."""
+    text = (raw or "").strip().strip("`").strip()
+    text = EMOJI_RE.sub("", text)
+    return re.sub(r"\s{2,}", " ", text).strip()
+
+
+def caption_png(text: str, out_path: Path, width: int = W,
+                font_size: int = CAPTION_FONT_SIZE) -> Path | None:
+    """자막 한 줄(또는 자동 줄바꿈된 여러 줄)을 투명 PNG 로 렌더. 실패하면 None."""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        return None
+    if not text:
+        return None
+
+    font = None
+    for path, index in CAPTION_FONTS:
+        try:
+            font = ImageFont.truetype(path, font_size, index=index)
+            break
+        except OSError:
+            continue
+    if font is None:
+        return None
+
+    max_w = width - 80
+    words, lines, cur = text.split(), [], ""
+    for w in words:
+        trial = f"{cur} {w}".strip()
+        box = font.getbbox(trial)
+        if box[2] - box[0] > max_w and cur:
+            lines.append(cur)
+            cur = w
+        else:
+            cur = trial
+    if cur:
+        lines.append(cur)
+
+    ascent, descent = font.getmetrics()
+    line_h, spacing, pad = ascent + descent, 14, 16
+    img_h = line_h * len(lines) + spacing * (len(lines) - 1) + pad * 2
+    img = Image.new("RGBA", (width, img_h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    stroke = max(3, font_size // 12)
+    y = pad
+    for line in lines:
+        box = font.getbbox(line)
+        x = (width - (box[2] - box[0])) // 2
+        draw.text((x, y), line, font=font, fill=(255, 255, 255, 255),
+                  stroke_width=stroke, stroke_fill=(0, 0, 0, 255))
+        y += line_h + spacing
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(out_path, "PNG")
+    return out_path
 
 
 def run(cmd: list[str]) -> None:
@@ -105,19 +182,31 @@ def offsets_from_durations(durations: list[float], transition: float) -> list[fl
 def build_filter(n: int, durations: list[float], transition: float, xfade: str,
                  final_duration: float, bgm_volume: float, sfx_volume: float,
                  with_sfx: bool, clip_audio_flags: list[bool] | None = None,
-                 clip_audio_volume: float = 0.25) -> tuple[str, str]:
+                 clip_audio_volume: float = 0.25,
+                 caption_inputs: dict[int, int] | None = None) -> tuple[str, str]:
     """Return (filter_complex, video_out_label).
 
     clip_audio_flags[i]=True keeps clip i's own audio (Grok ambient) as a
     lowered-volume layer delayed to its timeline start — the BGM bed and SFX
-    stay exactly as before; ambient is an additional amix input."""
+    stay exactly as before; ambient is an additional amix input.
+
+    caption_inputs maps clip index -> ffmpeg input index of that cut's caption
+    PNG; the caption is overlaid before the xfade chain so it cross-fades with
+    its own scene."""
     parts: list[str] = []
+    caption_inputs = caption_inputs or {}
     for idx, dur in enumerate(durations):
+        label = f"vb{idx}" if idx in caption_inputs else f"v{idx}"
         parts.append(
             f"[{idx}:v]trim=0:{dur},setpts=PTS-STARTPTS,"
             f"scale=w='if(gt(a,{W}/{H}),-2,{W})':h='if(gt(a,{W}/{H}),{H},-2)',"
-            f"crop={W}:{H},fps={FPS},format=yuv420p[v{idx}]"
+            f"crop={W}:{H},fps={FPS},format=yuv420p[{label}]"
         )
+        if idx in caption_inputs:
+            parts.append(
+                f"[{label}][{caption_inputs[idx]}:v]"
+                f"overlay=(W-w)/2:H-h-{CAPTION_MARGIN_BOTTOM}[v{idx}]"
+            )
 
     offsets = offsets_from_durations(durations, transition)
     if n == 1:
@@ -205,6 +294,10 @@ def main() -> int:
     parser.add_argument("--xfade", default="smoothleft", help="xfade transition type (default smoothleft)")
     parser.add_argument("--bgm-volume", type=float, default=0.82)
     parser.add_argument("--sfx-volume", type=float, default=0.42)
+    parser.add_argument("--captions", choices=["none", "auto"], default="none",
+                        help="auto = burn each cut's 자막 from script.md into the video "
+                             "(silent+caption channels need this; default none)")
+    parser.add_argument("--caption-font-size", type=int, default=CAPTION_FONT_SIZE)
     parser.add_argument("--out", default=None, help="output mp4 (default <reel>/55_render/video.mp4)")
     parser.add_argument("--no-timer", action="store_true",
                         help="skip production_timer integration (e.g. test renders)")
@@ -267,10 +360,33 @@ def main() -> int:
     if not args.no_clip_audio:
         clip_audio_flags = [has_audio_stream(c) for c in clips]
 
+    # 자막 번인 — 입력 순서는 clips…, bgm, [sfx], captions… (뒤에 붙여 기존 인덱스 보존)
+    caption_paths: list[Path] = []
+    caption_inputs: dict[int, int] = {}
+    caption_texts: list[str] = []
+    if args.captions == "auto":
+        if len(plan) != n:
+            raise SystemExit(f"--captions auto needs one script.md cut per clip "
+                             f"({len(plan)} cuts vs {n} clips)")
+        cap_base = n + 1 + (1 if sfx else 0)
+        cap_dir = out.parent / "captions"
+        for i, cut in enumerate(plan):
+            text = clean_caption(cut.get("caption", ""))
+            caption_texts.append(text)
+            if not text:
+                continue
+            png = caption_png(text, cap_dir / f"caption_{i + 1:02d}.png",
+                              font_size=args.caption_font_size)
+            if png is None:
+                raise SystemExit("--captions auto requires Pillow (pip install Pillow)")
+            caption_inputs[i] = cap_base + len(caption_paths)
+            caption_paths.append(png)
+
     filter_complex, vout = build_filter(
         n, durations, transition, args.xfade, final_duration,
         args.bgm_volume, args.sfx_volume, with_sfx=bool(sfx),
-        clip_audio_flags=clip_audio_flags, clip_audio_volume=args.clip_audio_volume)
+        clip_audio_flags=clip_audio_flags, clip_audio_volume=args.clip_audio_volume,
+        caption_inputs=caption_inputs)
 
     cmd = ["ffmpeg", "-y", "-hide_banner", "-nostdin"]
     for clip in clips:
@@ -278,6 +394,8 @@ def main() -> int:
     cmd += ["-stream_loop", "-1", "-i", str(bgm)]
     if sfx:
         cmd += ["-i", str(sfx)]
+    for png in caption_paths:
+        cmd += ["-loop", "1", "-i", str(png)]
     cmd += [
         "-filter_complex", filter_complex,
         "-map", f"[{vout}]", "-map", "[aout]",
@@ -327,6 +445,11 @@ def main() -> int:
         "canvas": {"width": W, "height": H, "fps": FPS},
         "transition": {"type": args.xfade, "seconds": transition},
         "scene_durations": durations,
+        "captions": {
+            "mode": args.captions,
+            "burned_in": len(caption_paths),
+            "texts": caption_texts,
+        },
         "timing": {
             "json": str(reel / "90_timing" / "production-timing.json"),
             "markdown": str(reel / "90_timing" / "production-timing.md"),
