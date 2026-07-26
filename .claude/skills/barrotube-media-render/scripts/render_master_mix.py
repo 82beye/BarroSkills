@@ -59,6 +59,10 @@ CAPTION_FONTS = [
 EMOJI_RE = re.compile(
     "[\U0001F000-\U0001FAFF☀-➿⬀-⯿⌀-⏿"
     "\U0001F1E6-\U0001F1FF︀-️‍]", flags=re.UNICODE)
+# 연재 표시 "(6/?)" — 총 화수가 미정이라는 대본/캡션용 표기다. 화면에 구우면
+# 물음표가 미완성·오류처럼 읽혀서 자막에서는 뺀다 (인스타 게시글 캡션에는 그대로 남는다).
+# 총 화수가 확정된 "(3/7)" 형태는 온스크린에서도 뜻이 통하므로 건드리지 않는다.
+SERIAL_TBD_RE = re.compile(r"\s*\(\s*\d+\s*/\s*\?\s*\)\s*$")
 
 
 def now_iso() -> str:
@@ -72,6 +76,7 @@ def clean_caption(raw: str) -> str:
     barrotube 자막 파이프라인의 stripEmoji 와 같은 규칙."""
     text = (raw or "").strip().strip("`").strip()
     text = EMOJI_RE.sub("", text)
+    text = SERIAL_TBD_RE.sub("", text)
     return re.sub(r"\s{2,}", " ", text).strip()
 
 
