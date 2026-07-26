@@ -109,8 +109,11 @@ export PAPERCLIP_DISABLED=1
    PD가 브라우저를 조작해 생성하고 **기존 산출물 경로에 그대로 저장**
    (v2 레이아웃은 `platforms/<platform>/` 하위):
    - 씬 이미지 (ChatGPT): `40_assets/images/scene_NNN.png` (1080×1920 세로)
-   - 모션 클립 (Grok image→video, 선택): `40_assets/videos/scene_NNN.mp4`
-     — 있으면 S7 렌더가 정지 이미지 대신 자동 사용
+   - **모션 클립 (Grok image→video, 필수): `40_assets/videos/scene_NNN.mp4`**
+     — **⚠️ 단계 누락 금지: 이미지 생성 후 반드시 각 씬 이미지를 Grok Imagine으로**
+     **image→video 영상화해 이 경로에 저장한 뒤 S7 렌더로 넘어간다.** 이미지에서
+     바로 렌더로 건너뛰면 정지 이미지 영상이 된다(EP-2026-0069 실사고). S7 렌더는
+     클립이 하나라도 없으면 기본 중단하며(exit 3), 정지 이미지 렌더는 `--allow-stills`로만 허용.
    - **인트로 카드 (ChatGPT): `45_intro.png`** — 에피소드 타이틀 대형 골드 타이포 +
      BarroTube 배지 + 다크 시네마틱 배경, 9:16. **저장 전 타이틀 철자를 확대 검수**
      (AI 한글 렌더 오타 방지 — 실사례: 메타→머타). S7 렌더가 2초 무음 인트로로 prepend.
@@ -127,13 +130,16 @@ export PAPERCLIP_DISABLED=1
      `--image-engine openai|gemini` 로 기존 API 경로 강제. media-render 기본 모드에서
      이미지가 없으면 produce-episode가 안내 메시지와 함께 중단(exit 3)한다.
 
-7. **S7 Render** (헤드리스 FFmpeg, 무비용):
+7. **S7 Render** (헤드리스 FFmpeg, 무비용) — **전제: S6c Grok 영상화가 끝나 있어야 한다**:
    ```bash
    node scripts/automation/render-direct.js --episode EP-YYYY-NNNN
    ```
-   - `40_assets/videos/scene_NNN.mp4` (media-render Grok 클립)가 있는 씬은 모션 클립
-     기반, 없는 씬은 기존 정지 이미지+Ken Burns 기반(레거시)으로 렌더 — 씬별 혼합 가능.
-     산출물은 동일하게 `55_render/video.mp4`.
+   - **클립 필수 게이트**: `40_assets/videos/scene_NNN.mp4`가 하나라도 없으면 render-direct는
+     `exit 3`으로 중단하고 어떤 씬이 빠졌는지 알린다. 이때 이미지에서 바로 렌더로 넘어온
+     것이므로, **되돌아가 S6c Grok 영상화를 완료한 뒤 다시 렌더**한다.
+   - `--allow-stills`를 붙이면 정지 이미지+Ken Burns로 렌더하지만 **비권장**이다(모션 없는
+     저품질 영상 — EP-2026-0069가 이 경로로 잘못 발행됨). 의도적 스틸 컷일 때만 사용.
+   - 클립이 모두 갖춰지면 씬별 Grok 모션 클립 기반으로 렌더한다. 산출물은 `55_render/video.mp4`.
    - 모션 클립의 **자체 음성(앰비언트)은 나레이션 밑에 낮은 볼륨(0.25)으로 자동 믹스**
      — 기존 글로벌 BGM 믹스는 그대로 유지. 조절 `BT_CLIP_AMBIENT_VOLUME`,
      비활성 `BT_NO_CLIP_AMBIENT=1`.
