@@ -1058,3 +1058,35 @@ test('ties fall back to episode ID and honour the chosen direction', async () =>
   assert.deepEqual(sortEntries(context, items, 'stage', 'asc'),
     ['EP-2026-0010', 'EP-2026-0027', 'EP-2026-0044']);
 });
+
+// ── 팔레트 잠금 ──
+// 보드 색은 "오늘묘 S1 제작·관리 설계문서"의 :root 토큰에서 그대로 가져왔다.
+// 차가운 회색/남색이 다시 섞이면 두 문서가 남처럼 보이므로 원본 값을 못 박는다.
+test('palette matches the 오늘묘 design document tokens', async () => {
+  const { html } = await boardClientContext();
+  const root = html.match(/:root\s*\{([\s\S]*?)\}/)[1];
+  const token = name => (root.match(new RegExp(`--${name}:\\s*([^;]+);`)) || [])[1]?.trim();
+
+  assert.equal(token('bg'), '#fbf7f2', '바탕 = 따뜻한 종이');
+  assert.equal(token('ink'), '#33302c', '본문 = 따뜻한 먹색');
+  assert.equal(token('muted'), '#8a8178', '보조 = 따뜻한 회색');
+  assert.equal(token('line'), '#ece3d8', '괘선 = 따뜻한 헤어라인');
+  assert.equal(token('warm'), '#fdf3e7', '웜 채움');
+  assert.equal(token('blue'), '#e08a3c', '주 강조 = 테라코타');
+  assert.equal(token('rose'), '#d0607a', '발행 = 로즈');
+  assert.equal(token('prog'), '#3e7fc1', '진행 = 파랑');
+  assert.equal(token('ok'), '#3f9d6b', '통과 = 초록');
+});
+
+test('board keeps a visible keyboard focus ring', async () => {
+  const { html } = await boardClientContext();
+  // 한 행에 조작 요소가 11개다. 포커스가 안 보이면 잘못된 행에서 실행을 누른다.
+  assert.match(html, /:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--blue\)/);
+});
+
+test('published and qa-passed do not share one colour', async () => {
+  const { html } = await boardClientContext();
+  // "QA를 통과했다"와 "내보냈다"는 다른 사건이다 — 레퍼런스도 초록/로즈로 나눈다.
+  assert.match(html, /\.pill\.published\s*\{[^}]*var\(--rose-soft\)/);
+  assert.match(html, /\.pill\.active,\s*\.pill\.qa-passed\s*\{[^}]*var\(--ok-bg\)/);
+});

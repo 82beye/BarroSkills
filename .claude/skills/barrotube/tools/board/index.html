@@ -5,22 +5,33 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>BarroTube Channel Board</title>
   <style>
+    /* 팔레트 출처: 오늘묘 S1 제작·관리 설계문서 (:root 토큰 그대로).
+       따뜻한 종이 위에 테라코타(행동) · 로즈(발행=비가역) · 초록(통과) · 파랑(진행)만 쓴다.
+       --navy/--blue 는 옛 이름을 유지해 기존 규칙 200여 개를 건드리지 않고 값만 바꾼다. */
     :root {
-      --ink: #172033;
-      --muted: #667085;
-      --line: #dbe1ea;
-      --line-soft: #edf0f4;
-      --bg: #f4f6f9;
+      --ink: #33302c;
+      --muted: #8a8178;
+      --line: #ece3d8;
+      --line-soft: #f5efe5;
+      --bg: #fbf7f2;
       --paper: #fff;
-      --navy: #152a4a;
-      --blue: #3f6fa8;
-      --blue-soft: #eef4fb;
-      --ok: #18794e;
-      --ok-bg: #eaf7f0;
-      --warn: #9a5b13;
-      --warn-bg: #fff5df;
-      --bad: #b42318;
-      --bad-bg: #fff0ee;
+      --warm: #fdf3e7;
+      --navy: #33302c;
+      --blue: #e08a3c;          /* 주 강조 = 테라코타 */
+      --blue-soft: #fdf3e7;
+      --rose: #d0607a;          /* 발행·비가역 */
+      --rose-soft: #fbeef3;
+      --prog: #3e7fc1;
+      --prog-soft: #eaf2fb;
+      --ok: #3f9d6b;
+      --ok-bg: #e9f6ee;
+      --warn: #9a5518;
+      --warn-bg: #fdf1e7;
+      --bad: #b0436a;
+      --bad-bg: #fbeef3;
+      --na: #c9c1b6;
+      --shadow: 0 3px 15px rgba(180, 150, 110, .10);
+      --shadow-sm: 0 1px 6px rgba(180, 150, 110, .08);
     }
 
     * { box-sizing: border-box; }
@@ -32,11 +43,20 @@
     }
     button, input, select, textarea { font: inherit; }
     button, select { cursor: pointer; }
+    /* 레퍼런스에도 포커스 스타일이 없다. 한 행에 조작 요소가 11개인 표라
+       키보드 위치를 잃으면 잘못된 행에서 실행을 누른다 — 팔레트 어휘로 링을 세운다. */
+    :focus-visible {
+      outline: 2px solid var(--blue);
+      outline-offset: 1px;
+      border-radius: 6px;
+    }
 
+    /* 레퍼런스는 상단바를 어둡게 덮지 않는다 — 흰 바 + 웜 헤어라인 한 줄.
+       그래야 종이 바탕이 페이지 전체를 지배하고 표가 주인공이 된다. */
     .top {
       height: 56px;
-      background: var(--navy);
-      color: #fff;
+      background: var(--paper);
+      color: var(--ink);
       display: flex;
       align-items: center;
       gap: 10px;
@@ -44,11 +64,11 @@
       position: sticky;
       top: 0;
       z-index: 10;
-      box-shadow: 0 2px 9px #0002;
+      border-bottom: 1px solid var(--line);
     }
-    .top h1 { margin: 0; font-size: 17px; }
+    .top h1 { margin: 0; font-size: 17px; font-weight: 800; }
     .spacer { flex: 1; }
-    .live { color: #d7e4f4; font-size: 12px; }
+    .live { color: var(--muted); font-size: 12px; }
 
     main {
       width: min(1540px, 100%);
@@ -66,7 +86,7 @@
       background: var(--paper);
       border: 1px solid var(--line);
       border-radius: 12px;
-      box-shadow: 0 3px 15px #13203a0a;
+      box-shadow: var(--shadow);
     }
     .channel-picker { width: min(390px, 36vw); min-width: 260px; }
     .channel-picker label {
@@ -79,7 +99,7 @@
     .channel-picker select {
       width: 100%;
       height: 38px;
-      border: 1px solid #bdc8d7;
+      border: 1px solid #e0d3c2;
       border-radius: 8px;
       background: #fff;
       color: var(--ink);
@@ -108,7 +128,7 @@
       padding: 6px 9px;
       border: 1px solid var(--line);
       border-radius: 8px;
-      background: #f8fafc;
+      background: #faf5ee;
       color: var(--muted);
       font-size: 11px;
       white-space: nowrap;
@@ -125,10 +145,18 @@
       cursor: pointer;
       white-space: nowrap;
     }
-    .btn:hover { border-color: var(--blue); background: #f9fbfe; }
+    .btn:hover { border-color: var(--blue); background: var(--warm); }
     .btn.primary { border-color: var(--blue); background: var(--blue); color: #fff; }
     .btn.good { border-color: var(--ok); background: var(--ok); color: #fff; }
-    .btn.danger { color: var(--bad); }
+    /* 레퍼런스는 발행(비가역)을 빨강 경고가 아니라 로즈 채움으로 구분한다 —
+       위험이 아니라 "되돌릴 수 없음"을 말하는 색. */
+    .btn.danger {
+      border-color: #e6bccb;
+      background: var(--rose-soft);
+      color: var(--bad);
+      font-weight: 700;
+    }
+    .btn.danger:hover { border-color: var(--rose); background: #f8e2ea; color: var(--bad); }
     .btn.small { min-height: 30px; padding: 4px 8px; font-size: 11px; }
     .btn.icon { width: 36px; padding: 0; font-size: 17px; }
     .btn:disabled { cursor: not-allowed; opacity: .45; }
@@ -138,7 +166,7 @@
       background: var(--paper);
       border: 1px solid var(--line);
       border-radius: 12px;
-      box-shadow: 0 3px 15px #13203a0a;
+      box-shadow: var(--shadow);
     }
     .workspace-head {
       min-height: 64px;
@@ -173,7 +201,7 @@
       min-height: 56px;
       padding: 9px 14px;
       border-bottom: 1px solid var(--line);
-      background: #fbfcfe;
+      background: #fdfaf5;
     }
     .episode-toolbar strong { font-size: 14px; }
     .episode-count { color: var(--muted); font-size: 11px; white-space: nowrap; }
@@ -224,9 +252,11 @@
       background: var(--line-soft);
     }
     .production-track span { display: block; height: 100%; }
-    .production-track .published { background: #d0607a; }
+    /* 레퍼런스 .pbar 와 같은 3색: 발행=로즈 · QA=초록 · 생성=파랑.
+       생성 구간에 강조색(테라코타)을 쓰면 "누를 것"과 "찬 만큼"이 같은 색이 된다. */
+    .production-track .published { background: var(--rose); }
     .production-track .qa { background: var(--ok); }
-    .production-track .generated { background: var(--blue); }
+    .production-track .generated { background: var(--prog); }
 
     .episode-table-wrap {
       min-height: 420px;
@@ -254,8 +284,8 @@
       z-index: 2;
       height: 38px;
       border-bottom: 1px solid var(--line);
-      background: #f7f9fc;
-      color: var(--muted);
+      background: var(--warm);
+      color: #8a5a20;
       font-size: 11px;
       font-weight: 750;
       text-align: left;
@@ -263,15 +293,23 @@
     thead tr:first-child th { top: 0; height: 34px; }
     thead tr:nth-child(2) th { top: 34px; height: 30px; text-align: center; }
     thead th[rowspan="2"] { top: 0; z-index: 3; }
+    /* 레퍼런스의 묶음 헤더(.wkhead) 어휘: 웜 채움 + 진한 앰버 글자 + 2px #f0c9a0 규칙선.
+       "영상 생성" 4열이 한 덩어리라는 걸 색이 아니라 규칙선이 말하게 한다. */
     thead .generation-head {
-      background: #fff7ed;
-      color: #9a5b13;
+      background: var(--warm);
+      color: #8a5a20;
       text-align: center;
+      border-top: 2px solid #f0c9a0;
+      font-weight: 800;
     }
+    thead tr:nth-child(2) th { border-bottom: 1px solid #f0c9a0; }
     th, td { padding: 8px 10px; vertical-align: middle; }
-    tbody td { border-bottom: 1px solid var(--line-soft); }
-    tbody tr:nth-child(even) { background: #fcfdff; }
-    tbody tr:hover { background: #f5f8fc; }
+    /* 레퍼런스 표는 셀마다 --line(#ece3d8) 실선을 두른다. 여기선 세로선까지 두르면
+       11열이 감옥처럼 보이므로 가로선만 같은 굵기로 올린다 — 84행을 눈으로 훑을 때
+       --line-soft 는 너무 흐려 행이 미끄러진다. */
+    tbody td { border-bottom: 1px solid var(--line); }
+    tbody tr:nth-child(even) { background: #fdfbf8; }
+    tbody tr:hover { background: #fbf5ec; }
     tbody tr.planned-row { background: #fffdf9; }
     .episode-id strong { display: block; font-size: 12px; }
     .episode-day {
@@ -335,7 +373,7 @@
       border-radius: 6px;
       padding: 2px 7px;
       background: var(--blue-soft);
-      color: #2f5a86;
+      color: #9a5518;
       font-size: 10px;
       font-weight: 750;
       white-space: nowrap;
@@ -358,12 +396,12 @@
     }
     .stage-chip.done { border-color: #bfe0cd; background: var(--ok-bg); color: #2c7a50; }
     .stage-chip.part { border-color: #f0d3a9; background: var(--warn-bg); color: var(--warn); }
-    .stage-chip.na { border-color: transparent; background: transparent; color: #b8c0cc; }
+    .stage-chip.na { border-color: transparent; background: transparent; color: var(--na); }
     .qa-badge {
       display: inline-block;
       min-width: 66px;
       border-radius: 7px;
-      background: #eef1f5;
+      background: #f4f1ec;
       color: var(--muted);
       padding: 3px 6px;
       font-size: 10px;
@@ -396,10 +434,14 @@
       font-weight: 750;
       white-space: nowrap;
     }
-    .pill.active, .pill.published, .pill.qa-passed { color: var(--ok); background: var(--ok-bg); }
+    /* 레퍼런스 상태 사다리(.status s0~s5):
+       계획=회색 · 제작중=파랑 · 검토=앰버 · 통과=초록 · 발행=로즈.
+       발행을 통과와 같은 초록으로 두면 "끝냈다"와 "내보냈다"가 구분되지 않는다. */
+    .pill.active, .pill.qa-passed { color: var(--ok); background: var(--ok-bg); }
+    .pill.published { color: var(--bad); background: var(--rose-soft); }
     .pill.review, .pill.approval, .pill.qa { color: var(--warn); background: var(--warn-bg); }
-    .pill.archived, .pill.planned { color: var(--muted); background: #eef1f5; }
-    .pill.assets, .pill.production, .pill.render, .pill.script { color: var(--blue); background: var(--blue-soft); }
+    .pill.archived, .pill.planned { color: var(--muted); background: #f4f1ec; }
+    .pill.assets, .pill.production, .pill.render, .pill.script { color: #2f5a86; background: var(--prog-soft); }
     .pill.bad { color: var(--bad); background: var(--bad-bg); }
     .row-actions {
       display: flex;
@@ -431,7 +473,7 @@
       border-radius: 12px;
       background: #fff;
       padding: 12px;
-      box-shadow: 0 2px 8px #13203a0a;
+      box-shadow: var(--shadow-sm);
     }
     .episode-card.planned-row { background: #fffdf9; }
     .episode-card-head { display: flex; align-items: flex-start; gap: 8px; }
@@ -449,7 +491,7 @@
       overflow: auto;
       margin: 10px 14px 14px;
       border-radius: 8px;
-      background: #f8fafc;
+      background: #faf5ee;
       padding: 9px 11px;
       white-space: pre-wrap;
       font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -470,7 +512,7 @@
       box-shadow: 0 20px 70px #0006;
     }
     dialog.wide { width: min(820px, calc(100% - 28px)); }
-    dialog::backdrop { background: #14213da3; }
+    dialog::backdrop { background: rgba(51,48,44,.62); }
     .dialog-head {
       display: flex;
       align-items: center;
@@ -486,7 +528,7 @@
       justify-content: flex-end;
       gap: 7px;
       border-top: 1px solid var(--line);
-      background: #fbfcfe;
+      background: #fdfaf5;
       padding: 10px 16px;
     }
     .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px 12px; }
@@ -550,7 +592,7 @@
       gap: 5px;
       overflow-x: auto;
       border-bottom: 1px solid var(--line);
-      background: #f8fafc;
+      background: #faf5ee;
       padding: 8px 12px;
     }
     .asset-tab {
@@ -564,7 +606,7 @@
     }
     .asset-tab:hover { border-color: var(--line); background: #fff; }
     .asset-tab[aria-selected="true"] {
-      border-color: #c6d7eb;
+      border-color: #eecfa8;
       background: var(--blue-soft);
       color: var(--blue);
       font-weight: 750;
@@ -574,7 +616,7 @@
       min-height: 520px;
       max-height: calc(100vh - 190px);
       overflow: auto;
-      background: #f7f9fc;
+      background: #faf6f0;
       padding: 14px;
     }
     .asset-state {
@@ -609,8 +651,8 @@
       padding: 7px 8px;
       text-align: left;
     }
-    .asset-file:hover { border-color: var(--line); background: #f8fafc; }
-    .asset-file.active { border-color: #bfd1e7; background: var(--blue-soft); }
+    .asset-file:hover { border-color: var(--line); background: #faf5ee; }
+    .asset-file.active { border-color: #eecfa8; background: var(--blue-soft); }
     .asset-file-name {
       display: block;
       overflow: hidden;
@@ -663,8 +705,8 @@
     .asset-text {
       min-height: 445px;
       margin: 0;
-      background: #101828;
-      color: #eef2f7;
+      background: #2c2822;
+      color: #f4ede2;
       padding: 14px;
       white-space: pre-wrap;
       word-break: break-word;
@@ -674,7 +716,7 @@
       min-height: 445px;
       display: grid;
       place-items: center;
-      background: #111827;
+      background: #0b0d12;
       padding: 12px;
     }
     .asset-visual img {
@@ -711,7 +753,7 @@
       .episode-cards {
         display: grid;
         gap: 10px;
-        background: #f8fafc;
+        background: #faf5ee;
         padding: 10px;
       }
       .episode-card .row-actions select { flex: 1 1 120px; width: auto; }
