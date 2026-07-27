@@ -102,6 +102,16 @@ export PAPERCLIP_DISABLED=1
    - prompt: "30_script.md 검증 → 35_factcheck.md. HIGH 위험 있으면 수정 제안."
    - HIGH면 S4로 회귀 (최대 2회), 그래도 HIGH면 운영자에게 escalation
 
+5-b. **image_prompt 계약 검사** (무비용 — S6 진입 전 필수 게이트):
+   ```bash
+   node scripts/automation/validate-image-prompts.js --episode EP-YYYY-NNNN --platform shorts
+   ```
+   - BLOCK이 있으면 종료코드 1. **어긋난 프롬프트로 이미지를 구우면 과금 + Grok 모션 클립
+     재생성까지 딸려온다** (EP-2026-0070 실사례: 5컷 전부 마스코트가 구석 스티커로 렌더됨).
+   - 계약 정본은 `scripts/automation/lib/image-prompt-contract.js`. 근거와 규칙은
+     `references/IMAGE-PROMPT.md`.
+   - 대본을 누가 썼든(Claude·Codex·Gemini·사람) 같은 판정을 받는다.
+
 6. **S6 자산 생성** (비용 발생 — 운영자 명시 승인 필요):
 
    **S6c 씬 이미지·모션 클립 + S6d 인트로 — 기본: `barrotube-media-render` 스킬**
@@ -310,6 +320,7 @@ npm run channel:document -- --channel today.myo # 읽기 전용 HTML snapshot �
 ## Reference Files
 
 - `references/PIPELINE.md` — S0~S12 단계별 상세 (입출력·비용·시간)
+- `references/IMAGE-PROMPT.md` — image_prompt 계약 (EP-0069 vs 0070 A/B 근거·규칙 6가지)
 - `references/MARKETING.md` — 마케팅 → 시리즈 부트스트랩 흐름
 - `references/SECRETS.md` — ElevenLabs·Gemini·YouTube OAuth 셋업 가이드
 - `references/ARCHITECTURE.md` — 17 에이전트 위임 라인 + monolith vs sub-issue 모드
