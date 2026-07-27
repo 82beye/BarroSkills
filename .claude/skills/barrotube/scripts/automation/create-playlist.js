@@ -6,42 +6,20 @@
  * Usage:
  *   # series_id로 자동 묶기 (script frontmatter의 series_id 일치 + series_episode 순서)
  *   node create-playlist.js --series sp500-basic --episodes-dir workspace/episodes \
- *        --title "S&P500 입문 (5편)" --privacy unlisted
+ *        --title "S&P500 입문 (5편)" --channel econ-daily --privacy unlisted
  *
  *   # videoId 직접 나열
- *   node create-playlist.js --videos vid1,vid2,vid3 --title "..." --privacy public
+ *   node create-playlist.js --videos vid1,vid2,vid3 --title "..." --channel econ-daily --privacy public
  */
 
 import { readFileSync, existsSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parse as parseYAML } from 'yaml';
-import { getSecret } from './config-loader.js';
+import { createChannelRegistry } from './lib/channel-registry.js';
+import { assertOAuthChannel, getAccessToken } from './publish-youtube.js';
 
-const OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const PLAYLISTS_ENDPOINT = 'https://www.googleapis.com/youtube/v3/playlists';
 const PLAYLIST_ITEMS_ENDPOINT = 'https://www.googleapis.com/youtube/v3/playlistItems';
-
-async function getAccessToken() {
-  const clientId = getSecret('YOUTUBE_OAUTH_CLIENT_ID');
-  const clientSecret = getSecret('YOUTUBE_OAUTH_CLIENT_SECRET');
-  const refreshToken = getSecret('YOUTUBE_OAUTH_REFRESH_TOKEN');
-  if (!clientId || !clientSecret || !refreshToken) {
-    throw new Error('Missing YOUTUBE_OAUTH_* env vars');
-  }
-  const body = new URLSearchParams({
-    client_id: clientId,
-    client_secret: clientSecret,
-    refresh_token: refreshToken,
-    grant_type: 'refresh_token',
-  });
-  const res = await fetch(OAUTH_TOKEN_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body,
-  });
-  if (!res.ok) throw new Error(`OAuth refresh failed: ${res.status} ${await res.text()}`);
-  return (await res.json()).access_token;
-}
 
 async function createPlaylist(accessToken, { title, description, privacyStatus }) {
   const url = `${PLAYLISTS_ENDPOINT}?part=snippet,status`;
@@ -82,7 +60,7 @@ function parseFrontmatter(mdPath) {
   return m ? parseYAML(m[1]) : null;
 }
 
-function collectSeriesEpisodes(episodesDir, seriesId, platform = 'long') {
+function collectSeriesEpisodes(episodesDir, seriesId, platform = 'long', channelId = null) {
   const base = resolve(episodesDir);
   const dirs = readdirSync(base).filter(d => d.startsWith('EP-') && statSync(join(base, d)).isDirectory());
   const items = [];
@@ -101,6 +79,9 @@ function collectSeriesEpisodes(episodesDir, seriesId, platform = 'long') {
     const fm = parseFrontmatter(scriptPath);
     if (!fm || fm.series_id !== seriesId) continue;
     const result = JSON.parse(readFileSync(resultPath, 'utf-8'));
+    if (channelId && result.channel_id !== channelId) {
+      throw new Error(`Published episode ${d} belongs to ${result.channel_id || '(unknown)'}, not ${channelId}`);
+    }
     const videoId = result?.targets?.youtube?.videoId;
     if (!videoId) continue;
     items.push({
@@ -126,25 +107,48 @@ async function main() {
   }
 
   if (!opts.title) { console.error('--title required'); process.exit(1); }
-  const privacy = opts.privacy || 'unlisted';
-  const description = opts.description ||
-`S&P500 입문 시리즈 — 워런 버핏이 추천한 단 하나의 펀드를 5편으로 정리합니다.
+  if (!opts.channel) { console.error('--channel required'); process.exit(1); }
 
-1편 WHAT  : S&P500이 뭐길래 워런 버핏이 90%를 추천했나
-2편 WHY   : 100년 데이터로 본 진짜 수익률 (10% 법칙)
-3편 HOW   : SPY·IVV·VOO·SPLG — 한국인은 뭘 사야 하나 (수수료 0.03%)
-4편 RISK  : 환헷지 vs 비헷지 — 1500원 환율 시대의 정답
-5편 WHEN  : 적립식 vs 일시불 — 30년 시뮬레이션의 충격 결과
-
-📚 Barro 경제수업 · 3분이면 충분한 경제`;
+  const skillRoot = resolve(import.meta.dirname, '../..');
+  const dataRoot = resolve(process.env.BARROTUBE_DATA || '/Users/beye/BarroTubeData');
+  const factoryRoot = resolve(process.env.BARRO_AI_FACTORY || '/Users/beye/BarroAiFactory');
+  const registry = createChannelRegistry({
+    skillRoot,
+    dataRoot,
+    factoryRoot,
+    allowedRoots: [dataRoot, factoryRoot, resolve(skillRoot, '../../..')],
+  });
+  const channel = await registry.getChannel(opts.channel);
+  if (channel.status !== 'active' || channel.unresolvedConflicts.length) {
+    throw new Error(`Channel ${opts.channel} is not active or has unresolved conflicts`);
+  }
+  const youtube = channel.manifest.platforms?.youtube;
+  if (youtube?.enabled === false) throw new Error(`YouTube publishing is disabled for channel ${opts.channel}`);
+  if (!youtube?.channel_id) throw new Error(`Channel ${opts.channel} is missing platforms.youtube.channel_id`);
+  const refs = channel.manifest.credentials?.youtube || {};
+  const credentialEnv = {
+    clientIdEnv: refs.client_id_env,
+    clientSecretEnv: refs.client_secret_env,
+    refreshTokenEnv: refs.refresh_token_env,
+  };
+  const privacy = opts.privacy
+    || channel.manifest.playlists?.default_privacy
+    || youtube.playlist_privacy
+    || youtube.default_privacy
+    || 'private';
+  if (!['private', 'unlisted', 'public'].includes(privacy)) throw new Error(`Invalid playlist privacy: ${privacy}`);
+  const description = opts.description || [
+    opts.title,
+    channel.manifest.identity?.description || channel.manifest.identity?.display_name || opts.channel,
+  ].filter(Boolean).join('\n\n');
 
   let videos = [];
   if (opts.videos) {
     videos = opts.videos.split(',').map((v, i) => ({ episodeId: `manual-${i+1}`, seriesEpisode: i+1, videoId: v.trim() }));
   } else if (opts.series) {
-    const dir = opts['episodes-dir'] || 'workspace/episodes';
+    const dir = opts['episodes-dir'] || channel.context.episodes_root;
     const platform = opts.platform || 'long';  // 시리즈는 long 기본, --platform shorts로 Shorts 시리즈도 등록 가능
-    videos = collectSeriesEpisodes(dir, opts.series, platform);
+    videos = collectSeriesEpisodes(dir, opts.series, platform, opts.channel);
     if (videos.length === 0) { console.error(`❌ No episodes found for series "${opts.series}" in ${dir}`); process.exit(1); }
   } else {
     console.error('Either --series <id> or --videos <id1,id2,...> required'); process.exit(1);
@@ -154,7 +158,8 @@ async function main() {
   console.log(`   Videos (${videos.length}):`);
   for (const v of videos) console.log(`     - [${v.seriesEpisode}] ${v.episodeId} → ${v.videoId}`);
 
-  const accessToken = await getAccessToken();
+  const accessToken = await getAccessToken(credentialEnv);
+  await assertOAuthChannel(accessToken, youtube.channel_id);
   const playlist = await createPlaylist(accessToken, { title: opts.title, description, privacyStatus: privacy });
   const playlistId = playlist.id;
   const playlistUrl = `https://www.youtube.com/playlist?list=${playlistId}`;

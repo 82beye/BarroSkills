@@ -805,6 +805,9 @@ class RenderJob:
             if report_sha and stage.get("grandfathered_qa_sha256") and not grandfathered:
                 stage["grandfathered_qa_sha256"] = None
 
+            if legacy_baseline:
+                continue
+
             if sid in QA_REPORTS and self.qa_ok(sid) is False \
                     and not grandfathered \
                     and stage.get("status") not in ("failed", "skipped"):
