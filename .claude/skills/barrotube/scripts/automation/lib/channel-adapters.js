@@ -48,7 +48,7 @@ const MIME_TYPES = {
 
 const ACTIONS = {
   'barrotube-s12': [
-    'script', 'factcheck', 'tts', 'sync-durations', 'images', 'intro',
+    'script', 'factcheck', 'verify-prompts', 'tts', 'sync-durations', 'images', 'intro',
     'thumbnail', 'endcard', 'render', 'qa', 'metadata', 'approve',
     'publish', 'status',
   ],

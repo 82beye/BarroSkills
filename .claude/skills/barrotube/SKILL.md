@@ -104,13 +104,17 @@ export PAPERCLIP_DISABLED=1
 
 5-b. **image_prompt 계약 검사** (무비용 — S6 진입 전 필수 게이트):
    ```bash
-   node scripts/automation/validate-image-prompts.js --episode EP-YYYY-NNNN --platform shorts
+   cd $BARROTUBE_HOME    # workspace/ 를 상대경로로 읽으므로 필수
+   node scripts/automation/validate-image-prompts.js --episode EP-YYYY-NNNN
    ```
-   - BLOCK이 있으면 종료코드 1. **어긋난 프롬프트로 이미지를 구우면 과금 + Grok 모션 클립
-     재생성까지 딸려온다** (EP-2026-0070 실사례: 5컷 전부 마스코트가 구석 스티커로 렌더됨).
-   - 계약 정본은 `scripts/automation/lib/image-prompt-contract.js`. 근거와 규칙은
-     `references/IMAGE-PROMPT.md`.
-   - 대본을 누가 썼든(Claude·Codex·Gemini·사람) 같은 판정을 받는다.
+   - `--episode` 는 EP-ID·디렉토리 경로 둘 다 받는다. 플랫폼은 자동 탐색(`--platform` 로 고정 가능).
+   - 종료코드 **0=통과(WARN 포함) · 1=BLOCK · 2=입력 오류**. CI·스크립트에서 그대로 쓴다.
+   - Channel Board 에서는 행의 작업 드롭다운 → **`verify-prompts`** → 실행.
+   - **어긋난 프롬프트로 이미지를 구우면 과금 + Grok 모션 클립 재생성까지 딸려온다**
+     (EP-2026-0070 실사례: 5컷 전부 마스코트가 구석 스티커로 렌더됨).
+   - 계약 정본은 `scripts/automation/lib/image-prompt-contract.js`. 근거·규칙은
+     `references/IMAGE-PROMPT.md`. 대본을 누가 썼든(Claude·Codex·Gemini·사람) 같은 판정을 받는다.
+   - S8 QA 리포트에도 `## 📐 image_prompt 계약` 섹션으로 같은 결과가 남는다.
 
 6. **S6 자산 생성** (비용 발생 — 운영자 명시 승인 필요):
 

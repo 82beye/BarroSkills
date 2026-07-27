@@ -10,7 +10,7 @@
  * 모델 출력은 신뢰할 수 없고 게이트는 신뢰할 수 있다.
  *
  * 사용:
- *   node validate-image-prompts.js --episode <epdir> [--platform shorts] [--json]
+ *   node validate-image-prompts.js --episode EP-YYYY-NNNN | <epdir> [--platform shorts] [--json]
  *   node validate-image-prompts.js --script <30_script.md 경로>
  *
  * 종료코드: 0 = 통과(WARN 은 통과) · 1 = BLOCK 있음 · 2 = 입력 오류
@@ -20,13 +20,28 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { checkEpisodePrompts } from './lib/image-prompt-contract.js';
 
+/**
+ * --episode 는 EP-ID 와 디렉토리 경로를 모두 받는다.
+ * 스킬 안에서 규약이 반씩 갈려 있어(run-factcheck·approve 는 ID, generate-script·qa 는 dir)
+ * 둘 다 지원하는 편이 사용자가 어느 쪽을 외우든 동작한다.
+ */
+function episodeDir(episode) {
+  if (/^EP-\d{4}-\d{4}$/.test(episode)) return join('workspace', 'episodes', episode);
+  return episode;
+}
+
 function scriptPath(values) {
   if (values.script) return values.script;
   if (!values.episode) return null;
+  const dir = episodeDir(values.episode);
   const platform = values.platform || 'shorts';
-  const v2 = join(values.episode, 'platforms', platform, '30_script.md');
-  const v1 = join(values.episode, '30_script.md');           // 구 레이아웃
-  return existsSync(v2) ? v2 : v1;
+  const candidates = [
+    join(dir, 'platforms', platform, '30_script.md'),
+    join(dir, 'platforms', 'shorts', '30_script.md'),
+    join(dir, 'platforms', 'long', '30_script.md'),
+    join(dir, '30_script.md'),                                // 구 레이아웃
+  ];
+  return candidates.find(p => existsSync(p)) || candidates[0];
 }
 
 function readScenes(path) {
@@ -48,7 +63,7 @@ function main() {
 
   const path = scriptPath(values);
   if (!path || !existsSync(path)) {
-    console.error('Usage: validate-image-prompts.js --episode <epdir> [--platform shorts] [--json]');
+    console.error('Usage: validate-image-prompts.js --episode <EP-YYYY-NNNN 또는 epdir> [--platform shorts] [--json]');
     if (path) console.error(`대본을 찾지 못했습니다: ${path}`);
     process.exit(2);
   }

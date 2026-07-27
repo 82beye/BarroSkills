@@ -686,6 +686,9 @@ function buildS12Action(record, episode, action, body) {
     case 'status': return { immediate: episode };
     case 'script': return nodeSpec('generate-script.js', ['--episode', paths.episodeRoot, ...paths.platformArgs, ...maybeForce]);
     case 'factcheck': return nodeSpec('run-factcheck.js', ['--episode', paths.episodeRoot, ...paths.platformArgs, ...maybeForce]);
+    // 무비용·읽기 전용. 이미지(S6c) 버튼을 누르기 전에 여기서 막아야 과금과
+    // Grok 클립 재생성을 아낀다 — references/IMAGE-PROMPT.md
+    case 'verify-prompts': return nodeSpec('validate-image-prompts.js', ['--script', paths.script]);
     case 'tts': return nodeSpec('generate-tts.js', ['--script', paths.script, '--out-dir', paths.tts, ...maybeForce]);
     case 'sync-durations': return nodeSpec('sync-durations.js', ['--script', paths.script, '--tts-dir', paths.tts]);
     case 'images': return nodeSpec('generate-image.js', ['--script', paths.script, '--out-dir', paths.images, ...maybeForce]);
