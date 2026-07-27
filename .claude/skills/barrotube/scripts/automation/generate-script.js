@@ -33,6 +33,7 @@ import {
   resolveFiguresForBrief,
   buildAllowlistContextBlock,
 } from './lib/public-figures.js';
+import { TEMPLATE, BOUNDS, KNOWN_PALETTES, CANONICAL_TAIL } from './lib/image-prompt-contract.js';
 
 const DEFAULT_MODEL = process.env.GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
@@ -60,7 +61,56 @@ const FORMAT_SPECS = {
   },
 };
 
-function buildSystemPrompt(format, persona, seriesContext, publicFiguresInfo = null) {
+/**
+ * 채널 character-dna.md 의 첫 코드블록에서 마스코트 절을 뽑는다.
+ * 그 블록은 이미 generate-image-gemini.js 가 이미지 생성 시 주입하는 SSOT인데,
+ * 정작 대본을 쓰는 이 단계에는 전달된 적이 없었다 — 그래서 작가 모델이 캐릭터를
+ * 모른 채 "cartoon stick figure" 를 쓰고, 렌더 단계에서 사람이 즉흥으로 메웠다.
+ * 프롬프트가 EP마다 갈라진 근본 원인이다.
+ */
+function loadMascotClause(channel) {
+  const path = resolve('workspace/channels', channel, 'character-dna.md');
+  if (!existsSync(path)) return null;
+  const block = readFileSync(path, 'utf-8').match(/```(?:\w+)?\n([\s\S]*?)```/);
+  if (!block) return null;
+  const dna = block[1].replace(/\s+/g, ' ').trim();
+  return dna.length > 900 ? `${dna.slice(0, 900)}…` : dna;   // 시스템 프롬프트 예산 보호
+}
+
+/**
+ * image_prompt 계약 블록. 수치·템플릿은 lib/image-prompt-contract.js 가 유일한 출처다 —
+ * 여기에 숫자를 다시 적으면 검증기와 갈라진다(그래서 예전 "≤25 words" 규칙이 생겼다).
+ */
+function buildImagePromptContractBlock(mascotClause) {
+  const identity = mascotClause
+    ? `The channel mascot clause you MUST use (verbatim, inside the parentheses form shown):\n${mascotClause}\n`
+    : 'The channel has no character DNA on disk — describe the mascot inline and keep it identical across every scene.\n';
+
+  return `
+RULE 3-CONTRACT — image_prompt (machine-checked, blocks the pipeline on violation):
+
+TEMPLATE (follow exactly):
+${TEMPLATE}
+
+${identity}
+1. The mascot MUST be the grammatical SUBJECT of the scene action, in ONE sentence:
+   "<mascot clause>, <emotion>, standing before <the single scene object> …".
+   Do NOT describe the mascot in a separate sentence ("Masi is the protagonist, 40% of frame").
+   Subject position is what makes the model draw it large and centred; a separate
+   descriptive sentence makes it a corner sticker. This is the single most important rule.
+2. Exactly ONE dominant scene object, described through its relation to the mascot
+   (standing before / between / beside / under). Multiple props split the model's attention.
+3. NO negative instructions beyond the fixed tail (max ${BOUNDS.maxNegations}). Image models render what you name.
+   Write the positive form: not "no tiny corner mascot" but "standing in the centre, face readable".
+4. NO frame-percentage ("40% of frame height") and NO camera specs ("24mm", "wide-angle") — both are ignored.
+5. NO wardrobe unless the character sheet defines it; leaving it out yields the sheet default.
+   At most ${BOUNDS.maxWardrobeScenes} scene per episode may specify wardrobe.
+6. Length ${BOUNDS.minChars}~${BOUNDS.maxChars} characters per prompt, ending with the fixed tail.
+7. Palette tag from: ${KNOWN_PALETTES.join(' | ')}.
+`;
+}
+
+function buildSystemPrompt(format, persona, seriesContext, publicFiguresInfo = null, mascotClause = null) {
   const spec = FORMAT_SPECS[format];
   const sceneCount = spec.scene_count;
 
@@ -89,7 +139,8 @@ ${spec.mid_hook ? '- MID-HOOK REQUIRED: 씬 4 마지막 부분 또는 75초 지�
 RULES:
 1. Output MUST be a single JSON object. No markdown, no prose, no code fences.
 2. Voice is Yohan Koo (ElevenLabs Korean male) at ~6-7 Korean chars/sec.
-3. Image prompts in ENGLISH. Pattern MUST match proven format: "${spec.aspect}, cartoon stick figure [action verb-ing], [1-2 simple symbolic props], bold line art". Keep to 1 short sentence (≤25 words). FORBIDDEN words in image_prompt: "friendly", "smiling", "confident", "happy", "excited", "attentive", "suit", "tie", "shirt", "hair", "teacher", "businessman" — these bias the model toward detailed characters. Use ACTION VERBS only: "pointing at", "holding", "standing beside", "balancing", "running toward", "watching", "confused between", "raising". Example GOOD: "horizontal 16:9, cartoon stick figure pointing at pie chart with one large orange wedge, small stack of coins below, bold line art". Example BAD: "a friendly stick figure teacher with confident smile holding a pie chart".
+3. Image prompts in ENGLISH. They MUST satisfy the image_prompt contract below (RULE 3-CONTRACT). It is machine-checked by validate-image-prompts.js before any image is generated — a violation blocks the pipeline.
+${buildImagePromptContractBlock(mascotClause)}
 4. Korean numbers as Korean words (예: "사십 퍼센트" not "40%").
 5. BGM moods: tense_intro, calm_explain, dramatic_reveal, hopeful_outro, neutral_bg, upbeat_energy.
 6. emphasis_tokens: 1~3 Korean keywords per scene.
@@ -115,17 +166,17 @@ RULES:
     Refer to the [PUBLIC FIGURE ALLOWLIST] context block (injected below in user message) for the list of registered figures detected in this EP and their pre-resolved treatment / sensitivity / descriptor_en.
     ${hasCharacterizeFigure
       ? `THIS EPISODE HAS ${pfResolved.filter(r => r.treatment === 'CHARACTERIZE').length} REGISTERED CHARACTERIZE FIGURE(S). Apply RULE 14 sub-rules below.`
-      : 'No registered CHARACTERIZE figure detected in this EP — RULE 3 (cartoon stick figure) applies as default for ALL scenes. RULE 14 sub-rules (a)~(g) below remain authoritative if any inferred figure surfaces in narration.'}
+      : 'No registered CHARACTERIZE figure detected in this EP — the RULE 3-CONTRACT mascot clause applies as default for ALL scenes. RULE 14 sub-rules (a)~(g) below remain authoritative if any inferred figure surfaces in narration.'}
     Sub-rules:
-    (a) For scenes that depict a registered CHARACTERIZE figure, REPLACE the "cartoon stick figure" phrase from RULE 3 with the figure's descriptor_en (caricature descriptor) listed in the allowlist context block. Keep the rest of RULE 3 intact (aspect prefix, action verbs, props, "bold line art").
-        Example BAD (RULE 3 only): "horizontal 16:9, cartoon stick figure pointing at upward arrow chart, bold line art".
-        Example GOOD (descriptor injected): "horizontal 16:9, cartoon caricature of an orange-haired man in dark navy suit and red tie pointing at upward arrow chart, bold line art".
-    (b) For scenes that do NOT depict any CHARACTERIZE figure, RULE 3 applies unchanged ("cartoon stick figure").
-    (c) For figures whose resolved treatment is NEUTRAL_MASCOT (외국 연예인, 미승인 한국 인사, 일반인 등), do NOT inject any identification cues — RULE 3 applies unchanged. The allowlist context block marks these explicitly.
+    (a) For scenes that depict a registered CHARACTERIZE figure, REPLACE the mascot clause from RULE 3-CONTRACT with the figure's descriptor_en (caricature descriptor) listed in the allowlist context block. Keep the rest of the contract intact — the figure still has to be the grammatical SUBJECT of the scene action, followed by BACKGROUND: and the fixed tail.
+        Example BAD (figure reduced to a described object): "A cartoon caricature of an orange-haired man is shown. An upward arrow chart fills the frame."
+        Example GOOD (figure as subject): "[palette:bullish] a cartoon caricature of an orange-haired man in a dark navy suit and red tie, serious, standing beside a giant upward arrow chart with one mitten hand raised toward its peak. BACKGROUND: …, bold illustrated line art, 9:16 vertical, no readable text or numbers."
+    (b) For scenes that do NOT depict any CHARACTERIZE figure, the RULE 3-CONTRACT mascot clause applies unchanged.
+    (c) For figures whose resolved treatment is NEUTRAL_MASCOT (외국 연예인, 미승인 한국 인사, 일반인 등), do NOT inject any identification cues — the RULE 3-CONTRACT mascot clause applies unchanged. The allowlist context block marks these explicitly.
     (d) For figures with sensitivity=high (암살·사망·범죄·테러 등 보도): in scenes depicting that figure, EVERY image_prompt and narration MUST avoid 풍자·조롱·코미디 props/표정. Use 무표정 또는 진지(serious) only. NEVER include sight of 사망/부상/피/총상/총알. NEVER include comedy stars, exploding effects, skulls, or animal substitution. (정책 §3.2 high · §4.3 금지표 적용)
     (e) Per-video CHARACTERIZE scene cap: Shorts ≤ 2 scenes, Long-3min ≤ 3 scenes. (sceneCount=${sceneCount}, cap=${sceneCap}). If multiple CHARACTERIZE figures appear, the cap is the SUM (not per figure).
     (f) Image prompts MUST NOT spell out the figure's name in any language (Korean/English/native script). Use only the descriptor — RULE 11 (no text labels) remains authoritative. Narration may reference the figure by Korean display name (display_name_ko) since narration is voiced, not rendered as on-screen text.
-    (g) If the allowlist context block marks a figure as BLOCKED (REQUIRES_LEGAL_REVIEW without operator approval), treat that figure as NEUTRAL_MASCOT and DO NOT inject any descriptor — fall back to RULE 3.
+    (g) If the allowlist context block marks a figure as BLOCKED (REQUIRES_LEGAL_REVIEW without operator approval), treat that figure as NEUTRAL_MASCOT and DO NOT inject any descriptor — fall back to the RULE 3-CONTRACT mascot clause.
     (h) CRITICAL — image_prompt MUST NOT contain the literal words "photorealistic", "photo-realistic", "photo realistic", "realistic photo", "hyperrealistic", "hyper-realistic", or "lifelike" in ANY context — including negation forms like "not photorealistic" or "no photorealistic rendering". The QA policy §6.2.3 detector matches these keywords by string-presence regardless of negation. Use positive descriptors only ("cartoon caricature", "bold line art", "stylized features", "simplified rounded face", "mascot proportions"). Do NOT explain the absence of realism — assert the cartoon style positively.
         BAD:  "stylized features but not photorealistic, simplified rounded face"
         BAD:  "no photorealistic rendering, no photo-realistic textures"
@@ -138,7 +189,7 @@ OUTPUT SCHEMA:
       "scene_id": "001",
       "role": "hook",
       "narration": "...",
-      "image_prompt": "${spec.aspect}, cartoon stick figure...",
+      "image_prompt": "[palette:bearish] <mascot clause>, worried, standing before <one scene object> …. BACKGROUND: …, ${CANONICAL_TAIL}",
       "bgm_mood": "tense_intro",
       "target_seconds": 15,
       "emphasis_tokens": ["...", "..."]
@@ -313,7 +364,10 @@ async function main() {
   }
   console.log(`   Model: ${values.model || DEFAULT_MODEL}`);
 
-  const systemPrompt = buildSystemPrompt(format, persona, seriesContext, publicFiguresInfo);
+  const mascotClause = loadMascotClause(channel);
+  console.log(`   Mascot DNA: ${mascotClause ? `주입됨 (${mascotClause.length}자)` : '없음 — 인라인 서술 지시'}`);
+
+  const systemPrompt = buildSystemPrompt(format, persona, seriesContext, publicFiguresInfo, mascotClause);
 
   const userPromptParts = [
     `[EPISODE BRIEF]`,
