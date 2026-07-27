@@ -19,7 +19,7 @@ What it can do headless (deterministic stages):
                        or skipped when a CapCut export already exists)
   R8 final QA      -> qa_reel_media.py final       (writes 60_qa_report.media.json)
   R9 distribution  -> copy final into distribution/reels/ + write publish meta
-  R11 postmortem   -> write 90_timing/production-timing.md from job state
+  R11 postmortem   -> write 90_timing/postmortem.md from job state
 
 Where it stops (handoff, never crossed autonomously):
   R2 ChatGPT images / R4 Grok videos  -> needs interactive claude --chrome
@@ -31,17 +31,20 @@ Usage:
   python3 reel_autopilot.py <reel> [--episode EP-ID] [--allow-render]
                             [--online-doctor] [--max-steps N] [--json]
 
-Exit code 0 always (a clean stop is not an error); read the JSON `blocked`/`done`
-fields for outcome. Prints a human summary unless --json.
+Exit codes: 0 completed, 2 usage/config, 3 blocked handoff,
+4 recoverable failure, 5 fatal. The final stdout line is compact JSON.
 """
 from __future__ import annotations
 
 import argparse
+import filecmp
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -61,6 +64,14 @@ GUI = {"R7"}
 # stages behind an explicit human gate
 HITL = {"R10"}
 
+EXIT_CODES = {
+    "completed": 0,
+    "usage_or_config": 2,
+    "blocked": 3,
+    "recoverable_failure": 4,
+    "fatal": 5,
+}
+
 
 def now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
@@ -75,6 +86,49 @@ def run(cmd: list[str], timeout: int = 600) -> tuple[int, str, str]:
         return 1, "", str(e)
 
 
+def parse_json_output(output: str) -> dict | None:
+    """Read the final JSON line, with whole-output support for legacy CLIs."""
+    for line in reversed(output.splitlines()):
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+    try:
+        value = json.loads(output)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def outcome(status: str, stage: str | None, reason: str, **detail: Any) -> dict:
+    result = {"status": status, "stage": stage, "reason": reason, **detail}
+    if status == "completed":
+        result.update(ok=True, done=True)
+    elif status == "blocked":
+        result.update(ok=True, done=False, blocked=stage)
+    elif status == "fatal":
+        result.update(ok=False, done=False, fatal=reason)
+    else:
+        result.update(ok=False, done=False)
+    return result
+
+
+def job_failure(result: dict, stage: str | None, action: str) -> dict | None:
+    """Translate a render_reel_job CLI failure without losing its exit class."""
+    code = result.get("_code", 0)
+    if code == 0 and result.get("ok") is not False:
+        return None
+    status = {2: "usage_or_config", 3: "blocked", 4: "recoverable_failure",
+              5: "fatal"}.get(code, "fatal")
+    reason = result.get("reason") or result.get("error") or f"{action} failed"
+    if not isinstance(reason, str):
+        reason = json.dumps(reason, ensure_ascii=False)
+    return outcome(status, result.get("stage") or stage,
+                   f"{action}: {reason}", detail=result)
+
+
 def job_json(reel: Path, *args: str) -> dict:
     """Run a render_reel_job.py subcommand and parse its JSON stdout.
 
@@ -82,18 +136,16 @@ def job_json(reel: Path, *args: str) -> dict:
     subcommand and the reel path is inserted right after it.
     """
     code, out, err = run([sys.executable, JOB, args[0], str(reel), *args[1:]])
-    try:
-        return json.loads(out)
-    except json.JSONDecodeError:
-        return {"ok": False, "error": err or out or "no output", "_code": code}
+    data = parse_json_output(out)
+    if data is None:
+        data = {"ok": False, "error": err or out or "no valid JSON output"}
+    data["_code"] = code
+    return data
 
 
 def qa(reel: Path, mode: str) -> dict:
     code, out, err = run([sys.executable, QA, mode, str(reel)])
-    try:
-        data = json.loads(out)
-    except json.JSONDecodeError:
-        data = {"ok": False, "error": err or out}
+    data = parse_json_output(out) or {"ok": False, "error": err or out}
     data["_exit"] = code
     return data
 
@@ -175,8 +227,15 @@ def do_distribution(reel: Path, episode: str | None) -> dict:
     dest_dir = reel / "distribution" / "reels"
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / f"{slug}.mp4"
-    if not dest.is_file():
-        shutil.copy2(final, dest)
+    if not dest.is_file() or not filecmp.cmp(final, dest, shallow=False):
+        with tempfile.NamedTemporaryFile(dir=dest_dir, prefix=f".{dest.name}.",
+                                         delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+        try:
+            shutil.copy2(final, tmp_path)
+            os.replace(tmp_path, dest)
+        finally:
+            tmp_path.unlink(missing_ok=True)
     written = [str(dest)]
 
     meta_path = reel / "70_publish_meta.instagram.json"
@@ -194,7 +253,7 @@ def do_distribution(reel: Path, episode: str | None) -> dict:
 
 
 def do_postmortem(reel: Path, episode: str | None, job: dict) -> dict:
-    """R11: write a timing/postmortem markdown from the job state (honest about
+    """R11: write a postmortem markdown from the job state (honest about
     whether per-stage timing was instrumented)."""
     tdir = reel / "90_timing"
     tdir.mkdir(parents=True, exist_ok=True)
@@ -223,7 +282,7 @@ def do_postmortem(reel: Path, episode: str | None, job: dict) -> dict:
         "workers to populate real durations here.",
         "",
     ]
-    md = tdir / "production-timing.md"
+    md = tdir / "postmortem.md"
     md.write_text("\n".join(lines), encoding="utf-8")
     return {"ok": True, "written": [str(md)]}
 
@@ -237,162 +296,211 @@ def autopilot(reel: Path, episode: str | None, allow_render: bool,
     def note(stage: str, action: str, **kw: Any) -> None:
         log.append({"stage": stage, "action": action, **kw})
 
-    # 0. ensure job + preflight
-    init = job_json(reel, "init", *(["--episode", episode] if episode else []))
-    if not init.get("ok"):
-        return {"ok": False, "fatal": "init failed", "detail": init}
-
+    # 0. Preflight must precede init/sync: a failed doctor may not mutate job state.
     dcmd = [sys.executable, DOCTOR, str(reel)]
     if online_doctor:
         dcmd.append("--online")
-    dcode, dout, _ = run(dcmd)
-    try:
-        doctor = json.loads(dout)
-        note("preflight", "doctor", ok=doctor.get("ok"),
-             report=str(reel / "00_preflight.media.json"))
-    except json.JSONDecodeError:
-        note("preflight", "doctor", ok=None, warning="doctor produced no JSON")
+    dcode, dout, derr = run(dcmd)
+    doctor = parse_json_output(dout)
+    if dcode != 0 or doctor is None or doctor.get("ok") is not True:
+        reason = ("media_render_doctor produced no valid JSON" if doctor is None
+                  else f"media_render_doctor failed (exit {dcode})")
+        return outcome("fatal", "preflight", reason,
+                       detail=doctor or {"stderr": derr, "stdout": dout})
+    note("preflight", "doctor", ok=True,
+         report=str(reel / "00_preflight.media.json"))
+
+    init = job_json(reel, "init", *(["--episode", episode] if episode else []))
+    problem = job_failure(init, "init", "render job init")
+    if problem:
+        return problem
 
     # 1. drive
     steps = 0
     while steps < max_steps:
         steps += 1
         st = job_json(reel, "sync")
+        problem = job_failure(st, None, "render job sync")
+        if problem:
+            return problem
         nxt = st.get("next", {})
         stage = nxt.get("stage")
 
         if stage is None:
-            return {"ok": True, "done": True, "reason": "all stages complete",
-                    "stages": st.get("stages"), "log": log}
+            return outcome("completed", None, "all stages complete",
+                           stages=st.get("stages"), log=log)
 
         status = nxt.get("status")
 
         # a failed QA gate blocks — needs a re-render/re-roll, not this driver
         if status == "failed":
-            return {"ok": True, "done": False, "blocked": stage,
-                    "blocked_kind": "qa_failed",
-                    "reason": f"{stage} failed: {(nxt.get('error') or {}).get('type')}",
-                    "next_action": "inspect the QA report, re-roll/re-render the "
-                                   "failing cut, then re-run autopilot",
-                    "stages": st.get("stages"), "log": log}
+            return outcome(
+                "recoverable_failure", stage,
+                f"{stage} failed: {(nxt.get('error') or {}).get('type')}",
+                blocked_kind="qa_failed",
+                next_action="inspect the QA report, re-roll/re-render the failing "
+                            "cut, then re-run autopilot",
+                stages=st.get("stages"), log=log)
 
         # browser stages — hand off to interactive claude --chrome
         if stage in BROWSER:
             kind = "ChatGPT images" if stage == "R2" else "Grok videos"
-            return {"ok": True, "done": False, "blocked": stage,
-                    "blocked_kind": "browser",
-                    "reason": f"{stage} ({kind}) needs a logged-in browser; "
-                              f"pending cuts: {nxt.get('pending_cuts')}",
-                    "next_action": "run `claude --chrome` and invoke the "
-                                   "barrotube-media-render skill on this reel "
-                                   "(or `bash tools/media-process.sh` for today.myo)",
-                    "stages": st.get("stages"), "log": log}
+            return outcome(
+                "blocked", stage,
+                f"{stage} ({kind}) needs a logged-in browser; "
+                f"pending cuts: {nxt.get('pending_cuts')}",
+                blocked_kind="browser",
+                next_action="run `claude --chrome` and invoke the "
+                            "barrotube-media-render skill on this reel "
+                            "(or `bash tools/media-process.sh` for today.myo)",
+                stages=st.get("stages"), log=log)
 
         # R6 FFmpeg master — skip when a CapCut export already exists (today.myo route)
         if stage == "R6":
             if (reel / "56_capcut_export" / "video.mp4").is_file():
-                job_json(reel, "skip", "R6", "--note",
-                         "CapCut-composed route: FFmpeg master subsumed by CapCut export (R7)")
+                skipped = job_json(
+                    reel, "skip", "R6", "--note",
+                    "CapCut-composed route: FFmpeg master subsumed by CapCut export (R7)")
+                problem = job_failure(skipped, "R6", "skip FFmpeg master")
+                if problem:
+                    return problem
                 note("R6", "skipped", reason="CapCut export present")
                 continue
             if (reel / "55_render" / "video.mp4").is_file():
                 note("R6", "already-rendered")
                 continue  # sync will complete it next loop
             if not allow_render:
-                return {"ok": True, "done": False, "blocked": "R6",
-                        "blocked_kind": "needs_render",
-                        "reason": "no 55_render/video.mp4 and no CapCut export",
-                        "next_action": "run render_master_mix.py (needs BGM), or "
-                                       "compose in CapCut, then re-run autopilot "
-                                       "(pass --allow-render to attempt FFmpeg master)",
-                        "stages": st.get("stages"), "log": log}
+                return outcome(
+                    "blocked", "R6",
+                    "no 55_render/video.mp4 and no CapCut export",
+                    blocked_kind="needs_render",
+                    next_action="run render_master_mix.py (needs BGM), or compose "
+                                "in CapCut, then re-run autopilot (pass --allow-render "
+                                "to attempt FFmpeg master)",
+                    stages=st.get("stages"), log=log)
             # allow_render: attempt the common FFmpeg master (best-effort)
-            job_json(reel, "start", "R6")
+            started = job_json(reel, "start", "R6")
+            problem = job_failure(started, "R6", "start FFmpeg master")
+            if problem:
+                return problem
             code, out, err = run([sys.executable, MASTER, "--reel", str(reel),
                                   "--episode", episode or reel.name])
             if code == 0 and (reel / "55_render" / "video.mp4").is_file():
                 note("R6", "rendered", via="render_master_mix.py")
                 continue
-            job_json(reel, "fail", "R6", "--error-type", "other",
-                     "--message", (err or out or "render failed")[:300])
-            return {"ok": True, "done": False, "blocked": "R6",
-                    "blocked_kind": "render_failed",
-                    "reason": "render_master_mix.py did not produce 55_render/video.mp4",
-                    "next_action": "render_master_mix usually needs --bgm; run it "
-                                   "manually with a BGM bed, or compose in CapCut",
-                    "detail": (err or out)[:500], "stages": st.get("stages"), "log": log}
+            recorded = job_json(reel, "fail", "R6", "--error-type", "other",
+                                "--message", (err or out or "render failed")[:300])
+            if recorded.get("_code") not in (0, 4):
+                problem = job_failure(recorded, "R6", "record render failure")
+                if problem:
+                    return problem
+            return outcome(
+                "recoverable_failure", "R6",
+                "render_master_mix.py did not produce 55_render/video.mp4",
+                blocked_kind="render_failed",
+                next_action="render_master_mix usually needs --bgm; run it manually "
+                            "with a BGM bed, or compose in CapCut",
+                detail=(err or out)[:500], stages=st.get("stages"), log=log)
 
         # R7 CapCut export — cannot drive the GUI headless
         if stage in GUI:
-            return {"ok": True, "done": False, "blocked": stage,
-                    "blocked_kind": "gui",
-                    "reason": "CapCut export not found (56_capcut_export/video.mp4)",
-                    "next_action": "build/export the CapCut draft (see "
-                                   "capcut-reel-export.md / capcut-draft-automation), "
-                                   "then re-run autopilot",
-                    "stages": st.get("stages"), "log": log}
+            return outcome(
+                "blocked", stage,
+                "CapCut export not found (56_capcut_export/video.mp4)",
+                blocked_kind="gui",
+                next_action="build/export the CapCut draft (see capcut-reel-export.md "
+                            "/ capcut-draft-automation), then re-run autopilot",
+                stages=st.get("stages"), log=log)
 
         # R3 / R5 / R8 QA gates
         if stage in ("R3", "R5", "R8"):
             mode = {"R3": "images", "R5": "videos", "R8": "final"}[stage]
-            job_json(reel, "start", stage)
+            started = job_json(reel, "start", stage)
+            problem = job_failure(started, stage, f"start {mode} QA")
+            if problem:
+                return problem
             r = qa(reel, mode)
-            if r.get("ok"):
+            if r.get("_exit") == 0 and r.get("ok") is True:
+                ended = job_json(
+                    reel, "end", stage, "--approve",
+                    "autopilot: deterministic QA ok=true")
+                problem = job_failure(ended, stage, f"approve {mode} QA")
+                if problem:
+                    return problem
                 note(stage, "qa_pass", mode=mode,
                      report=r.get("report") or r.get("stages"))
-                continue  # sync will mark completed from the ok:true report
+                continue
             # QA failed — record and stop
-            job_json(reel, "fail", stage, "--error-type", "qa_failed",
-                     "--message", f"{mode} QA ok:false")
-            return {"ok": True, "done": False, "blocked": stage,
-                    "blocked_kind": "qa_failed",
-                    "reason": f"{stage} {mode} QA failed",
-                    "next_action": f"inspect {reel}/60_qa_report.{mode}.json, fix the "
-                                   f"error-level checks, then re-run autopilot",
-                    "qa": r, "stages": st.get("stages"), "log": log}
+            recorded = job_json(reel, "fail", stage, "--error-type", "qa_failed",
+                                "--message", f"{mode} QA ok:false")
+            if recorded.get("_code") not in (0, 4):
+                problem = job_failure(recorded, stage, f"record {mode} QA failure")
+                if problem:
+                    return problem
+            return outcome(
+                "recoverable_failure", stage, f"{stage} {mode} QA failed",
+                blocked_kind="qa_failed",
+                next_action=f"inspect {reel}/60_qa_report.{mode}.json, fix the "
+                            "error-level checks, then re-run autopilot",
+                qa=r, stages=st.get("stages"), log=log)
 
         # R9 distribution
         if stage == "R9":
-            job_json(reel, "start", "R9")
+            started = job_json(reel, "start", "R9")
+            problem = job_failure(started, "R9", "start distribution")
+            if problem:
+                return problem
             d = do_distribution(reel, episode)
             if d.get("ok"):
                 note("R9", "packaged", **d)
                 continue
-            return {"ok": True, "done": False, "blocked": "R9",
-                    "blocked_kind": "distribution",
-                    "reason": d.get("reason"), "next_action": "ensure a final video exists",
-                    "stages": st.get("stages"), "log": log}
+            return outcome(
+                "recoverable_failure", "R9", d.get("reason") or "distribution failed",
+                blocked_kind="distribution", next_action="ensure a final video exists",
+                stages=st.get("stages"), log=log)
 
         # R10 Instagram publish — HITL, never autonomous
         if stage in HITL:
             meta = reel / "70_publish_meta.instagram.json"
-            return {"ok": True, "done": False, "blocked": "R10",
-                    "blocked_kind": "hitl_publish",
-                    "reason": "Instagram publish requires explicit human approval",
-                    "next_action": "review 70_publish_meta.instagram.json (caption!), "
-                                   "confirm the Instagram token is set, then publish "
-                                   "via the HITL path (publish-process.sh / "
-                                   "publish-instagram-reels.js). Autopilot will not post.",
-                    "publish_meta_present": meta.is_file(),
-                    "stages": st.get("stages"), "log": log}
+            return outcome(
+                "blocked", "R10", "Instagram publish requires explicit human approval",
+                blocked_kind="hitl_publish",
+                next_action="review 70_publish_meta.instagram.json, approve via "
+                            "scripts/publish_gate.py, then perform the external "
+                            "upload manually. Re-run the gate before recording completion.",
+                publish_meta_present=meta.is_file(),
+                stages=st.get("stages"), log=log)
 
         # R11 postmortem/timing
         if stage == "R11":
-            job_json(reel, "start", "R11")
+            started = job_json(reel, "start", "R11")
+            problem = job_failure(started, "R11", "start postmortem")
+            if problem:
+                return problem
             full = job_json(reel, "status", "--json")
-            do_postmortem(reel, episode, full)
+            problem = job_failure(full, "R11", "read job for postmortem")
+            if problem:
+                return problem
+            written = do_postmortem(reel, episode, full)
+            ended = job_json(reel, "end", "R11")
+            problem = job_failure(ended, "R11", "complete postmortem")
+            if problem:
+                return problem
             note("R11", "postmortem_written")
-            continue
+            stages = dict(st.get("stages") or {})
+            stages["R11"] = "completed"
+            return outcome("completed", "R11", "all stages complete",
+                           written=written.get("written"), stages=stages, log=log)
 
         # unknown manual stage still pending (R0/R0.5 without a script) — hand off
-        return {"ok": True, "done": False, "blocked": stage,
-                "blocked_kind": "manual",
-                "reason": f"{stage} is a manual stage still pending",
-                "next_action": "resolve the topic/script stage (R0/R0.5/R1) first",
-                "stages": st.get("stages"), "log": log}
+        return outcome(
+            "blocked", stage, f"{stage} is a manual stage still pending",
+            blocked_kind="manual",
+            next_action="resolve the topic/script stage (R0/R0.5/R1) first",
+            stages=st.get("stages"), log=log)
 
-    return {"ok": True, "done": False, "blocked": "max_steps",
-            "reason": f"stopped after {max_steps} steps (guard)", "log": log}
+    return outcome("recoverable_failure", "max_steps",
+                   f"stopped after {max_steps} steps (guard)", log=log)
 
 
 def human_summary(res: dict, reel: Path) -> str:
@@ -408,14 +516,27 @@ def human_summary(res: dict, reel: Path) -> str:
         lines.append(f"    next: {res.get('next_action')}")
     elif res.get("fatal"):
         lines.append(f"● FATAL: {res['fatal']}")
+    elif res.get("status") == "recoverable_failure":
+        lines.append(f"● RETRY at {res.get('stage')}: {res.get('reason')}")
+    elif res.get("status") == "usage_or_config":
+        lines.append(f"● CONFIG: {res.get('reason')}")
     if res.get("stages"):
-        done = sum(1 for v in res["stages"].values() if v in ("completed", "skipped"))
-        lines.append(f"● progress: {done}/{len(res['stages'])} stages done")
+        stages = res["stages"]
+        if isinstance(stages, dict):
+            done = sum(1 for v in stages.values() if v in ("completed", "skipped"))
+            lines.append(f"● progress: {done}/{len(stages)} stages done")
     return "\n".join(lines)
 
 
+class ContractArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        print(json.dumps(outcome("usage_or_config", None, message),
+                         ensure_ascii=False, separators=(",", ":")))
+        raise SystemExit(2)
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(
+    ap = ContractArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("reel")
     ap.add_argument("--episode")
@@ -429,16 +550,20 @@ def main() -> int:
 
     reel = Path(args.reel).expanduser().resolve()
     if not reel.is_dir():
-        print(json.dumps({"ok": False, "error": f"not a directory: {reel}"}))
-        return 2
-
-    res = autopilot(reel, args.episode, args.allow_render, args.online_doctor,
-                    args.max_steps)
-    if args.json:
-        print(json.dumps(res, ensure_ascii=False, indent=2))
+        res = outcome("usage_or_config", None, f"not a directory: {reel}")
+    elif args.max_steps < 1:
+        res = outcome("usage_or_config", None, "--max-steps must be at least 1")
     else:
+        try:
+            res = autopilot(reel, args.episode, args.allow_render,
+                            args.online_doctor, args.max_steps)
+        except Exception as exc:
+            res = outcome("fatal", None, f"{type(exc).__name__}: {exc}")
+
+    if not args.json:
         print(human_summary(res, reel))
-    return 0
+    print(json.dumps(res, ensure_ascii=False, separators=(",", ":")))
+    return EXIT_CODES.get(res.get("status"), 5)
 
 
 if __name__ == "__main__":

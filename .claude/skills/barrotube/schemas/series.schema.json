@@ -1,0 +1,134 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://barrotube.local/schemas/series.schema.json",
+  "title": "BarroTube series index",
+  "description": "Canonical v2 series planning data plus read-only today.myo v1 compatibility.",
+  "oneOf": [
+    { "$ref": "#/$defs/canonical" },
+    { "$ref": "#/$defs/todayMyoLegacy" }
+  ],
+  "$defs": {
+    "channelId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9](?:[a-z0-9.-]{0,62}[a-z0-9])?$"
+    },
+    "manualQa": {
+      "type": "object",
+      "required": ["checks"],
+      "properties": {
+        "checks": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "type": "boolean" },
+              { "type": "object", "additionalProperties": true }
+            ]
+          }
+        },
+        "passed": { "type": ["boolean", "null"] },
+        "notes": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "canonicalEpisode": {
+      "type": "object",
+      "required": [
+        "id",
+        "episode_no",
+        "title",
+        "slug",
+        "format",
+        "folder",
+        "manual_qa",
+        "risk_flags"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "episode_no": { "type": "integer", "minimum": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "slug": { "type": "string", "minLength": 1 },
+        "format": { "type": "string", "minLength": 1 },
+        "weekday": { "type": "string" },
+        "arc_beat": { "type": "string" },
+        "folder": { "type": "string", "minLength": 1 },
+        "manual_qa": { "$ref": "#/$defs/manualQa" },
+        "risk_flags": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "object", "additionalProperties": true }
+            ]
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "canonicalSeries": {
+      "type": "object",
+      "required": ["id", "title", "status", "episodes"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "status": { "type": "string", "minLength": 1 },
+        "season": { "type": "integer", "minimum": 1 },
+        "episodes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/canonicalEpisode" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "canonical": {
+      "type": "object",
+      "required": ["schema_version", "channel_id", "revision", "series"],
+      "properties": {
+        "schema_version": {
+          "oneOf": [
+            { "const": 2 },
+            { "const": "2" },
+            { "const": "2.0" }
+          ]
+        },
+        "channel_id": { "$ref": "#/$defs/channelId" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "series": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/canonicalSeries" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "todayMyoLegacyEpisode": {
+      "type": "object",
+      "required": ["episode_no", "title", "slug", "format"],
+      "properties": {
+        "episode_no": { "type": "integer", "minimum": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "slug": { "type": "string", "minLength": 1 },
+        "format": { "type": "string", "minLength": 1 },
+        "weekday": { "type": "string" },
+        "arc_beat": { "type": "string" },
+        "folder": { "type": "string" },
+        "qa_checks": { "type": "array", "items": { "type": "boolean" } }
+      },
+      "additionalProperties": true
+    },
+    "todayMyoLegacy": {
+      "type": "object",
+      "required": ["season", "generation", "episodes"],
+      "properties": {
+        "schema": { "type": "string" },
+        "season": { "type": "integer", "minimum": 1 },
+        "generation": { "type": "integer", "minimum": 1 },
+        "episodes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/todayMyoLegacyEpisode" }
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

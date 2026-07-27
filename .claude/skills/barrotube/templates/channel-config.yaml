@@ -1,75 +1,112 @@
-# channel-config.yaml
-# 채널별 운영 설정 — workspace/channels/<channel>/channel.yaml에 저장
+# channel-config.yaml — BarroTube federated channel manifest v1
+# 정본 위치: ${BARROTUBE_DATA}/workspace/channels/<channel-id>/channel.yaml
 #
-# 새 채널 추가 시 본 템플릿 복사 후 수정:
-#   cp templates/channel-config.yaml workspace/channels/<new-channel>/channel.yaml
-#   vi workspace/channels/<new-channel>/channel.yaml
+# 새 채널 추가:
+#   1. 이 파일을 정본 위치에 복사해 값과 기존 자산 경로를 연결한다.
+#   2. status는 needs_review로 유지하고 중앙 보드에서 충돌·경로를 검토한다.
+#   3. unresolved conflict가 0일 때만 active로 전환한다.
+#
+# 원본 영상·이미지·문서를 이 디렉토리로 옮기지 않는다. paths가 기존 위치를 참조하는
+# federated registry이며, credential 값 자체가 아닌 환경변수 이름만 기록한다.
 
-channel:
-  id: <channel-id>                    # 예: econ-daily, ai-investing 등
-  name: <한국어 채널명>
+schema_version: 1
+id: <channel-id>                    # 소문자 영숫자, 점(.), 하이픈(-)
+revision: 1                         # 보드 저장 때 증가; 직접 되감지 않는다
+status: needs_review                # needs_review | active | paused | archived
+
+identity:
+  display_name: <한국어 채널명>
   description: <한 줄 설명>
+  owner: beye
   language: ko
   target_country: KR
+  timezone: Asia/Seoul
 
-youtube:
-  channel_id: UC...                   # YouTube Studio에서 확인
-  default_privacy: unlisted           # public | unlisted | private
-  category_id: 22                     # YouTube category ID (22=People & Blogs)
-  upload_quota_daily: 6               # 일일 업로드 상한 (10,000 unit / 1600/영상)
+platforms:
+  youtube:
+    enabled: true
+    channel_id: null                # 실제 발행 계정을 검증한 뒤 입력
+    default_privacy: unlisted       # public | unlisted | private
+    category_id: 22                 # 22 = People & Blogs
+    upload_quota_daily: 6
+  # instagram:
+  #   enabled: false
+  #   handle: "@channel"
+  #   account_id: null
 
-formats:                              # 이 채널에서 활성화된 포맷 (formats.json id 참조)
-  - shorts
-  - long-3min
+pipeline:
+  profile: barrotube-s12            # barrotube-s12 | media-render-r11 | carousel-c4
+  additional_profiles: []           # 예: [carousel-c4]
 
-default_persona:
+formats:
+  enabled: [shorts, long-3min]
+  default: shorts
+
+personas:
   shorts: barro-alert
   long-3min: barro-teacher
 
 cadence:
-  long-3min:
-    target_per_week: 3                # 주당 발행 목표
-    days: [Mon, Wed, Fri]             # 발행 요일
-    time: "12:00"                     # 발행 시각 (KST)
+  timezone: Asia/Seoul
   shorts:
-    target_per_week: 7                # 일 1편
+    target_per_week: 7
     days: [Mon, Tue, Wed, Thu, Fri, Sat, Sun]
     time: "18:00"
+  long-3min:
+    target_per_week: 3
+    days: [Mon, Wed, Fri]
+    time: "12:00"
 
+paths:
+  project_root: ${BARROTUBE_DATA}/workspace/channels/<channel-id>
+  episodes_root: ${BARROTUBE_DATA}/workspace/episodes
+  series_index: ${BARROTUBE_DATA}/workspace/channels/<channel-id>/series/index.json
+  brand: ${BARROTUBE_DATA}/workspace/channels/<channel-id>/brand.md
+  character_dna: ${BARROTUBE_DATA}/workspace/channels/<channel-id>/character-dna.md
+  character_sheets: []
+  style_guides:
+    shorts: ${BARROTUBE_DATA}/workspace/channels/<channel-id>/style-guide-shorts.md
+    long-3min: ${BARROTUBE_DATA}/workspace/channels/<channel-id>/style-guide-long.md
+  policies: []
+  reference_docs: []
+
+document:
+  title: <채널명> 영상 제작·관리 설계문서
+  output_path: ${BARROTUBE_DATA}/workspace/channels/<channel-id>/<channel-id>-영상제작-설계문서.html
+
+credentials:
+  youtube:
+    client_id_env: YOUTUBE_CHANNEL_OAUTH_CLIENT_ID
+    client_secret_env: YOUTUBE_CHANNEL_OAUTH_CLIENT_SECRET
+    refresh_token_env: YOUTUBE_CHANNEL_OAUTH_REFRESH_TOKEN
+
+# 아래 운영 설정은 기존 파이프라인에서 계속 사용한다.
 branding:
   intro_card:
-    template_path: workspace/channels/<channel-id>/intro-template.png
+    template_path: ${BARROTUBE_DATA}/workspace/channels/<channel-id>/intro-template.png
     duration_seconds: 2
     audio: silent
   thumbnail:
-    style_guide_path: workspace/channels/<channel-id>/style-guide-thumbnail.md
+    style_guide_path: ${BARROTUBE_DATA}/workspace/channels/<channel-id>/style-guide-thumbnail.md
     max_korean_chars: 6
     color_palette:
-      barro-teacher: "#F4A261"       # 오렌지
-      barro-alert: "#E63946"          # 빨강
-  brand_dna_path: workspace/channels/<channel-id>/brand-dna.md
-
-style_guides:
-  shorts: workspace/channels/<channel-id>/style-guide-shorts.md
-  long-3min: workspace/channels/<channel-id>/style-guide-long.md
+      barro-teacher: "#F4A261"
+      barro-alert: "#E63946"
 
 playlists:
-  auto_register_for_series: true      # 시리즈 마지막 EP 후 자동 등록
+  auto_register_for_series: true
   default_privacy: unlisted
 
-budget_override:                      # 채널별 예산 한도 override (선택)
-  # producer: 80                      # 기본 budget-policy.json $60 → 채널별 $80
-  # 미설정 시 budget-policy.json의 글로벌 한도 적용
+budget_override: {}                   # 미설정 시 config/budget-policy.json 사용
 
-competitor_channels:                  # 마케팅 분석 대상 (config/competitor-channels.json 외 추가)
-  # - UC1234567
-  # - UC7890123
+competitor_channels: []              # config/competitor-channels.json 외 추가 대상
 
 seo:
-  blue_ocean_keywords:
-    - 키워드1
-    - 키워드2
-  default_hashtags:
-    - "#경제"
-    - "#투자"
-    - "#BarroTube"
+  blue_ocean_keywords: []
+  default_hashtags: ["#BarroTube"]
+
+migration:
+  imported_at: null
+  reviewed_at: null
+  sources: []                      # 기존 설정·문서·자산 경로와 provenance
+  conflicts: []                    # 발견 시 field/reason/candidates/resolution 기록

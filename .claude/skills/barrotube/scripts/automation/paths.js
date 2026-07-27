@@ -52,7 +52,8 @@ export function resolvePaths(episodeDir, format = 'long-3min') {
   const epAbs = resolve(episodeDir);
   const platform = formatToPlatform(format);
   const platformDir = join(epAbs, 'platforms', platform);
-  const isV2 = existsSync(join(epAbs, 'platforms')) || existsSync(platformDir);
+  const productionLayout = ['long', 'shorts'].some(name => existsSync(join(epAbs, 'platforms', name)));
+  const isV2 = existsSync(platformDir) || productionLayout;
   const base = isV2 ? platformDir : epAbs;
 
   return {

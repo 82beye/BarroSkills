@@ -22,12 +22,43 @@
 import { readFileSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import { parse as parseYAML } from 'yaml';
 import {
   detectPolicyViolations,
   formatPolicySection,
 } from './lib/qa-policy-detect.js';
+import { checkEpisodePrompts } from './lib/image-prompt-contract.js';
+
+/**
+ * image_prompt 계약 결과를 QA 리포트에 싣는다.
+ * 실제 게이트는 이미지 생성 전에 도는 validate-image-prompts.js 이고 —
+ * 여기 섹션은 발행 검토 시 "이 EP가 기준점에서 얼마나 벗어났나"를 남기는 기록이다.
+ */
+function formatImagePromptSection(scenes) {
+  const items = (scenes || [])
+    .map(s => ({ sceneId: s.scene_id, prompt: s.image_prompt }))
+    .filter(s => s.prompt);
+  if (!items.length) return '## 📐 image_prompt 계약\n\n(image_prompt 없음)';
+
+  const { ok, violations, stats } = checkEpisodePrompts(items);
+  const lines = [
+    '## 📐 image_prompt 계약 (lib/image-prompt-contract.js)',
+    '',
+    `**${ok ? '✅ PASS' : '⛔ BLOCK'}** — ${stats.scenes}컷 · 평균 ${stats.avgChars}자 · ` +
+    `마스코트가 주어 ${stats.subjectShare}% · 금지어 ${stats.avgNegations}개 · 프레임% ${stats.frameRatioSpecs}개`,
+    '',
+    '기준점 EP-2026-0069(발행본): 696자 · 58% · 0.2개 · 0개',
+  ];
+  if (violations.length) {
+    lines.push('', '| Scene | Severity | Code | 내용 |', '|-------|----------|------|------|');
+    for (const v of violations) {
+      lines.push(`| ${v.sceneId || '-'} | ${v.severity} | ${v.code} | ${v.message.replace(/\|/g, '\\|')} |`);
+    }
+  }
+  return lines.join('\n');
+}
 
 const FORMAT_QA_SPECS = {
   'shorts': {
@@ -94,6 +125,7 @@ async function main() {
   const baseDir = scriptPath.replace(/\/30_script\.md$/, '');
   const videoPath = join(baseDir, '55_render/video.mp4');
   if (!existsSync(videoPath)) { console.error(`❌ Missing 55_render/video.mp4 under ${baseDir}`); process.exit(1); }
+  const videoSha256 = createHash('sha256').update(readFileSync(videoPath)).digest('hex');
 
   const md = readFileSync(scriptPath, 'utf-8');
   const fm = parseYAML(md.match(/^---\n([\s\S]*?)\n---/)[1]);
@@ -398,6 +430,7 @@ async function main() {
     fm.series_id ? `**Series**: \`${fm.series_id}\` [${fm.series_episode}/?]` : '',
     fm.persona ? `**Persona**: \`${fm.persona}\`` : '',
     `**Video**: \`55_render/video.mp4\` (${actualDur.toFixed(2)}s, ${w}×${h}, ${vStream?.codec_name}, ${sizeMB}MB)`,
+    `**Video SHA-256**: \`${videoSha256}\``,
     `**Risk**: \`${riskLevel}\``,
     '',
     '## Technical Checks',
@@ -411,6 +444,8 @@ async function main() {
     ...ttsChecks.map(t => `| ${t.id} | ${t.mark} | ${t.val} |`),
     '',
     policyResult ? formatPolicySection(policyResult) : '## Public Figure Policy Checks\n\n(검출 모듈 로딩 실패 — 수동 검토 필요)',
+    '',
+    formatImagePromptSection(scenes),
     '',
     econResult
       ? `## 📐 경제 정확성 검사 (qa-economic-accuracy)\n\n**severity: ${econResult.severity}**\n` +

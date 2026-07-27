@@ -102,6 +102,20 @@ export PAPERCLIP_DISABLED=1
    - prompt: "30_script.md 검증 → 35_factcheck.md. HIGH 위험 있으면 수정 제안."
    - HIGH면 S4로 회귀 (최대 2회), 그래도 HIGH면 운영자에게 escalation
 
+5-b. **image_prompt 계약 검사** (무비용 — S6 진입 전 필수 게이트):
+   ```bash
+   cd $BARROTUBE_HOME    # workspace/ 를 상대경로로 읽으므로 필수
+   node scripts/automation/validate-image-prompts.js --episode EP-YYYY-NNNN
+   ```
+   - `--episode` 는 EP-ID·디렉토리 경로 둘 다 받는다. 플랫폼은 자동 탐색(`--platform` 로 고정 가능).
+   - 종료코드 **0=통과(WARN 포함) · 1=BLOCK · 2=입력 오류**. CI·스크립트에서 그대로 쓴다.
+   - Channel Board 에서는 행의 작업 드롭다운 → **`verify-prompts`** → 실행.
+   - **어긋난 프롬프트로 이미지를 구우면 과금 + Grok 모션 클립 재생성까지 딸려온다**
+     (EP-2026-0070 실사례: 5컷 전부 마스코트가 구석 스티커로 렌더됨).
+   - 계약 정본은 `scripts/automation/lib/image-prompt-contract.js`. 근거·규칙은
+     `references/IMAGE-PROMPT.md`. 대본을 누가 썼든(Claude·Codex·Gemini·사람) 같은 판정을 받는다.
+   - S8 QA 리포트에도 `## 📐 image_prompt 계약` 섹션으로 같은 결과가 남는다.
+
 6. **S6 자산 생성** (비용 발생 — 운영자 명시 승인 필요):
 
    **S6c 씬 이미지·모션 클립 + S6d 인트로 — 기본: `barrotube-media-render` 스킬**
@@ -147,6 +161,8 @@ export PAPERCLIP_DISABLED=1
 10. **S10 Board 승인** — AskUserQuestion 또는 `/approve <EP>`:
     - 선택지: publish / defer / cancel
     - 승인 시 `node scripts/automation/approve-episode.js --episode EP-YYYY-NNNN`
+    - 승인은 영상·metadata·QA·선택 썸네일 SHA-256, manifest revision, YouTube channel ID,
+      최종 privacy/category/publishAt에 결속된다. 하나라도 바뀌면 다시 승인받는다.
 
 11. **S11 Publish** (비용 발생 + 영상 공개 — 운영자 명시 승인 필요):
     ```bash
@@ -154,7 +170,12 @@ export PAPERCLIP_DISABLED=1
     ```
     또는
     ```bash
-    node scripts/automation/publish-youtube.js --video 55_render/video.mp4 --meta 70_publish_meta.json
+    node scripts/automation/publish-youtube.js \
+      --video 55_render/video.mp4 --meta 70_publish_meta.json \
+      --qa 60_qa_report.md --approval 75_board_approval.json \
+      --channel <channel-id> --episode-id EP-YYYY-NNNN \
+      --platform long --layout v1 --episode-root "$PWD" \
+      --out 80_publish_result.json
     ```
 
 12. **S12 Playlist** (시리즈 마지막 EP 시 자동):
@@ -236,6 +257,10 @@ bash $BARROTUBE_HOME/lib/install-cron.sh uninstall daily-producer
 6. **QA FAIL**: score < 60 또는 blocker > 0이면 S11 차단. 운영자 명시 승인 필요.
 7. **Board 승인 게이트 (S10)**: AskUserQuestion 또는 `/approve` 명령으로만 통과. 자동 승인 금지.
 8. **Paperclip 비활성화**: `PAPERCLIP_DISABLED=1` 환경 변수 필수. 미설정 시 register-paperclip-issue.js가 외부 호출 시도 → 시간 낭비.
+9. **채널 활성화 게이트**: `channel.yaml`의 상태가 `active`이고 migration conflict가 모두 해소된 채널만 제작·발행 액션을 실행할 수 있다. `needs_review` 채널은 상태·자산·설정 조회만 허용한다.
+10. **승인 무결성**: S10 승인은 영상·metadata·QA·선택 썸네일과 채널 revision·YouTube 목적지·최종 공개 설정에 결속된다. 승인 후 어느 값이든 바뀌면 새 승인을 발급한다.
+11. **승인 신뢰 모델**: 승인 JSON은 로컬 운영 체크포인트이며 동일 OS 사용자/저장소 쓰기 권한자를 막는 암호학적 경계가 아니다. 보드 세션 토큰과 OS 파일 권한을 보호한다.
+12. **불명확 업로드**: resumable PUT 후 응답이 유실되면 publish result lock을 자동 삭제하지 않는다. YouTube Studio 확인 전 재시도하지 않는다.
 
 ## Environment Variables
 
@@ -254,6 +279,8 @@ YOUTUBE_OAUTH_CLIENT_SECRET=
 PAPERCLIP_DISABLED=1
 
 # 선택
+BARROTUBE_DATA=/Users/beye/BarroTubeData
+BARRO_AI_FACTORY=/Users/beye/BarroAiFactory
 TELEGRAM_BOT_TOKEN=             # S10 게이트 Telegram /approve (생략 시 AskUserQuestion만)
 TELEGRAM_CHAT_ID=
 FAL_API_KEY=                    # 이미지 fallback
@@ -271,23 +298,33 @@ REPLICATE_API_KEY=              # 이미지 fallback
 - 다음 권장 action (다음 EP, 진단, 재개 등)
 - 알려진 이슈 (있으면 escalation 요약)
 
-## Episode Board (로컬 대시보드)
+## Channel Board (로컬 대시보드)
 
-에피소드 목록·상태 조회와 단계별 실행(생성~발행)을 브라우저에서 하는 로컬 보드.
+분산된 채널 manifest·시리즈·에피소드·자산을 연합 조회하고, 채널 설정과 충돌을 관리하는
+로컬 보드. 정본 manifest는 `$BARROTUBE_DATA/workspace/channels/<channel-id>/channel.yaml`에
+있으며, 원본 제작 자산은 기존 프로젝트 위치에 그대로 둔다.
 
 ```bash
-node tools/board/server.js --port 8933 --open   # → http://127.0.0.1:8933
+npm run channel:migrate                         # 기본 dry-run
+npm run channel:migrate -- --write              # 3개 pilot manifest·report 생성
+npm run board -- --open                         # 기본 8933, 사용 중이면 다음 빈 포트 자동 선택
+npm run board -- --port 8934 --open             # 고정 포트가 필요할 때 명시
+npm run channel:document -- --channel today.myo # 읽기 전용 HTML snapshot 생성
 ```
 
-- 설계문서(파이프라인·폴더규격·상태모델·QA·CLI·env)와 실행 보드가 한 화면에 있다.
-- 127.0.0.1 전용 바인딩 + **화이트리스트 15개 명령**만 실행 (임의 쉘 실행 불가).
-- 발행(S11)은 `confirm: "PUBLISH"` 토큰 필수 — 되돌리기 어려운 액션이라 이중 확인.
-- 발행 판정은 `.episode_status.json`(갱신 누락 사례 있음)이 아니라 `80_publish_result.json`
-  존재를 우선하고, 없으면 `stage_history[].youtube_url`로 보강한다.
+- 최초 pilot은 `econ-daily`, `today.myo`, `takitani.lab`이며 모두 `needs_review`로 시작한다.
+- 중앙 보드/manifest만 편집 정본이다. 각 프로젝트 루트의 `*-영상제작-설계문서.html`은
+  다시 생성 가능한 읽기 전용 snapshot이므로 직접 수정하지 않는다.
+- unresolved conflict는 채널 활성화와 publish를 차단한다. 후보·근거를 검토해 resolution을
+  기록한 뒤 활성화한다.
+- 127.0.0.1 전용 바인딩과 서버측 action whitelist를 사용하며, 클라이언트가 임의 명령이나
+  원본 경로를 넘겨 실행하지 않는다.
+- 발행(S11)은 `confirm: "PUBLISH"`, QA PASS, hash-bound S10 승인, 활성 채널을 모두 요구한다.
 
 ## Reference Files
 
 - `references/PIPELINE.md` — S0~S12 단계별 상세 (입출력·비용·시간)
+- `references/IMAGE-PROMPT.md` — image_prompt 계약 (EP-0069 vs 0070 A/B 근거·규칙 6가지)
 - `references/MARKETING.md` — 마케팅 → 시리즈 부트스트랩 흐름
 - `references/SECRETS.md` — ElevenLabs·Gemini·YouTube OAuth 셋업 가이드
 - `references/ARCHITECTURE.md` — 17 에이전트 위임 라인 + monolith vs sub-issue 모드
@@ -310,6 +347,8 @@ $BARROTUBE_HOME/scripts/automation/render-direct.js
 $BARROTUBE_HOME/scripts/automation/publish-youtube.js
 $BARROTUBE_HOME/scripts/automation/marketing-fetch-local.js   # 신규
 $BARROTUBE_HOME/scripts/automation/status-local.js            # 신규
+$BARROTUBE_HOME/scripts/automation/channel-migrate.js          # federated registry migration
+$BARROTUBE_HOME/scripts/automation/render-channel-document.js  # read-only HTML snapshot
 
 # 격리 (사용 안 함, 참고용)
 $BARROTUBE_HOME/scripts/automation/_legacy_paperclip/         # 9개 Paperclip 의존
@@ -327,6 +366,10 @@ $BARROTUBE_HOME/config/series.json
 $BARROTUBE_HOME/workspace/episodes/EP-YYYY-NNNN/
 $BARROTUBE_HOME/workspace/channels/<ch>/series/<id>/
 $BARROTUBE_HOME/workspace/intel/marketing/
+
+# 채널 정본 (기본 BARROTUBE_DATA=/Users/beye/BarroTubeData)
+$BARROTUBE_DATA/workspace/channels/<ch>/channel.yaml
+$BARROTUBE_DATA/workspace/channels/<ch>/series/index.json
 
 # 로그
 $BARROTUBE_HOME/logs/audit/YYYY-MM-DD.jsonl
