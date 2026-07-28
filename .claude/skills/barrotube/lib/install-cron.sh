@@ -30,6 +30,14 @@ LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 LABEL_PREFIX="com.barroskills.barrotube"   # collection.skill 형식 — 다른 스킬과 충돌 회피
 NODE_BIN="$(which node || echo /Users/beye/.nvm/versions/node/v24.11.1/bin/node)"
 
+# launchd 는 로그인 셸을 거치지 않아 PATH 가 거의 비어 있다. 설치 시점에 실제 경로를
+# 찾아 박아 넣는다 — 기존 고정 PATH 로는 claude(~/.local/bin)를 못 찾고, node 도
+# nvm 버전이 아닌 /usr/local/bin 을 집을 수 있다 (실측 확인).
+CRON_PATH="$(dirname "$NODE_BIN")"
+CLAUDE_BIN="$(which claude 2>/dev/null || true)"
+[ -n "$CLAUDE_BIN" ] && CRON_PATH="${CRON_PATH}:$(dirname "$CLAUDE_BIN")"
+CRON_PATH="${CRON_PATH}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+
 cmd_install() {
   local routine="$1"
   local time_spec="${2:-}"
@@ -41,9 +49,18 @@ cmd_install() {
   local extra_args=""
   local daemon_mode=false
   case "$routine" in
+    us-close|kr-close)
+      # 정기 증시 브리핑. 슬롯 정의는 config/routines.json.
+      # launchd StartCalendarInterval 이 단일 dict 라 하루 2회는 라벨을 나눠야 한다.
+      script_path="${BARROTUBE_HOME}/lib/auto-pipeline.sh"
+      extra_args="--slot ${routine}"
+      ;;
     daily-producer)
-      script_path="${BARROSKILLS_HOME}/scripts/automation/topic-to-episode.js"
-      extra_args="--channel econ-daily --auto-bootstrap-only"
+      # topic-to-episode.js 에 --auto-bootstrap-only 옵션이 없어 항상 exit 1 이었다.
+      # --topic 이 필수라 무인 스케줄로는 성립하지 않는다 → 정기 브리핑은 us-close/kr-close 를 쓴다.
+      echo "❌ daily-producer 는 더 이상 지원하지 않습니다 (topic-to-episode.js 는 --topic 필수라 무인 실행 불가)." >&2
+      echo "   정기 에피소드는 us-close / kr-close 슬롯을 사용하세요." >&2
+      exit 1
       ;;
     weekly-marketing)
       script_path="${BARROSKILLS_HOME}/scripts/automation/marketing-fetch-local.js"
@@ -67,7 +84,7 @@ cmd_install() {
       ;;
     *)
       echo "❌ 알 수 없는 routine: $routine" >&2
-      echo "사용 가능: daily-producer | weekly-marketing | doctor-daily | telegram-bot | auto-pipeline"
+      echo "사용 가능: us-close | kr-close | weekly-marketing | doctor-daily | telegram-bot | auto-pipeline"
       exit 1
       ;;
   esac
@@ -154,7 +171,9 @@ ${prog_args_xml}
     <key>HOME</key>
     <string>${HOME}</string>
     <key>PATH</key>
-    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <string>${CRON_PATH}</string>
+    <key>TZ</key>
+    <string>Asia/Seoul</string>
   </dict>
   ${schedule_xml}
   <key>RunAtLoad</key>
@@ -168,7 +187,14 @@ ${prog_args_xml}
 </plist>
 EOF
 
-  # launchctl 로드
+  # launchctl 로드 — DRY_RUN=1 이면 plist 만 만들고 실제로 켜지는 않는다.
+  # (cron 을 켜는 것은 되돌리기 번거로운 외부 동작이라 검증과 분리한다.)
+  if [ "${DRY_RUN:-0}" = "1" ]; then
+    echo "🧪 [DRY_RUN] plist 생성만 완료 — launchctl load 하지 않음"
+    echo "   $plist"
+    return 0
+  fi
+
   launchctl unload "$plist" 2>/dev/null || true
   launchctl load -w "$plist"
 

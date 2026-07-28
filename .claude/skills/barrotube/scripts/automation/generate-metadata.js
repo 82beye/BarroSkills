@@ -130,12 +130,51 @@ function parseFrontmatter(md) {
   return m ? parseYAML(m[1]) : null;
 }
 
+/**
+ * "HH:MM" (KST) → "YYYY-MM-DDTHH:MM:00+09:00". 완전한 ISO8601 이면 그대로 통과.
+ *
+ * 달력일은 실행 머신 TZ 가 아니라 Asia/Seoul 기준으로 잡는다 — launchd plist 에 TZ 가
+ * 빠져 있던 이력이 있어 머신 TZ 를 신뢰하지 않는다.
+ * 과거 시각이면 null 을 돌려 예약을 걸지 않는다: YouTube 가 과거 publishAt 을 거부하고,
+ * 억지로 넣으면 영상이 private 로 남아 조용히 사라진다. 예약 없이 private 로 두고
+ * 운영자가 처리하게 하는 편이 안전하다.
+ */
+export function resolvePublishAt(input, now = new Date()) {
+  const s = String(input ?? '').trim();
+  if (!s) return null;
+
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) {
+    return Number.isNaN(new Date(s).getTime()) ? null : s;
+  }
+
+  const m = s.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (hh > 23 || mm > 59) return null;
+
+  const today = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(now);
+  const iso = `${today}T${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:00+09:00`;
+
+  const when = new Date(iso);
+  if (Number.isNaN(when.getTime())) return null;
+  if (when.getTime() - now.getTime() < 5 * 60 * 1000) return null;
+  return iso;
+}
+
 async function main() {
   const { values } = parseArgs({ options: {
     episode: { type: 'string', short: 'e' },
     platform: { type: 'string' },
+    'publish-at': { type: 'string' },   // "HH:MM" (KST) 또는 완전한 ISO8601. 예약 공개.
   } });
-  if (!values.episode) { console.error('Usage: generate-metadata.js --episode <dir> [--platform long|shorts]'); process.exit(1); }
+  if (!values.episode) { console.error('Usage: generate-metadata.js --episode <dir> [--platform long|shorts] [--publish-at HH:MM]'); process.exit(1); }
+
+  // produce-episode.js 가 S9 를 spawn 할 때 인자를 갈아끼우지 않아도 되도록 env 도 받는다
+  // (BT_IMAGE_ENGINE 과 같은 관례 — 상위 오케스트레이터가 export 하면 그대로 전달됨).
+  const publishAtArg = values['publish-at'] || process.env.BT_PUBLISH_AT || null;
 
   const epDir = resolve(values.episode);
   const platformHint = values.platform;
@@ -269,6 +308,21 @@ async function main() {
   meta.thumbnail = meta.thumbnail || '47_thumbnail.png';
   meta.privacyStatus = 'private'; // 기본 private, 운영자가 필요 시 변경
 
+  // 예약 공개 — publish-approval.js 가 publishAt 이 있으면 privacyStatus 를 private 로 강제하고
+  // publish-youtube.js 가 status.publishAt 으로 실어 보낸다. 여기서는 값만 정확히 만든다.
+  if (publishAtArg) {
+    const publishAt = resolvePublishAt(publishAtArg);
+    if (publishAt) {
+      meta.publishAt = publishAt;
+      console.log(`  ⏰ 예약 공개: ${publishAt}`);
+    } else if (/^\d{1,2}:\d{2}$/.test(String(publishAtArg).trim())) {
+      // 형식은 맞는데 null → 이미 지난 시각. 예약 없이 private 로 남는다는 걸 분명히 알린다.
+      console.warn(`  ⚠ 예약 시각 ${publishAtArg} (KST) 이 이미 지났습니다 — 예약 없이 private 로 둡니다. 운영자 확인 필요.`);
+    } else {
+      console.warn(`  ⚠ --publish-at 형식을 해석하지 못해 무시합니다: ${publishAtArg}`);
+    }
+  }
+
   // Enforce format-aligned shortsTag (Gemini sometimes ignores)
   if (format === 'long-3min') meta.shortsTag = false;
 
@@ -340,4 +394,9 @@ async function main() {
   console.log(`   Tags: ${meta.tags?.length || 0}개`);
 }
 
-main().catch(e => { console.error('❌', e.message); process.exit(1); });
+// 직접 실행일 때만 main. resolvePublishAt 을 테스트에서 import 할 수 있게 한다.
+// (build-distribution.js:159 와 같은 관례. node 가 argv[1] 을 절대경로로 해석하므로
+//  produce-episode.js 가 상대경로로 spawn 해도 성립한다 — 실측 확인.)
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch(e => { console.error('❌', e.message); process.exit(1); });
+}

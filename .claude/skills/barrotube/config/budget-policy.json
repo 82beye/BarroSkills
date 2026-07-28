@@ -111,14 +111,22 @@
       "description": "포맷별 편당 예상 비용 캡. role별 limit과 독립적으로 체크 — 포맷 단가 이상 지출 시 producer 알림.",
       "shorts": {
         "per_episode_cap_usd": 4.0,
-        "monthly_episode_target": 28,
-        "monthly_cap_usd": 112,
+        "monthly_episode_target": 60,
+        "monthly_cap_usd": 240,
         "on_limit": "pause_shorts_line_notify_producer",
+        "target_note": "2026-07-29: 정기 브리핑 2슬롯(us-close 06:00 / kr-close 16:00) 도입으로 28 → 60편/월. cap 은 최악 케이스(API 이미지 폴백) 기준이고, 실제 지출은 media_render_actual 에 가깝다.",
         "cost_breakdown_estimate": {
           "tts_characters_usd": 0.3,
           "image_generation_usd": 2.0,
           "llm_tokens_usd": 1.2,
           "misc_usd": 0.5
+        },
+        "media_render_actual": {
+          "note": "image-engines.json 의 S6c_scene=media-render 경로. 이미지·모션 클립을 브라우저(ChatGPT/Grok)로 만들어 이미지 API 비용이 0 이다. 2026-07 실지출 $2.31 이 근거.",
+          "tts_characters_usd": 0.21,
+          "image_generation_usd": 0.0,
+          "llm_tokens_usd": 0.01,
+          "per_episode_usd": 0.22
         }
       },
       "long-3min": {
@@ -153,15 +161,15 @@
     },
     "channel_budget_summary": {
       "econ-daily": {
-        "monthly_episodes_total": 52,
+        "monthly_episodes_total": 84,
         "breakdown": {
-          "shorts_new": { "count": 28, "usd": 112 },
+          "shorts_new": { "count": 60, "usd": 240 },
           "long_3min": { "count": 12, "usd": 108 },
           "derived_shorts": { "count": 12, "usd": 18 }
         },
-        "monthly_total_usd_cap": 238,
-        "monthly_total_krw_estimate": 321300,
-        "notes": "USD 1 = KRW 1350 추정. 실제 발행 편수·단가 변동 반영 필요."
+        "monthly_total_usd_cap": 366,
+        "monthly_total_krw_estimate": 494100,
+        "notes": "USD 1 = KRW 1350 추정. cap 은 최악 케이스(이미지 API 폴백) 기준이다. media-render 경로의 실측은 shorts 편당 ≈$0.22 로, shorts 60편이면 ≈$13/월 — 2026-07 실지출 $2.31 이 근거. 실제 차단선은 이 값이 아니라 guards.sh 의 roles monthly_limit 합계 $770 의 90%(=$693)다."
       }
     }
   }
