@@ -50,6 +50,7 @@ const ROOT = resolve(import.meta.dirname, '../..');
 const LOGS = join(ROOT, 'logs');
 
 function auditLog(episodeId, action, details = {}) {
+  if (DRY_RUN) return;                      // dry-run 이 감사 로그를 오염시키지 않게
   try {
     const logDir = join(LOGS, 'audit');
     mkdirSync(logDir, { recursive: true });
@@ -68,6 +69,7 @@ function auditLog(episodeId, action, details = {}) {
 }
 
 function updateStageStatus(episodeDir, episodeId, stageId, status, details = {}) {
+  if (DRY_RUN) return;                      // dry-run 이 stage_history 를 completed 로 위조하지 않게
   try {
     const statusFile = join(episodeDir, '.episode_status.json');
     const data = existsSync(statusFile)
@@ -89,9 +91,18 @@ function updateStageStatus(episodeDir, episodeId, stageId, status, details = {})
   }
 }
 
+/**
+ * --execute 없이 부르면 비용 단계를 실행하지 않는다.
+ * SKILL.md·PIPELINE.md·EP.md·ARCHITECTURE.md·AUTO-PIPELINE.md 5곳이 이미 이 동작을
+ * 문서화하고 있었는데 정작 옵션이 없어서, 문서를 믿고 부르면 TTS·이미지 비용이 그대로
+ * 나갔다. run() 이 모든 하위 스크립트의 단일 관문이라 여기서 막는다.
+ */
+let DRY_RUN = false;
+
 function run(label, cmd, args) {
   console.log(`\n▶ ${label}`);
   console.log(`  $ node ${cmd} ${args.join(' ')}`);
+  if (DRY_RUN) { console.log('  [DRY_RUN] 실행 안 함 (--execute 로 실제 실행)'); return; }
   const r = spawnSync('node', [cmd, ...args], { cwd: ROOT, stdio: 'inherit' });
   if (r.status !== 0) throw new Error(`${label} 실패 (exit ${r.status})`);
 }
@@ -119,6 +130,7 @@ async function main() {
     options: {
       episode: { type: 'string', short: 'e' },
       platform: { type: 'string' },           // long | shorts (v2 멀티 플랫폼 빌드 시 명시)
+      execute: { type: 'boolean', default: false },  // 없으면 dry-run — 비용 단계 실행 안 함
       force: { type: 'boolean', default: false },
       'skip-capcut': { type: 'boolean', default: false },
       'force-release-stale': { type: 'boolean', default: false },
@@ -126,8 +138,14 @@ async function main() {
     },
   });
   if (!values.episode) {
-    console.error('Usage: produce-episode.js --episode EP-YYYY-NNNN [--platform long|shorts] [--image-engine openai|gemini|auto] [--force] [--skip-capcut] [--force-release-stale]');
+    console.error('Usage: produce-episode.js --episode EP-YYYY-NNNN --execute [--platform long|shorts] [--image-engine openai|gemini|auto] [--force] [--skip-capcut] [--force-release-stale]');
+    console.error('       --execute 없이 부르면 실행 계획만 출력합니다 (비용 0).');
     process.exit(1);
+  }
+
+  DRY_RUN = !values.execute;
+  if (DRY_RUN) {
+    console.log('\n🧪 DRY-RUN — 실행 계획만 출력합니다. 실제 생성은 --execute 를 붙이세요 (💰 비용 발생).');
   }
 
   // ── 이미지 엔진 선택 (2026-06-27) ─────────────────────────────────────────────
@@ -219,16 +237,21 @@ async function main() {
 
   // ─── In-flight Lock: 직렬 처리 강제 (Producer harness policy) ───────────────
   // 다른 EP가 in-flight면 즉시 거부. 같은 EP면 idempotent (heartbeat 갱신).
-  try {
-    const lock = acquireLock(episodeId, 'S4', {
-      command: `produce-episode.js --episode ${episodeId}${values.platform ? ' --platform ' + values.platform : ''}`,
-      autoCleanStale: !!values['force-release-stale'],
-    });
-    console.log(`🔒 In-flight lock acquired: ${lock.episode_id} (pid=${lock.pid})`);
-  } catch (e) {
-    console.error(`❌ ${e.message}`);
-    auditLog(episodeId, 'inflight_lock_denied', { reason: e.code || 'unknown', current: e.lock || null });
-    process.exit(e.code === 'ELOCK_HELD' ? 2 : (e.code === 'ELOCK_STALE' ? 3 : 1));
+  // dry-run 은 아무것도 생성하지 않으므로 락도 잡지 않는다 (잡으면 실제 작업을 막는다).
+  if (DRY_RUN) {
+    console.log('🔓 [DRY_RUN] in-flight 락 취득 생략');
+  } else {
+    try {
+      const lock = acquireLock(episodeId, 'S4', {
+        command: `produce-episode.js --episode ${episodeId}${values.platform ? ' --platform ' + values.platform : ''}`,
+        autoCleanStale: !!values['force-release-stale'],
+      });
+      console.log(`🔒 In-flight lock acquired: ${lock.episode_id} (pid=${lock.pid})`);
+    } catch (e) {
+      console.error(`❌ ${e.message}`);
+      auditLog(episodeId, 'inflight_lock_denied', { reason: e.code || 'unknown', current: e.lock || null });
+      process.exit(e.code === 'ELOCK_HELD' ? 2 : (e.code === 'ELOCK_STALE' ? 3 : 1));
+    }
   }
 
   auditLog(episodeId, 'produce_start', { force, skip_capcut: values['skip-capcut'], platform, layout: p.isV2 ? 'v2' : 'v1' });
@@ -278,7 +301,7 @@ async function main() {
         console.error(`   → PD가 barrotube-media-render 스킬(브라우저 ChatGPT)로 씬 이미지를 먼저 생성한 뒤 재실행하세요.`);
         console.error(`   → 씬 모션 클립(Grok)은 40_assets/videos/scene_NNN.mp4 에 두면 S7 렌더가 자동 사용합니다.`);
         console.error(`   → 레거시 API 경로로 진행하려면: --image-engine openai|gemini`);
-        releaseLock();
+        if (!DRY_RUN) releaseLock();
         process.exit(3);
       }
     } else if (!imgDone || force) {
@@ -404,7 +427,9 @@ async function main() {
   console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log('✅ S4~S9 완료');
   console.log(`   📁 ${absEp}`);
-  console.log(`   🔒 In-flight lock: ${episodeId} (유지 — S11 publish 시 자동 해제)`);
+  console.log(DRY_RUN
+    ? `   🔓 [DRY_RUN] 락 미취득 — 위 계획대로 실행하려면 --execute`
+    : `   🔒 In-flight lock: ${episodeId} (유지 — S11 publish 시 자동 해제)`);
   console.log('\n다음:');
   console.log(`   승인 (Telegram): /approve ${relEp.split('/').pop()}`);
   console.log(`   승인 (CLI):      node scripts/automation/approve-episode.js --episode ${relEp.split('/').pop()} --by "Board"`);
