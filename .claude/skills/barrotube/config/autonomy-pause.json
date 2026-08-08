@@ -1,14 +1,14 @@
 {
-  "status": "active",
+  "status": "paused",
   "version": 1,
-  "updated_at": "2026-07-29T00:00:00+09:00",
-  "updated_by": "daily-briefing-routines",
+  "updated_at": "2026-08-03T20:20:51+09:00",
+  "updated_by": "codex-cron-pause",
   "note": "BarroSkills 자율 운영 마스터 스위치. status=paused 시 auto-pipeline + 모든 routine cron 즉시 종료. 운영자가 수동 편집 또는 Telegram /pause·/resume으로 토글.",
   "guards": {
     "max_episodes_per_day": 2,
     "max_publish_per_day": 3,
     "max_new_series_per_day": 1,
-    "publish_remains_human_only": false,
+    "publish_remains_human_only": true,
     "publish_requires_telegram_window": true,
     "publish_reject_window_minutes": 30,
     "publish_telegram_notify": true,
@@ -20,5 +20,16 @@
     "serial_processing_enforced": true,
     "accept_new_issues": true
   },
-  "history": []
+  "history": [
+    {
+      "at": "2026-08-03T20:17:00+09:00",
+      "action": "publish_remains_human_only",
+      "by": "codex-pipeline-validation"
+    },
+    {
+      "at": "2026-08-03T20:20:51+09:00",
+      "action": "paused",
+      "by": "codex-cron-pause"
+    }
+  ]
 }

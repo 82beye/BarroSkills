@@ -148,6 +148,28 @@ function loadSlot(slotName) {
   return slot;
 }
 
+function previousWeekday(date) {
+  const d = new Date(`${date}T00:00:00Z`);
+  do d.setUTCDate(d.getUTCDate() - 1); while ([0, 6].includes(d.getUTCDay()));
+  return d.toISOString().slice(0, 10);
+}
+
+function resolveContentMode(slotName, date, quotes = [], requireClosed = []) {
+  const day = new Date(`${date}T00:00:00Z`).getUTCDay();
+  if (day === 0) return { content_mode: 'sunday_preopen', expected_session_date: null };
+  if (day === 6) return { content_mode: 'closed_market_issue', expected_session_date: null };
+
+  const expected = slotName === 'us-close' ? previousWeekday(date) : date;
+  const required = quotes.filter((q) => requireClosed.includes(q.symbol));
+  const noFreshClose = required.length === requireClosed.length && required.length > 0
+    && required.every((q) => /^\d{4}-\d{2}-\d{2}/.test(q.traded_at || '')
+      && q.traded_at.slice(0, 10) < expected);
+  return {
+    content_mode: noFreshClose ? 'closed_market_issue' : 'market_close',
+    expected_session_date: expected,
+  };
+}
+
 async function main() {
   const { values } = parseArgs({
     options: {
@@ -198,6 +220,7 @@ async function main() {
   }
 
   const ok = quotes.filter((q) => !q.error);
+  const content = resolveContentMode(slotName, date, quotes, requireClosed);
   const snapshot = {
     slot: slotName,
     date,
@@ -205,6 +228,7 @@ async function main() {
     source: 'naver-finance',
     available: ok.length > 0,
     stale,
+    ...content,
     quotes,
     errors: quotes.filter((q) => q.error).map((q) => ({ symbol: q.symbol, error: q.error })),
   };
@@ -217,11 +241,16 @@ async function main() {
   if (values.json) console.log(JSON.stringify(snapshot, null, 2));
   console.log(`\n✅ 저장: ${outPath}`);
   console.log(`   ${ok.length}/${quotes.length} 수집${stale ? ' · ⚠️ stale' : ''}`);
+  console.log(`   콘텐츠 모드: ${snapshot.content_mode}`);
 
   process.exit(ok.length ? 0 : 1);
 }
 
-main().catch((e) => {
-  console.error(`❌ ${e.message}`);
-  process.exit(1);
-});
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((e) => {
+    console.error(`❌ ${e.message}`);
+    process.exit(1);
+  });
+}
+
+export { resolveContentMode };

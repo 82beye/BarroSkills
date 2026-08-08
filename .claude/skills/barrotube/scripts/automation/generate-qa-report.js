@@ -94,6 +94,24 @@ function dur(path) {
   return d ? parseFloat(d.format?.duration || 0) : 0;
 }
 
+function measureLoudness(path) {
+  const r = spawnSync('ffmpeg', [
+    '-hide_banner', '-nostats', '-i', path,
+    '-map', '0:a:0',
+    '-af', 'loudnorm=I=-14:TP=-1:LRA=11:print_format=json',
+    '-f', 'null', '-',
+  ], { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 });
+  const output = `${r.stdout || ''}\n${r.stderr || ''}`;
+  const readMetric = (key) => {
+    const value = Number(output.match(new RegExp(`"${key}"\\s*:\\s*"([^"]+)"`))?.[1]);
+    return Number.isFinite(value) ? value : null;
+  };
+  return {
+    integrated: readMetric('input_i'),
+    truePeak: readMetric('input_tp'),
+  };
+}
+
 const OK = '✅', WARN = '⚠️', FAIL = '❌';
 
 async function main() {
@@ -148,6 +166,8 @@ async function main() {
   const video = probe(videoPath);
   const vStream = video?.streams.find(s => s.codec_type === 'video');
   const aStream = video?.streams.find(s => s.codec_type === 'audio');
+  const audioBitrate = Number(aStream?.bit_rate);
+  const loudness = measureLoudness(videoPath);
   const actualDur = parseFloat(video?.format?.duration || 0);
   const sizeMB = (statSync(videoPath).size / 1024 / 1024).toFixed(2);
 
@@ -174,17 +194,15 @@ async function main() {
 
   // 렌더 부가 구간 보정 (2026-07-22): render-direct.js가 씬 클립 앞뒤에 붙이는 길이를
   // target에 반영하지 않아 Duration이 구조적으로 항상 FAIL하던 문제를 해결한다.
-  //   - 씬 클립은 TTS 실측 길이로 잘리므로 기준을 TTS 합계로 잡는다
-  //     (target_total_seconds는 씬별 padding을 포함한 값이라 실제보다 크다)
+  //   - 씬 클립은 render-direct.js와 동일하게 max(TTS 실측, scene target)으로 잡는다
   //   - 인트로 카드 prepend / outro freeze pad / 엔드카드 append 를 더한다
   let renderPadNote = '';
-  const ttsSum = scenes.reduce((sum, s) => {
+  const sceneDurationSum = scenes.reduce((sum, s) => {
     const p = join(baseDir, '40_assets', 'tts', `scene_${s.scene_id}.wav`);
-    if (!existsSync(p)) return sum;
-    const d = parseFloat(probe(p)?.format?.duration || 0);
-    return sum + (d > 0 ? d : 0);
+    const ttsDuration = existsSync(p) ? parseFloat(probe(p)?.format?.duration || 0) : 0;
+    return sum + Math.max(ttsDuration > 0 ? ttsDuration : 0, Number(s.target_seconds) || 0);
   }, 0);
-  if (ttsSum > 0) {
+  if (sceneDurationSum > 0) {
     const introExists = ['45_intro.png', '47_thumbnail.png']
       .some(f => existsSync(join(baseDir, f)));
     const introSec = introExists ? (Number(process.env.BT_INTRO_SEC) || 2) : 0;
@@ -194,8 +212,8 @@ async function main() {
       ? (Number(process.env.BT_ENDCARD_SEC) || (spec.aspect_h > spec.aspect_w ? 2.5 : 3.5))
       : 0;
     const padSec = outroSlotPath ? 0.3 : 1.0;   // render-direct OUTRO_PAD_SEC
-    target = ttsSum + introSec + padSec + endcardSec + outroSlotAdded;
-    renderPadNote = ` [tts ${ttsSum.toFixed(2)}s + intro ${introSec}s + pad ${padSec}s + endcard ${endcardSec}s]`;
+    target = sceneDurationSum + introSec + padSec + endcardSec + outroSlotAdded;
+    renderPadNote = ` [scenes ${sceneDurationSum.toFixed(2)}s + intro ${introSec}s + pad ${padSec}s + endcard ${endcardSec}s]`;
   }
 
   const checks = [];
@@ -230,6 +248,25 @@ async function main() {
     mark: aStream?.codec_name === 'aac' ? OK : WARN,
     val: `${aStream?.codec_name} ${aStream?.sample_rate}Hz ${aStream?.channels}ch`,
   });
+  checks.push({
+    item: 'AAC bitrate',
+    mark: aStream?.codec_name === 'aac' && Number.isFinite(audioBitrate) && audioBitrate > 0 ? OK : WARN,
+    val: Number.isFinite(audioBitrate) && audioBitrate > 0
+      ? `${(audioBitrate / 1000).toFixed(1)} kbps (actual stream)`
+      : 'unavailable',
+  });
+  checks.push({
+    item: 'Integrated loudness',
+    mark: loudness.integrated === null ? WARN : OK,
+    val: loudness.integrated === null ? 'unavailable' : `${loudness.integrated.toFixed(1)} LUFS`,
+  });
+  checks.push({
+    item: 'True peak',
+    mark: loudness.truePeak === null ? WARN : (loudness.truePeak > -1.0 ? FAIL : OK),
+    val: loudness.truePeak === null
+      ? 'unavailable'
+      : `${loudness.truePeak.toFixed(1)} dBTP (max -1.0 dBTP)`,
+  });
 
   // Size (format별 상한)
   checks.push({
@@ -245,12 +282,14 @@ async function main() {
     val: `${scenes.length}/${spec.scene_count}`,
   });
 
-  // Images — v2(platforms/) baseDir 우선 → v1 epDir fallback
-  const imagesDir = existsSync(join(baseDir, '40_assets'))
-    ? join(baseDir, '40_assets/images')
-    : existsSync(join(epDir, '40_assets'))
-      ? join(epDir, '40_assets/images')
-      : join(epDir, 'assets/images');
+  // Assets — v2(platforms/) baseDir 우선 → v1 epDir fallback
+  const assetsDir = [
+    join(baseDir, '40_assets'),
+    join(baseDir, 'assets'),
+    join(epDir, '40_assets'),
+    join(epDir, 'assets'),
+  ].find(p => existsSync(p)) || join(baseDir, '40_assets');
+  const imagesDir = join(assetsDir, 'images');
   const imgCount = scenes.filter(s =>
     existsSync(join(imagesDir, `scene_${s.scene_id}.png`))
   ).length;
@@ -260,12 +299,37 @@ async function main() {
     val: `${imgCount}/${scenes.length}`,
   });
 
+  // Motion clips are required for every scene in the media-render pipeline.
+  const videosDir = join(assetsDir, 'videos');
+  const motionCount = scenes.filter(s =>
+    existsSync(join(videosDir, `scene_${s.scene_id}.mp4`))
+  ).length;
+  checks.push({
+    item: 'Motion clips',
+    mark: motionCount === scenes.length ? OK : FAIL,
+    val: `${motionCount}/${scenes.length}`,
+  });
+
+  // Custom episode BGM wins; otherwise require the bundled persona track.
+  const bgmCategory = fm.persona === 'barro-alert'
+    ? 'alert'
+    : fm.persona === 'barro-recap' ? 'recap' : 'analysis';
+  const bgmCandidates = [
+    { path: join(assetsDir, 'bgm.wav'), source: 'episode-custom' },
+    { path: join(assetsDir, 'bgm.mp3'), source: 'episode-custom' },
+    { path: join(ROOT, 'assets', 'bgm', `${bgmCategory}.mp3`), source: `bundled-${bgmCategory}` },
+  ];
+  const expectedBgm = bgmCandidates.find(b => existsSync(b.path));
+  checks.push({
+    item: 'BGM presence',
+    mark: expectedBgm ? OK : FAIL,
+    val: expectedBgm
+      ? `${expectedBgm.source}: ${expectedBgm.path}`
+      : `missing episode custom and bundled ${bgmCategory} BGM`,
+  });
+
   // TTS + scene duration match — v2(platforms/) baseDir 우선 → v1 epDir fallback
-  const ttsDir = existsSync(join(baseDir, '40_assets'))
-    ? join(baseDir, '40_assets/tts')
-    : existsSync(join(epDir, '40_assets'))
-      ? join(epDir, '40_assets/tts')
-      : join(epDir, 'assets/tts');
+  const ttsDir = join(assetsDir, 'tts');
   const ttsChecks = [];
   for (const s of scenes) {
     const ttsPath = join(ttsDir, `scene_${s.scene_id}.wav`);

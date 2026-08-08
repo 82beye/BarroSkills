@@ -170,12 +170,16 @@ async function main() {
     delete process.env.BT_IMAGE_ENGINE;
   }
   // S6c 씬 엔진 resolution: 명시(CLI/env, auto 제외) > config.stages.S6c_scene > openai
+  // S6e 썸네일도 같은 방식으로 따로 결정한다 — media-render 로 운영하는데 썸네일만
+  // 조용히 gpt-image-1/Gemini 로 새는 걸 막는다 (S6e 에는 원래 media-render 분기가 없었다).
   let sceneEngine = (explicitEngine && explicitEngine !== 'auto') ? explicitEngine : null;
-  if (!sceneEngine) {
+  let thumbEngine = (explicitEngine && explicitEngine !== 'auto') ? explicitEngine : null;
+  if (!sceneEngine || !thumbEngine) {
     try {
       const engCfg = JSON.parse(readFileSync(join(ROOT, 'config/image-engines.json'), 'utf-8'));
-      sceneEngine = (engCfg.stages && engCfg.stages.S6c_scene) || engCfg.global || 'openai';
-    } catch { sceneEngine = 'openai'; }
+      sceneEngine = sceneEngine || (engCfg.stages && engCfg.stages.S6c_scene) || engCfg.global || 'openai';
+      thumbEngine = thumbEngine || (engCfg.stages && engCfg.stages.S6e_thumbnail) || engCfg.global || 'openai';
+    } catch { sceneEngine = sceneEngine || 'openai'; thumbEngine = thumbEngine || 'openai'; }
   }
   if (imageEngine === 'openai' || imageEngine === 'auto') {
     if (!process.env.OPENAI_API_KEY) {
@@ -271,7 +275,10 @@ async function main() {
       console.log(`\n⏭  S4 Script: ${p.script} 존재 (skip, --force로 재생성)`);
     }
 
-    // S6a TTS
+    // S6a TTS — narration 한글 수사 / subtitle_text 숫자 표기를 먼저 강제한다.
+    runTracked(absEp, episodeId, 'S6a', 'S6a TTS Subtitle Policy', '09-voice-engineer',
+      'scripts/automation/validate-tts-policy.js', ['--file', scriptArg, '--strict']);
+
     const ttsDone = exists(join(p.ttsDir, 'scene_001.wav')) && exists(join(p.ttsDir, 'scene_005.wav'));
     if (!ttsDone || force) {
       runTracked(absEp, episodeId, 'S6a', 'S6a TTS (ElevenLabs)', '09-voice-engineer',
@@ -292,14 +299,16 @@ async function main() {
       ]);
 
     // S6c Images — 기본: media-render(브라우저, PD 사전 생성) / 레거시: API(gemini|openai)
-    const imgDone = exists(join(p.imagesDir, 'scene_001.png')) && exists(join(p.imagesDir, 'scene_005.png'));
+    const scriptFrontmatter = parseYAML(readFileSync(p.script, 'utf-8').match(/^---\n([\s\S]*?)\n---/)?.[1] || '') || {};
+    const sceneIds = (scriptFrontmatter.scenes || []).map(scene => String(scene.scene_id).padStart(3, '0'));
+    const imgDone = sceneIds.length > 0 && sceneIds.every(id => exists(join(p.imagesDir, `scene_${id}.png`)));
+    const motionDone = sceneIds.length > 0 && sceneIds.every(id => exists(join(p.assetsDir, 'videos', `scene_${id}.mp4`)));
     if (sceneEngine === 'media-render') {
-      if (imgDone) {
-        console.log(`\n⏭  S6c Images: media-render 산출물 존재 (skip) — ${p.imagesDir}`);
+      if (imgDone && (platform !== 'shorts' || motionDone)) {
+        console.log(`\n⏭  S6c Images/Motion: media-render 산출물 ${sceneIds.length}/${sceneIds.length} 존재 (skip)`);
       } else {
-        console.error(`\n❌ S6c Images (media-render 기본 모드): ${p.imagesDir}/scene_NNN.png 이 없습니다.`);
-        console.error(`   → PD가 barrotube-media-render 스킬(브라우저 ChatGPT)로 씬 이미지를 먼저 생성한 뒤 재실행하세요.`);
-        console.error(`   → 씬 모션 클립(Grok)은 40_assets/videos/scene_NNN.mp4 에 두면 S7 렌더가 자동 사용합니다.`);
+        console.error(`\n❌ S6c media-render 필수 자산이 불완전합니다 (images=${imgDone}, motion=${motionDone}).`);
+        console.error(`   → barrotube-media-render로 모든 씬 이미지와 Grok image-to-video 클립을 만든 뒤 재실행하세요.`);
         console.error(`   → 레거시 API 경로로 진행하려면: --image-engine openai|gemini`);
         if (!DRY_RUN) releaseLock();
         process.exit(3);
@@ -332,8 +341,19 @@ async function main() {
     // 단발 EP S6d는 S6e(thumbnail) 완료 후 복사 처리 (아래 참고)
 
     // S6e Thumbnail (YouTube feed thumbnail)
-    if (!exists(p.thumbnail) || force) {
-      runTracked(absEp, episodeId, 'S6e', 'S6e Thumbnail (Gemini)', '08-image-generator',
+    if (thumbEngine === 'media-render') {
+      // 씬과 같은 규약: 브라우저로 만들어 두고, 없으면 API 로 새지 않고 멈춘다.
+      if (exists(p.thumbnail)) {
+        console.log(`\n⏭  S6e Thumbnail: media-render 산출물 존재 (skip) — ${p.thumbnail}`);
+      } else {
+        console.error(`\n❌ S6e Thumbnail (media-render 모드): ${p.thumbnail} 이 없습니다.`);
+        console.error(`   → barrotube-media-render 스킬(브라우저)로 썸네일을 만든 뒤 재실행하세요.`);
+        console.error(`   → API 로 만들려면 명시적으로: --image-engine openai|gemini`);
+        if (!DRY_RUN) releaseLock();
+        process.exit(3);
+      }
+    } else if (!exists(p.thumbnail) || force) {
+      runTracked(absEp, episodeId, 'S6e', `S6e Thumbnail (${thumbEngine})`, '08-image-generator',
         'scripts/automation/generate-thumbnail.js', [
           '--episode', relEp,
           '--platform', platform,
@@ -395,6 +415,7 @@ async function main() {
         'scripts/automation/build-capcut-from-episode.js', [
           '--episode', relEp,
           '--name', capName,
+          '--platform', platform,
         ]);
     }
 

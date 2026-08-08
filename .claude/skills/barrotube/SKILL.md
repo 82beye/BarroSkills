@@ -71,6 +71,9 @@ args가 있으면 곧장 해당 흐름으로:
 3~5단계는 `barrotube-media-render` 스킬의 브라우저 절차를 사용한다. 브라우저 로그인,
 생성 한도, 결제 벽처럼 실제 진행을 막는 상태만 즉시 보고하고, 사용자가 해결하면 마지막
 완료 산출물부터 재개한다. `48_outro.png`가 있으면 렌더러가 로컬 `48_endcard.png`보다 우선 사용한다.
+Phase 7 worker의 로그인 판정은 참고값이다. 사용자가 로그인을 확인했거나 기존 탭이 있으면
+PD가 같은 브라우저에서 프로필+composer를 한 번 직접 확인하고, 로그인 상태면 누락 자산만
+완성한다. 완료 정본은 응답 문구가 아니라 이미지 5+영상 5+인트로+썸네일의 12/12 게이트다.
 
 ### Step 3 — 모드별 흐름
 
@@ -112,6 +115,14 @@ export PAPERCLIP_DISABLED=1
      `references/IMAGE-PROMPT.md`.
    - 대본을 누가 썼든(Claude·Codex·Gemini·사람) 같은 판정을 받는다.
 
+5-c. **TTS·자막 숫자 분리 검사** (무비용 — S6a 진입 전 필수 게이트):
+   ```bash
+   node scripts/automation/validate-tts-policy.js --file platforms/<platform>/30_script.md --strict
+   ```
+   - `narration`은 TTS 전용이므로 숫자·날짜·소수점·범위를 한글 수사로만 쓴다.
+   - `subtitle_text`는 화면 자막 전용이며, 같은 숫자를 아라비아 숫자로 표기한다.
+   - 이 검사가 실패하면 ElevenLabs 요청을 하지 않고 S4로 되돌아간다.
+
 6. **S6 자산 생성** (비용 발생 — 운영자 명시 승인 필요):
 
    **S6c 씬 이미지·모션 클립 + S6d 인트로 — 기본: `barrotube-media-render` 스킬**
@@ -119,19 +130,19 @@ export PAPERCLIP_DISABLED=1
    PD가 브라우저를 조작해 생성하고 **기존 산출물 경로에 그대로 저장**
    (v2 레이아웃은 `platforms/<platform>/` 하위):
    - 씬 이미지 (ChatGPT): `40_assets/images/scene_NNN.png` (1080×1920 세로)
-   - 모션 클립 (Grok image→video, 선택): `40_assets/videos/scene_NNN.mp4`
-     — 있으면 S7 렌더가 정지 이미지 대신 자동 사용
+   - 모션 클립 (Grok image→video): `40_assets/videos/scene_NNN.mp4`
+     — 신규 Shorts는 씬 이미지 5장과 이를 첨부해 만든 Grok 클립 5개(5/5)가 모두 있어야 S6c 완료
    - **인트로 카드 (ChatGPT): `45_intro.png`** — 에피소드 타이틀 대형 골드 타이포 +
      BarroTube 배지 + 다크 시네마틱 배경, 9:16. **저장 전 타이틀 철자를 확대 검수**
      (AI 한글 렌더 오타 방지 — 실사례: 메타→머타). S7 렌더가 2초 무음 인트로로 prepend.
    - 씬 프롬프트는 `30_script.md`의 `image_prompt` 사용. 절차는
      `barrotube-media-render` 스킬 (`references/chatgpt-image.md`, `grok-video.md`) 준수.
 
-   이후 나머지 자산 일괄 (media-render 산출물이 있으면 S6c는 자동 skip):
+   이후 나머지 자산 일괄 (media-render 산출물이 S6c 완료 게이트를 충족하면 자동 skip):
    ```bash
    node scripts/automation/produce-episode.js --episode EP-YYYY-NNNN --execute
    ```
-   - 내부적으로 S6a(TTS) → S6b(Sync) → S6c(이미지, 존재 시 skip) → S6d(인트로) → S6e(썸네일) 일괄
+   - 내부적으로 S6a(TTS) → S6b(Sync) → S6c(신규 Shorts 이미지·영상 5/5 확인) → S6d(인트로) → S6e(썸네일) 일괄
    - `--execute` 없으면 dry-run (echo only)
    - **레거시 옵션** (API 이미지 — Gemini/OpenAI, 브라우저 불필요):
      `--image-engine openai|gemini` 로 기존 API 경로 강제. media-render 기본 모드에서
@@ -141,9 +152,10 @@ export PAPERCLIP_DISABLED=1
    ```bash
    node scripts/automation/render-direct.js --episode EP-YYYY-NNNN
    ```
-   - `40_assets/videos/scene_NNN.mp4` (media-render Grok 클립)가 있는 씬은 모션 클립
-     기반, 없는 씬은 기존 정지 이미지+Ken Burns 기반(레거시)으로 렌더 — 씬별 혼합 가능.
-     산출물은 동일하게 `55_render/video.mp4`.
+   - 신규 Shorts는 `40_assets/videos/scene_NNN.mp4` 5개 중 하나라도 없으면 기본 렌더가 실패한다.
+     각 클립은 반복하지 않고 실제 TTS 길이에 맞춰 리타이밍하며, 산출물은 `55_render/video.mp4`.
+   - `--allow-stills`는 명시적인 레거시 전용 예외다. 이 옵션으로 만든 정지 이미지 영상은
+     publish QA를 통과할 수 없으며 S11 발행 대상이 아니다.
    - 모션 클립의 **자체 음성(앰비언트)은 나레이션 밑에 낮은 볼륨(0.25)으로 자동 믹스**
      — 기존 글로벌 BGM 믹스는 그대로 유지. 조절 `BT_CLIP_AMBIENT_VOLUME`,
      비활성 `BT_NO_CLIP_AMBIENT=1`.
@@ -233,8 +245,9 @@ export PAPERCLIP_DISABLED=1
 #### Mode E. Cron 관리
 
 ```bash
-# 일일 Producer 점검 (06:00 KST)
-bash $BARROTUBE_HOME/lib/install-cron.sh install daily-producer "06:00"
+# 미국/국내 마감 브리핑 전체 파이프라인
+bash $BARROTUBE_HOME/lib/install-cron.sh install us-close "06:00"
+bash $BARROTUBE_HOME/lib/install-cron.sh install kr-close "16:00"
 
 # 주간 마케팅 분석 (월요일 09:00)
 bash $BARROTUBE_HOME/lib/install-cron.sh install weekly-marketing "Mon 09:00"
@@ -243,7 +256,7 @@ bash $BARROTUBE_HOME/lib/install-cron.sh install weekly-marketing "Mon 09:00"
 bash $BARROTUBE_HOME/lib/install-cron.sh list
 
 # 제거
-bash $BARROTUBE_HOME/lib/install-cron.sh uninstall daily-producer
+bash $BARROTUBE_HOME/lib/install-cron.sh uninstall us-close
 ```
 
 내부적으로 `~/Library/LaunchAgents/com.barroskills.<routine>.plist` 동적 생성·해제.
@@ -255,6 +268,8 @@ bash $BARROTUBE_HOME/lib/install-cron.sh uninstall daily-producer
 3. **Audit log 필수**: 모든 단계 종료 시 `logs/audit/YYYY-MM-DD.jsonl`에 JSONL 한 줄 append.
 4. **월 예산 한도**: `config/budget-policy.json`의 role별 한도 초과 시 자동 정지. `node scripts/automation/budget-report.js`로 사용량 확인.
 5. **Fact check HIGH**: 2회 재집필 후에도 HIGH면 운영자에게 escalation, 자동 진행 금지.
+   MED라도 `부정확` 판정이거나 `grounded: false`인 수치·최상급 표현은 TTS·제목·인트로·
+   썸네일에 확대 사용하지 않는다. 중립 표현으로 고친 뒤 S6 전에 다시 검증한다.
 6. **QA FAIL**: score < 60 또는 blocker > 0이면 S11 차단. 운영자 명시 승인 필요.
 7. **Board 승인 게이트 (S10)**: AskUserQuestion 또는 `/approve` 명령으로만 통과. 자동 승인 금지.
 8. **Paperclip 비활성화**: `PAPERCLIP_DISABLED=1` 환경 변수 필수. 미설정 시 register-paperclip-issue.js가 외부 호출 시도 → 시간 낭비.

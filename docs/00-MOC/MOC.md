@@ -7,6 +7,7 @@
 
 ## Operations
 
+- [[20-Operations/barrotube-episode-pipeline|BarroTube 에피소드 생성 흐름도]]
 - [[20-Operations/barrotube-reels-pipeline|BarroTube Reels 제작 파이프라인]]
 - [[20-Operations/barrotube-media-render-automation-plan|BarroTube Media Render 자동 운영 계획]]
 - [[20-Operations/instagram-publishing|Instagram Reels 게시 운영]]

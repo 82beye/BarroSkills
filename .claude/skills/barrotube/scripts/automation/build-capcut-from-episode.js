@@ -76,7 +76,7 @@ const scenes = meta.scenes.map(s => {
   return {
     imagePath: dstImg,
     ttsPath: dstTts,
-    narration: s.narration,
+    narration: s.subtitle_text || s.narration,
     durationUs: (s.target_seconds || 12) * 1_000_000,
     imageWidth: 1080,
     imageHeight: 1920,

@@ -51,13 +51,22 @@ topic, write the reel script first, then render.
    브라우저 절차는 동일하되 **산출 경로만 EP 규약을 따른다**
    (v2 레이아웃은 `EP-YYYY-NNNN/platforms/<platform>/` 하위):
    - 씬 이미지 → `40_assets/images/scene_NNN.png`
-   - 모션 클립(선택) → `40_assets/videos/scene_NNN.mp4`
+   - 모션 클립 → `40_assets/videos/scene_NNN.mp4`
+   - **신규 Shorts S6c 완료 게이트:** ChatGPT 씬 이미지 5장과 각 이미지를 첨부해 만든
+     Grok image-to-video 클립 5개가 모두 검증되어야 한다(각 5/5).
    - **인트로 카드 → `45_intro.png`** — 타이틀 대형 골드 타이포 + 채널 배지 +
      다크 배경, 9:16. **저장 전 타이틀 철자를 확대(zoom) 검수** — AI 한글 렌더
      오타가 실제로 발생한다(실사례: "메타"→"머타"). 오타면 재생성.
    - Downloads 경유 시: `move_media.py --dest-dir <dir> --slug scene_001|45_intro`
    - 씬 프롬프트 소스는 `30_script.md`의 `image_prompt`. 나머지(엔진 선택·skip
      로직)는 barrotube 쪽 `config/image-engines.json`이 관장한다.
+   - **브라우저 이미지 수락 기준:** 마시는 씬 동작의 주어이자 중앙의 주인공이어야 한다.
+     구석 스티커·워터마크 크기면 다시 생성한다. 설명 씬은 기본 크림-화이트, 정장은
+     정책·비즈니스 상황에만 쓰고, 행동·CTA 씬은 크림/네이비/오렌지 계열의 상황별
+     착장을 쓴다. 전 씬 정장 반복은 거부한다. 방향성을 설명하는 씬·인트로·썸네일에는
+     레버·다이얼·갈림길·스위치·화살표 중 하나의 **방향 트리거**를 중심 오브젝트로 둔다.
+   - 기존 시리즈의 인트로·썸네일은 최근 완료 EP 최대 3개의 실제 이미지를 먼저 비교해
+     캐릭터 크기, 헤드라인 위치, 배경 톤을 맞춘다. 일반 템플릿으로 임의 재해석하지 않는다.
    - **Grok 스틸 첨부(CLI/claude-in-chrome)**: `file_upload`가 호스트 경로를 거부하고
      localhost fetch는 CSP에 막힌다 — **macOS 클립보드로 우회**:
      `osascript -e 'set the clipboard to (read (POSIX file "<png>") as «class PNGf»)'`
@@ -85,7 +94,7 @@ Optional knobs (with sensible defaults):
 
 - `style` — 감성 VLOG / 정보형 / 리뷰형 / 다이나믹 (controls tone of the visual prompt).
 - `scene_index` — which scene to render (default: the hero scene, i.e. the first, or
-  loop over all scenes if the user asks for the whole short).
+  process all scenes if the user asks for the whole short).
 - `aspect / resolution / duration` — default **9:16 / 720p / 10s** (Grok short).
 
 ## Prerequisites (check first, don't assume)
@@ -94,9 +103,13 @@ Optional knobs (with sensible defaults):
   when it is available and already logged into ChatGPT/Grok; it supports direct
   `download.saveAs()` and hidden file input upload. Use `chrome:control-chrome`
   only when Playwright lacks the needed login/session or file upload state.
-  This skill cannot run as a purely background task because generation requires
-  visible state checks.
+  Browser-less headless execution is unsupported. A non-interactive orchestrator
+  may run this skill only when it has a logged-in Playwright/Chrome control surface
+  and performs the same visible state checks before accepting each asset.
 - The user is **signed in** to both https://chatgpt.com and https://grok.com/imagine.
+- 로그인 판정은 URL이나 하위 worker의 문장만으로 하지 않는다. 기존 탭을 한 번 선택해
+  **composer와 계정 프로필 컨트롤이 함께 보이는지** 확인한다. 둘이 보이면 로그인 상태다.
+  명시적 로그인 폼/캡차가 보이고 composer가 없을 때만 중단하며, 그 탭을 전면에 남긴다.
 - **Folder access** to: the project's `Image/` and `video/` output folders, and the
   browser's **Downloads** folder (that's where the sites' Download buttons save).
   Default project layout (per-channel convention):
@@ -106,8 +119,8 @@ Optional knobs (with sensible defaults):
 - **Environment matters for file attach.** Attaching a still to Grok (image→video) needs
   browser control that can select or upload local files. In Codex, prefer Chrome with the
   user's logged-in profile; if file upload is blocked by the current browser surface, ask
-  the user to drag the still into Grok or fall back to text→video (see
-  `references/reel-batch.md`).
+  the user to drag the still into Grok. Text→video is a standalone/legacy fallback only;
+  it does not complete S6c for a new BarroTube Short (see `references/reel-batch.md`).
 - `ffmpeg`/`ffprobe` for final merge, stream validation, contact sheets, and BGM/SFX
   master mix.
 - CapCut 2 installed when the user asks for CapCut draft/export. Prefer
@@ -153,10 +166,10 @@ Read the barrotube YAML and turn the chosen scene into two prompts:
 
 - **image_prompt** — a vivid still describing subject + setting + `broll_keywords` +
   `style`, ending with a concrete look (e.g. "지브리 스타일, 손그림 느낌, 영화 같은 분위기").
-  Always frame for vertical reels with a **wide-angle 24mm look**: full-body or
-  full-object view, enough headroom/footroom, clear surrounding environment, no tight
-  close-up, and no cropped limbs or key props. This keeps the scene readable inside
-  a 9:16 frame.
+  For vertical reels, make Masi the dominant central actor with a readable face and
+  full-body pose. Keep one scene object and the surrounding environment secondary,
+  with comfortable headroom and footroom. This keeps the scene readable inside 9:16
+  without camera-spec or frame-percentage instructions that image models ignore.
 - **video_prompt** — the same scene but describing **motion + camera** (what moves,
   wind, water, a tracking shot), because video models need movement cues.
 
@@ -178,15 +191,19 @@ image share/download modal, then save it to `Image/<slug>.png` (Playwright
 `download.saveAs()` when available; claude-in-chrome uses the History+Finder
 retrieval, see "Downloads land on disk" gotcha).
 
+Batch에서는 컷마다 새 ChatGPT 대화를 열고 같은 캐릭터 시트를 다시 첨부한다. 동일
+대화에 같은 파일을 재첨부하면 "이미 이 파일을 업로드했습니다"로 거부될 수 있다.
+첨부 chip을 확인한 뒤에만 전송하고, 저장·검증 후 share dialog를 닫고 다음 컷으로 간다.
+
 **Attach the character reference (REQUIRED when the channel has a sheet).** Before
 typing the prompt, attach the channel's official character sheet so the mascot
 matches exactly — 바로경제 = `~/BarroTubeData/workspace/docs/바로경제_캐릭터시트.png`
 (constants: `~/BarroTubeData/CLAUDE.md`, channel `character-dna.md`, `role.md`).
-Attach via macOS clipboard, then paste into the composer:
-`osascript -e 'set the clipboard to (read (POSIX file "<sheet.png>") as «class PNGf»)'`
-→ click composer → Cmd+V (retry once if the first paste no-ops). Then start the
-prompt with `Use the attached character sheet as the exact reference for the mascot`
-and describe only scene/pose/expression/props. Full steps + fallback:
+With Playwright, use `#upload-photos`/the hidden file input and verify the attachment
+chip. With claude-in-chrome or when that input fails, paste through the macOS clipboard
+and verify the same chip. Then start the prompt with
+`Use the attached character sheet as the exact reference for the mascot` and describe
+only scene/pose/expression/props. Full steps + fallback:
 `references/chatgpt-image.md` Step 0.
 
 Timing rule: start `chatgpt_image_cutN` before sending the prompt and end it only
@@ -195,14 +212,22 @@ after the file has been saved and validated.
 ### Step 2 — Generate the video on Grok Imagine
 
 Follow `references/grok-video.md`. In short: open grok.com/imagine, set the option
-bar to **비디오 / 720p / 10s / 9:16** and verify it. Then:
+bar to **비디오 / 720p / 10s / 9:16 / Video audio ON** and verify it. `Video audio`
+버튼은 보이는 것만으로 충분하지 않으며 매 컷 `aria-pressed="true"`여야 한다. Then:
 
-- **Image→video (preferred for visual continuity):** attach the ChatGPT image you just
-  saved (the "+" in the prompt bar) and give a short **motion** prompt, or
-- **Text→video (fallback):** just type `video_prompt`.
+- **Image→video (required for new BarroTube Shorts):** attach the ChatGPT image you just
+  saved (the "+" in the prompt bar) and give a short **motion** prompt.
+- **Text→video (standalone/legacy only):** just type `video_prompt`. It is not accepted
+  as new Shorts S6c completion evidence or by publish QA.
 
 Send, watch the **"생성 중 NN%"** progress to 100%, then click **다운로드** and save to
 `video/<slug>.mp4`.
+
+업로드 완료는 filename locator가 아니라 `Remove image` 버튼/첨부 thumbnail로 판정한다.
+제출 직후 `/imagine` URL이 잠시 남을 수 있으므로 URL 반환만으로 실패 처리하지 말고 새
+`/imagine/post/<id>` 또는 현재 생성 진행 표시를 기다린다. 다운로드 후 `ffprobe`에서
+H.264 세로 영상과 **AAC 오디오 스트림**이 모두 보여야 수락한다. 오디오가 없으면 파일을
+완료로 세지 말고 `Video audio`를 켠 뒤 같은 컷을 다시 생성한다.
 
 Timing rule: start `grok_video_cutN` before attaching the image/prompt and end it
 only after the downloaded video passes `ffprobe`.
@@ -235,6 +260,11 @@ to avoid deletion entirely.
 
 For a whole reel, follow `references/capcut-reel-export.md` after all Grok clips
 exist. The expected outputs are:
+
+In barrotube EP mode, S7 starts only after new Shorts have image-to-video clips 5/5.
+It fails by default when any clip is missing and retimes each clip to the matching TTS
+duration instead of looping it. `--allow-stills` is an explicit legacy-only exception;
+its output must fail publish QA.
 
 - `55_render/video.mp4` — FFmpeg master merge for QA and draft input.
 - CapCut draft under `~/Movies/CapCut/User Data/Projects/com.lveditor.draft/<project>/`.
@@ -304,7 +334,8 @@ source reel has `60_qa_report.images.json: ok` and otherwise left as "human must
 - **Grok paywall.** On some accounts, clicking generate pops a **SuperGrok** subscription
   modal (especially when a daily/free quota is spent). **Never purchase or start a paid
   trial on the user's behalf.** Close the modal, report it, and offer alternatives
-  (try later, switch account, use ChatGPT for the still only).
+  (try later, switch account, use ChatGPT for the still only). For a new BarroTube Short,
+  still-only output leaves S6c blocked until all five Grok clips exist.
 - **Grok options can already be correct.** The option bar often defaults to a prior
   selection — zoom in and *verify* 비디오/720p/10s/9:16 rather than blindly clicking.
 - **Account drift.** The logged-in account may differ between runs (check the

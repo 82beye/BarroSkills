@@ -10,6 +10,7 @@
 import { parseArgs } from 'node:util';
 import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { execSync } from 'node:child_process';
 import { renderDirect } from './render-direct.js';
 import { buildDistributionPackage } from './build-distribution.js';
@@ -80,7 +81,8 @@ const STAGES = [
   { id: 'S11', name: 'publish',         file: '80_publish_result.json', agent: '13-publisher' },
 ];
 
-function stageArtifactCandidates(episodeDir, file) {
+function stageArtifactCandidates(episodeDir, file, platform = null) {
+  if (platform) return [join(episodeDir, 'platforms', platform, file), join(episodeDir, file)];
   return [
     join(episodeDir, 'platforms', 'long', file),
     join(episodeDir, 'platforms', 'shorts', file),
@@ -88,11 +90,11 @@ function stageArtifactCandidates(episodeDir, file) {
   ];
 }
 
-function detectLastCompleted(episodeDir) {
+function detectLastCompleted(episodeDir, platform = null) {
   for (let i = STAGES.length - 1; i >= 0; i--) {
     const stage = STAGES[i];
     if (!stage.file) continue;
-    if (stageArtifactCandidates(episodeDir, stage.file).some(path => existsSync(path))) {
+    if (stageArtifactCandidates(episodeDir, stage.file, platform).some(path => existsSync(path))) {
       return i;
     }
   }
@@ -111,15 +113,18 @@ function inferLegacyPlatform(episodeDir, metadata = {}) {
   return 'long';
 }
 
-function resolvePublishBundle(episodeDir) {
-  const metaCandidates = stageArtifactCandidates(episodeDir, '70_publish_meta.json');
+export function resolvePublishBundle(episodeDir, requestedPlatform = null) {
+  if (requestedPlatform && !['long', 'shorts'].includes(requestedPlatform)) {
+    throw new Error(`Unsupported requested platform: ${requestedPlatform}`);
+  }
+  const metaCandidates = stageArtifactCandidates(episodeDir, '70_publish_meta.json', requestedPlatform);
   const metaFile = metaCandidates.find(path => existsSync(path));
   if (!metaFile) throw new Error(`Missing 70_publish_meta.json (tried: ${metaCandidates.join(', ')})`);
   const platformDir = dirname(metaFile);
   const isV2 = basename(dirname(platformDir)) === 'platforms';
   let metadata = {};
   try { metadata = JSON.parse(readFileSync(metaFile, 'utf8')); } catch {}
-  const platform = isV2 ? basename(platformDir) : inferLegacyPlatform(episodeDir, metadata);
+  const platform = isV2 ? basename(platformDir) : (requestedPlatform || inferLegacyPlatform(episodeDir, metadata));
   if (!['long', 'shorts'].includes(platform)) throw new Error(`Unsupported publish platform bundle: ${platform}`);
   return {
     metaFile,
@@ -209,7 +214,7 @@ async function runStage(episodeDir, episodeId, stage, dryRun, opts = {}) {
   // S10 — Board 승인 게이트 (Telegram 알림 + 승인 대기)
   if (stage.id === 'S10') {
     let bundle = null;
-    try { bundle = resolvePublishBundle(episodeDir); } catch {}
+    try { bundle = resolvePublishBundle(episodeDir, opts.platform); } catch {}
     if (bundle && existsSync(bundle.approvalFile)) {
       try {
         const preliminaryMeta = JSON.parse(readFileSync(bundle.metaFile, 'utf8'));
@@ -261,14 +266,10 @@ async function runStage(episodeDir, episodeId, stage, dryRun, opts = {}) {
   // S11 — 배포 패키지 생성 + YouTube 자동 업로드 + TikTok/Reels 수동 알림
   if (stage.id === 'S11') {
     try {
+      const bundle = resolvePublishBundle(episodeDir, opts.platform);
       // 중복 퍼블리시 가드 (#6): 이미 업로드된 videoId가 있으면 기본적으로 거부
-      // v2/v1 둘 다 검색
-      const publishResultCandidates = [
-        join(episodeDir, 'platforms', 'long', '80_publish_result.json'),
-        join(episodeDir, 'platforms', 'shorts', '80_publish_result.json'),
-        join(episodeDir, '80_publish_result.json'),
-      ];
-      const publishResultFile = publishResultCandidates.find(p => existsSync(p));
+      // 명시된 플랫폼 번들만 검사한다. 다른 플랫폼의 게시 결과는 이 실행을 막지 않는다.
+      const publishResultFile = existsSync(bundle.publishResultFile) ? bundle.publishResultFile : null;
       if (publishResultFile && !opts.forceRepublish) {
         let prev;
         try { prev = JSON.parse(readFileSync(publishResultFile, 'utf-8')); }
@@ -285,7 +286,6 @@ async function runStage(episodeDir, episodeId, stage, dryRun, opts = {}) {
         return true;
       }
 
-      const bundle = resolvePublishBundle(episodeDir);
       const {
         metaFile, platformDir, videoFile, approvalFile, qaFile,
       } = bundle;
@@ -486,6 +486,7 @@ async function main() {
     options: {
       episode: { type: 'string', short: 'e' },
       from: { type: 'string', short: 'f' },
+      platform: { type: 'string' },
       'dry-run': { type: 'boolean', default: false },
       'force-republish': { type: 'boolean', default: false },
       'force-release-stale': { type: 'boolean', default: false },
@@ -493,7 +494,11 @@ async function main() {
   });
 
   if (!values.episode) {
-    console.error('Usage: node run-episode.js --episode <EP-YYYY-NNNN> [--from <S2>] [--dry-run] [--force-republish] [--force-release-stale]');
+    console.error('Usage: node run-episode.js --episode <EP-YYYY-NNNN> [--platform long|shorts] [--from <S2>] [--dry-run] [--force-republish] [--force-release-stale]');
+    process.exit(1);
+  }
+  if (values.platform && !['long', 'shorts'].includes(values.platform)) {
+    console.error(`❌ --platform must be long or shorts (received: ${values.platform})`);
     process.exit(1);
   }
 
@@ -545,7 +550,7 @@ async function main() {
     }
     console.log(`   Starting from: ${values.from} (manual override)`);
   } else {
-    const lastCompleted = detectLastCompleted(episodeDir);
+    const lastCompleted = detectLastCompleted(episodeDir, values.platform);
     startIndex = lastCompleted + 1;
     if (lastCompleted >= 0) {
       console.log(`   Checkpoint: ${STAGES[lastCompleted].id} completed`);
@@ -565,6 +570,7 @@ async function main() {
   for (let i = startIndex; i < STAGES.length; i++) {
     const result = await runStage(episodeDir, values.episode, STAGES[i], values['dry-run'], {
       forceRepublish: values['force-republish'],
+      platform: values.platform || null,
     });
 
     if (result === 'awaiting_approval') {
@@ -574,6 +580,7 @@ async function main() {
 
     if (!result) {
       console.log(`\n❌ Stage ${STAGES[i].id} failed. Fix and re-run.`);
+      process.exitCode = 1;
       break;
     }
   }
@@ -581,7 +588,9 @@ async function main() {
   console.log(`\n📊 Episode status saved to: ${join(episodeDir, '.episode_status.json')}`);
 }
 
-main().catch(err => {
-  console.error('Fatal error:', err);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch(err => {
+    console.error('Fatal error:', err);
+    process.exit(1);
+  });
+}

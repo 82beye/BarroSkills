@@ -9,6 +9,7 @@
  *
  * 산출물을 stdout 파싱이 아니라 파일로 받는다 — 모델이 형식을 흔들어도 검증이 확정적이다.
  *   <out-dir>/research-<slot>.md    — 10_market_research.md 로 설치될 본문
+ *   <out-dir>/strategy-<slot>.md    — 20_strategy.md 로 설치될 본문
  *   <out-dir>/topic-<slot>.json     — { topic, angle, candidates[] }
  *
  * 실패해도 파이프라인을 죽이지 않는다. 종료코드 4 = "리서치 실패, 헤드라인 폴백하라".
@@ -18,7 +19,7 @@
  *
  * 종료코드: 0 = 성공 · 2 = 입력 오류 · 4 = 리서치 실패(폴백 권장)
  */
-import { existsSync, readFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { spawnSync } from 'node:child_process';
@@ -45,9 +46,13 @@ function buildPrompt({ slotName, slot, defaults, skeleton, date, inputs, outDir 
   const inputLines = Object.entries(inputs)
     .map(([k, v]) => `  - ${k}: ${v.exists ? v.path : `(없음 — ${v.path})`}`)
     .join('\n');
+  const weekday = new Intl.DateTimeFormat('ko-KR', {
+    weekday: 'long', timeZone: 'Asia/Seoul',
+  }).format(new Date(`${date}T12:00:00+09:00`));
+  const requiredClosed = slot.market?.require_closed?.join(', ') || '없음';
 
   // 파일 내용은 넣지 않고 경로만 준다 (CLAUDE.md brief 원칙).
-  return `너는 바로경제(econ-daily) 채널의 리서처다. 오늘(${date}) "${slot.label}" 쇼츠 1편의 리서치를 완성한다.
+  return `너는 바로경제(econ-daily) 채널의 리서처다. 오늘(${date}, ${weekday}) "${slot.label}" 쇼츠 1편의 리서치를 완성한다.
 
 ## 입력 (경로다. 직접 읽어라)
 ${inputLines}
@@ -61,6 +66,12 @@ ${slot.audience_context}
 ## 반드시 지킬 제약
 ${slot.timing_caveat}
 
+## 휴장일·주말 대체 규칙 (위 앵글과 5컷 구조보다 우선)
+- 필수 마감 지수: ${requiredClosed}
+- 시세 스냅샷의 content_mode를 우선 따른다: 토요일은 closed_market_issue, 일요일은 sunday_preopen이다. 평일에는 필수 지수 거래일(traded_at)에 신규 종가가 없으면 closed_market_issue다.
+- ${slot.closed_market_policy}
+- 대체 모드에서는 없는 당일 등락률을 만들지 말고, 아래 5컷 구조의 숫자 요구도 최신 이슈·영향·다음 개장 관전 포인트로 바꿔라.
+
 ## 소셜 검색 (필수)
 설치된 CLI 로 시장 반응을 확인해라. 실패하면 건너뛰고 그 사실을 문서에 남겨라.
   agent-reach doctor --json      # 사용 가능한 백엔드 확인
@@ -68,7 +79,7 @@ ${slot.timing_caveat}
   opencli reddit search "<키워드>" -f yaml
 헤드라인이 말하지 않는 것(투자자 정서, 논쟁 지점, 과장 여부)을 잡아내는 게 목적이다.
 
-## 산출물 — 아래 두 파일을 반드시 Write 로 저장해라
+## 산출물 — 아래 세 파일을 반드시 Write 로 저장해라
 1. ${join(outDir, `research-${slotName}.md`)}
    - 시세 요약(스냅샷의 수치를 그대로. 임의로 지어내지 마라)
    - 오늘의 핵심 사건 3개와 각각의 근거 링크
@@ -76,10 +87,17 @@ ${slot.timing_caveat}
    - 경쟁 채널이 이미 다룬 주제 (입력에 경쟁 데이터가 있을 때만)
    - 60초 안에 다룰 수 있는 범위로 좁힌 결론
 
-2. ${join(outDir, `topic-${slotName}.json`)}
+2. ${join(outDir, `strategy-${slotName}.md`)}
+   - 선정 토픽과 한 문장 앵글
+   - 시청자가 얻어갈 핵심 1개
+   - 아래 5컷 구조에 맞춘 씬별 메시지
+   - 단정하면 안 되는 주장과 팩트체크 우선순위
+
+3. ${join(outDir, `topic-${slotName}.json`)}
    {
      "topic": "<선정된 토픽 한 문장. 대본 생성의 입력이 된다>",
      "angle": "<이 토픽을 어떤 각도로 풀지>",
+    "content_mode": "market_close|closed_market_issue|sunday_preopen",
      "key_numbers": ["<대본에 반드시 들어갈 수치>", "..."],
      "candidates": [{"topic":"...","why":"..."}, ...],
      "social_searched": true|false
@@ -95,6 +113,44 @@ ${skeletonLines}
 - 파일을 저장하지 않고 끝내지 마라. 저장이 이 작업의 산출물이다.`;
 }
 
+function readJson(path, fallback) {
+  try { return JSON.parse(readFileSync(path, 'utf-8')); } catch { return fallback; }
+}
+
+function writeFallbackAnalysis({ slotName, slot, skeleton, date, inputs, outDir }) {
+  const market = readJson(inputs['시세 스냅샷'].path, {});
+  const news = readJson(inputs['뉴스'].path, {});
+  const items = (news.sources || []).flatMap((source) => source.items || []).slice(0, 3);
+  const quotes = market.quotes || [];
+  const topic = items[0]?.title || (quotes.length ? `${slot.label}: 주요 지수와 환율 흐름` : '');
+  if (!topic) return false;
+
+  const weekday = new Date(`${date}T12:00:00+09:00`).getUTCDay();
+  const contentMode = market.content_mode
+    || (weekday === 6 ? 'closed_market_issue' : weekday === 0 ? 'sunday_preopen' : 'market_close');
+  const quoteLines = quotes.length
+    ? quotes.map((q) => `- ${q.name || q.symbol}: ${q.price_text ?? q.price ?? '값 없음'} (${q.change_pct == null ? '변동률 없음' : `${q.change_pct}%`}, ${q.traded_at || '거래시각 없음'})`).join('\n')
+    : '- 시세 스냅샷 없음 — 수치 단정 금지';
+  const newsLines = items.length
+    ? items.map((item) => `- [${item.title}](${item.link || ''})${item.description ? ` — ${item.description}` : ''}`).join('\n')
+    : '- 뉴스 없음';
+  const sceneLines = skeleton.map((scene) => `- ${scene.n}. ${scene.role}: ${scene.intent}`).join('\n');
+
+  writeFileSync(join(outDir, `research-${slotName}.md`), `---\ndate: ${date}\nslot: ${slotName}\nsource: deterministic-fallback\ncontent_mode: ${contentMode}\n---\n\n# 시장 리서치\n\n## 선정 토픽\n\n${topic}\n\n## 시세 스냅샷\n\n${quoteLines}\n\n## 주요 뉴스\n\n${newsLines}\n\n## 분석 한계\n\n자동 리서치 모델을 사용할 수 없어 수집 원문만 정리했다. 소셜 반응과 기사 밖 주장은 사용하지 않으며, 모든 수치는 대본 팩트체크에서 다시 검증한다.\n`);
+  writeFileSync(join(outDir, `strategy-${slotName}.md`), `---\ndate: ${date}\nslot: ${slotName}\nsource: deterministic-fallback\ncontent_mode: ${contentMode}\n---\n\n# 콘텐츠 전략\n\n## 한 문장 앵글\n\n${slot.angle}: ${topic}\n\n## 시청자 가치\n\n${slot.audience_context}\n\n## 5씬 구조\n\n${sceneLines}\n\n## 팩트 경계\n\n시세 스냅샷과 링크된 뉴스에 없는 수치·인과·최상급 표현은 단정하지 않는다. 휴장 모드에서는 직전 종가를 거래일과 함께 참고값으로만 사용한다.\n`);
+  writeFileSync(join(outDir, `topic-${slotName}.json`), `${JSON.stringify({
+    topic,
+    angle: slot.angle,
+    content_mode: contentMode,
+    key_numbers: quotes.filter((q) => q.price_text != null || q.price != null)
+      .map((q) => `${q.name || q.symbol} ${q.price_text ?? q.price}`).slice(0, 5),
+    candidates: items.map((item) => ({ topic: item.title, why: '수집 뉴스 헤드라인' })),
+    social_searched: false,
+    fallback: true,
+  }, null, 2)}\n`);
+  return true;
+}
+
 function main() {
   const { values } = parseArgs({
     options: {
@@ -104,6 +160,7 @@ function main() {
       timeout: { type: 'string' },
       model: { type: 'string' },
       'dry-run': { type: 'boolean', default: false },
+      fallback: { type: 'boolean', default: false },
     },
   });
 
@@ -128,10 +185,16 @@ function main() {
   for (const v of Object.values(inputs)) v.exists = existsSync(v.path);
 
   const researchPath = join(outDir, `research-${values.slot}.md`);
+  const strategyPath = join(outDir, `strategy-${values.slot}.md`);
   const topicPath = join(outDir, `topic-${values.slot}.json`);
 
+  // workspace/ 는 ~/BarroTubeData 로 가는 심볼릭이라 실경로가 프로젝트 밖이다.
+  // --add-dir 에 심볼릭 경로를 주면 쓰기가 "민감 파일"로 차단되고, 비대화형이라
+  // 승인해 줄 사람이 없어 리서치가 통째로 버려진다 (실측 확인). 실경로로 넘긴다.
+  const realOutDir = existsSync(outDir) ? realpathSync(outDir) : outDir;
+
   const prompt = buildPrompt({
-    slotName: values.slot, slot, defaults, skeleton, date, inputs, outDir,
+    slotName: values.slot, slot, defaults, skeleton, date, inputs, outDir: realOutDir,
   });
 
   const timeoutSec = Number(values.timeout || DEFAULT_TIMEOUT_SEC);
@@ -146,6 +209,17 @@ function main() {
     process.exit(0);
   }
 
+  if (values.fallback) {
+    if (!writeFallbackAnalysis({
+      slotName: values.slot, slot, skeleton, date, inputs, outDir: realOutDir,
+    })) {
+      console.error('❌ 폴백 분석에 사용할 시세·뉴스가 없습니다.');
+      process.exit(4);
+    }
+    console.log(`\n⚠️  결정론적 폴백 분석 완료\n   ${researchPath}\n   ${strategyPath}\n   ${topicPath}`);
+    process.exit(0);
+  }
+
   if (!inputs['시세 스냅샷'].exists && !inputs['뉴스'].exists) {
     console.error('❌ 시세·뉴스가 모두 없습니다 — 리서치할 재료가 없어 중단합니다.');
     process.exit(4);
@@ -156,7 +230,7 @@ function main() {
     '--model', model,
     '--permission-mode', PERMISSION_MODE,
     '--allowed-tools', ...ALLOWED_TOOLS.split(','),
-    '--add-dir', outDir,
+    '--add-dir', realOutDir,
   ];
 
   const r = spawnSync('claude', args, {
@@ -181,7 +255,8 @@ function main() {
 
   // 파일로 검증한다 — 모델이 "했다"고 말하는 것과 실제로 쓴 것은 다르다.
   const missing = [];
-  if (!existsSync(researchPath)) missing.push(researchPath);
+  if (!existsSync(researchPath) || !readFileSync(researchPath, 'utf-8').trim()) missing.push(researchPath);
+  if (!existsSync(strategyPath) || !readFileSync(strategyPath, 'utf-8').trim()) missing.push(strategyPath);
   if (!existsSync(topicPath)) missing.push(topicPath);
   if (missing.length) {
     console.error(`\n❌ 산출물 누락:\n   ${missing.join('\n   ')}`);
@@ -204,6 +279,7 @@ function main() {
   console.log(`   토픽: ${topic.topic}`);
   console.log(`   소셜 검색: ${topic.social_searched ? '수행' : '미수행'}`);
   console.log(`   ${researchPath}`);
+  console.log(`   ${strategyPath}`);
   console.log(`   ${topicPath}`);
   process.exit(0);
 }

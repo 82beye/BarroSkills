@@ -27,6 +27,22 @@ export const BOUNDS = {
 export const CANONICAL_TAIL =
   'bold illustrated line art, 9:16 vertical, no readable text or numbers.';
 
+/**
+ * 대본의 image_prompt 안에 들어갈 마스코트 절 — EP-2026-0069(발행본) 실물이다.
+ *
+ * ⚠️ 채널의 character-dna.md 첫 코드블록(v12, 1001자·금지표현 8개)을 여기에 그대로 넣으면
+ * 안 된다. 그 블록은 generate-image-gemini.js 가 이미지 API 호출의 prefix 로 쓰는 것이고,
+ * image_prompt 에 넣으면 프롬프트 하나가 계약 상한(780자·금지어 1개)을 구조적으로 넘겨
+ * 모든 컷이 BLOCK 된다 (2026-07-29 실측: EP-0072 10건 BLOCK → 재생성도 JSON 잘림으로 실패).
+ *
+ * 즉 DNA 는 "이미지 생성 단계의 정본", 이 절은 "대본 단계의 정본"이다. 둘은 용도가 다르다.
+ */
+export const MASCOT_CLAUSE =
+  '마시 the 바로경제 mascot (official character sheet for the character only — ' +
+  'large round head on a separate rounded pear-shaped body, white mitten hands and ' +
+  'rounded shoe-feet, big solid black eyes with white highlights, orange (#FF9A1F) ' +
+  'blush cheeks, no nose or ears)';
+
 /** 작성 템플릿. generate-script.js 가 그대로 모델에게 넘긴다. */
 export const TEMPLATE =
   '[palette:<tag>] <MASCOT_CLAUSE>, <emotion>, <pose and scene action in ONE clause>. ' +

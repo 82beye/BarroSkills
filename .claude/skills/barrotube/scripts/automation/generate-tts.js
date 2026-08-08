@@ -27,7 +27,25 @@ export function stripEmoji(s) {
     .trim();
 }
 
+// narration은 ElevenLabs에 그대로 전달된다. 숫자 표기는 subtitle_text에만 둔다.
+function assertTtsNarration(text, label = 'TTS narration') {
+  const digit = String(text || '').match(/\d/);
+  if (digit) {
+    throw new Error(`${label} has an Arabic numeral ("${digit[0]}"). Write numbers in Korean for TTS and put the numeric form in subtitle_text.`);
+  }
+}
+
+export function parseSpeed(value) {
+  if (value === undefined) return null;
+  const speed = typeof value === 'string' && value.trim() ? Number(value) : NaN;
+  if (!Number.isFinite(speed) || speed < 0.7 || speed > 1.2) {
+    throw new Error('--speed must be a finite number between 0.7 and 1.2');
+  }
+  return speed;
+}
+
 export async function generateTTS({ text, outPath, voiceId = DEFAULT_VOICE_ID, model = DEFAULT_MODEL, settings = {}, costContext = {} }) {
+  assertTtsNarration(text);
   const apiKey = getSecret('ELEVENLABS_API_KEY');
   if (!apiKey) throw new Error('ELEVENLABS_API_KEY not set in .env');
 
@@ -109,10 +127,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
 
   try {
+    const speed = parseSpeed(opts.speed);
     if (opts.text && opts.out) {
       await generateTTS({
         text: opts.text,
         outPath: resolve(opts.out),
+        settings: speed === null ? {} : { speed },
         costContext: { stage: 'S6a', note: 'cli-text' },
       });
       console.log(`✅ TTS saved: ${opts.out}`);
@@ -127,11 +147,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         'barro-alert':   { stability: 0.5,  similarity_boost: 0.75, style: 0.4, speed: 1.05 },
       };
       const persona = meta.persona || null;
-      const settings = persona && PERSONA_SETTINGS[persona] ? PERSONA_SETTINGS[persona] : {};
-      if (persona) console.log(`🎭 Persona=${persona} → stability=${settings.stability ?? 'default'}, style=${settings.style ?? 'default'}`);
+      const settings = { ...(persona && PERSONA_SETTINGS[persona] ? PERSONA_SETTINGS[persona] : {}) };
+      if (speed !== null) settings.speed = speed;
+      if (persona) console.log(`🎭 Persona=${persona} → stability=${settings.stability ?? 'default'}, style=${settings.style ?? 'default'}, speed=${settings.speed ?? 'default'}`);
 
-      // 표기 정책 v2.0 — phoneme override 사전 적용 (channel별)
-      // narration 원본은 자막 burn-in용 보존, TTS 입력만 약어/숫자 → 한국어 발음 치환
+      // narration은 TTS용 한글 수사, subtitle_text는 화면용 숫자 표기다.
+      // phoneme override는 약어 발음에만 적용하며 숫자 표기를 대신하지 않는다.
       let phonemeMap = null;
       if (meta.channel_id) {
         const ROOT = resolve(import.meta.dirname, '../..');
@@ -161,6 +182,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       };
 
       console.log(`🎙 Generating ${meta.scenes.length} TTS clips...`);
+      // 기존 WAV가 있어도 잘못된 원고를 통과시키지 않도록 전체를 먼저 검증한다.
+      for (const scene of meta.scenes) {
+        assertTtsNarration(stripEmoji(scene.narration), `Scene ${scene.scene_id} narration`);
+      }
       let totalOverrides = 0;
       for (const scene of meta.scenes) {
         const outPath = join(outDir, `scene_${scene.scene_id}.wav`);
@@ -188,8 +213,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       if (totalOverrides > 0) console.log(`\n📚 Total phoneme overrides applied: ${totalOverrides}`);
       console.log(`\n🎙 All TTS generated in ${outDir}`);
     } else {
-      console.error('Usage: generate-tts.js --text "..." --out path/to/file.wav');
-      console.error('   or: generate-tts.js --script 30_script.md --out-dir assets/tts/ [--force]');
+      console.error('Usage: generate-tts.js --text "..." --out path/to/file.wav [--speed 0.7-1.2]');
+      console.error('   or: generate-tts.js --script 30_script.md --out-dir assets/tts/ [--speed 0.7-1.2] [--force]');
       process.exit(1);
     }
   } catch (e) {

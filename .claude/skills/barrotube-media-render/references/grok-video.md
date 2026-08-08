@@ -12,8 +12,10 @@ save downloads directly with `download.saveAs()`.
    differ from ChatGPT.
 
 2. **Set the option bar — then VERIFY.** Along the bottom of the prompt bar:
-   `이미지 | 비디오 | 에이전트` · `480p | 720p` · `6s | 10s` · `9:16 ▾`.
+   `이미지 | 비디오 | 에이전트` · `480p | 720p` · `6s | 10s` · `Video audio` · `9:16 ▾`.
    - Select **비디오**, **720p**, **10s**, and aspect **9:16**.
+   - Set **Video audio ON**. Do not infer state from the icon: inspect the button and
+     require `aria-pressed="true"`. Click it only when false, then read the attribute again.
    - **Zoom into the option bar and confirm** the chosen pills are filled white
      (selected). The bar frequently already defaults to the right values — verify
      instead of blindly toggling, so you don't accidentally turn a correct option off.
@@ -24,9 +26,15 @@ save downloads directly with `download.saveAs()`.
      still from `Image/<slug>.png`, then type a short motion prompt.
    - If `browser_file_upload` reports no modal state, use the hidden input directly:
      `page.locator('input[type="file"]').first().setInputFiles(imagePath)`.
+   - Wait for the `Remove image` button or attached thumbnail. The uploaded filename
+     may never become an accessible button, so filename visibility is not the gate.
    - Use text→video only as a fallback and report that character consistency may drop.
 
-4. **Generate.** Click the send (↑) button. A 9:16 canvas shows **"생성 중 NN%"**.
+4. **Generate.** Record the current URL, then click send (↑). Wait for the new
+   `/imagine/post/<id>` URL and that post's **"생성 중 NN%"** state (or its Download
+   button if it finishes unusually fast). Grok is an SPA: the submit call can return
+   while the URL still says `/imagine`. Do not treat that transient URL as failure, and
+   do not query option-bar locators captured before navigation after the post opens.
 
 5. **Wait to 100%.** Poll with short waits (≤10s each) and re-screenshot. Video gen
    typically takes ~30–90s. The result auto-plays in the canvas when done; a right-side
@@ -35,9 +43,17 @@ save downloads directly with `download.saveAs()`.
 6. **Download.** Click **다운로드**. With Playwright MCP, wrap it in
    `page.waitForEvent('download')`, then `download.saveAs('/.../video/<slug>.mp4')`.
 
-7. **Validate.** `ffprobe` should show h264 video, portrait resolution, and an MP4
-   duration near 10s. Some Grok sessions return 6s despite the UI showing 10s; keep
-   it if visually acceptable and compensate in the final trim/merge.
+7. **Validate.** `ffprobe` must show H.264 portrait video, an MP4 duration near 10s,
+   and an **AAC audio stream**. Grok commonly returns 720×1280 or 720×1264; both are
+   accepted portrait outputs. If audio is absent, the cut is incomplete: verify
+   `Video audio aria-pressed="true"` and regenerate it. Some sessions return 6s despite
+   the UI showing 10s; keep it only if visually acceptable and compensate in the merge.
+
+   ```bash
+   ffprobe -v error \
+     -show_entries stream=codec_type,codec_name,width,height,sample_rate,channels \
+     -show_entries format=duration -of json video/<slug>.mp4
+   ```
 
 ## Playwright MCP pattern
 
@@ -45,26 +61,32 @@ save downloads directly with `download.saveAs()`.
 await page.goto('https://grok.com/imagine');
 await page.waitForTimeout(1500);
 
-await page.evaluate(() => {
-  for (const txt of ['비디오', '720p', '10s']) {
-    const b = [...document.querySelectorAll('button')]
-      .find(x => (x.innerText || x.textContent || '').trim() === txt);
-    if (b) b.click();
-  }
-});
+for (const name of ['비디오', '720p', '10s']) {
+  const option = page.getByRole('radio', { name });
+  if (!(await option.isChecked())) await option.click();
+}
+const audio = page.locator('button[aria-label="Video audio"]');
+if (await audio.getAttribute('aria-pressed') !== 'true') await audio.click();
+if (await audio.getAttribute('aria-pressed') !== 'true') throw new Error('Video audio is off');
 
 // If aspect shows 2:3, click the dropdown and choose "9:16 수직".
 await page.locator('input[type="file"]').first().setInputFiles(imagePath);
-await page.waitForTimeout(2500);
+await page.getByRole('button', { name: 'Remove image' })
+  .waitFor({ state: 'visible', timeout: 15000 });
 
 const box = page.locator('[role="textbox"][aria-label="Ask Grok anything"]').first();
 await box.click();
 await page.keyboard.insertText(motionPrompt);
-await page.locator('button[aria-label="제출"]').click();
+const oldUrl = page.url();
+await box.press('Enter');
+await page.waitForURL(/\/imagine\/post\//, { timeout: 15000 });
+if (page.url() === oldUrl) throw new Error('Grok did not open a new post');
 
-// Poll body text until "다운로드" appears.
+// Poll the new post until its own download control appears.
+const downloadButton = page.getByRole('button', { name: '다운로드' });
+await downloadButton.waitFor({ state: 'visible', timeout: 90000 });
 const downloadPromise = page.waitForEvent('download', { timeout: 30000 });
-await page.getByRole('button', { name: '다운로드' }).click();
+await downloadButton.click();
 const download = await downloadPromise;
 await download.saveAs('/Users/beye/.../video/<slug>.mp4');
 ```

@@ -8,16 +8,18 @@
 #   bash install-cron.sh list
 #
 # Routines:
-#   daily-producer        — 매일 06:00 KST EP 큐 점검 + 토픽 선정
+#   us-close              — 매일 06:00 KST 미국 증시 마감 브리핑 전체 파이프라인
+#   kr-close              — 매일 16:00 KST 국내 증시 마감 브리핑 전체 파이프라인
 #   weekly-marketing      — 매주 월요일 09:00 마케팅 인텔리전스 fetch
 #   doctor-daily          — 매일 07:00 자동 진단 (silent failure 탐지)
 #
 # Examples:
-#   bash install-cron.sh install daily-producer "06:00"
+#   bash install-cron.sh install us-close "06:00"
+#   bash install-cron.sh install kr-close "16:00"
 #   bash install-cron.sh install weekly-marketing "Mon 09:00"
 #   bash install-cron.sh install doctor-daily "07:00"
 #   bash install-cron.sh list
-#   bash install-cron.sh uninstall daily-producer
+#   bash install-cron.sh uninstall us-close
 
 set -euo pipefail
 
@@ -36,6 +38,8 @@ NODE_BIN="$(which node || echo /Users/beye/.nvm/versions/node/v24.11.1/bin/node)
 CRON_PATH="$(dirname "$NODE_BIN")"
 CLAUDE_BIN="$(which claude 2>/dev/null || true)"
 [ -n "$CLAUDE_BIN" ] && CRON_PATH="${CRON_PATH}:$(dirname "$CLAUDE_BIN")"
+CODEX_BIN="$(which codex 2>/dev/null || true)"
+[ -n "$CODEX_BIN" ] && CRON_PATH="${CRON_PATH}:$(dirname "$CODEX_BIN")"
 CRON_PATH="${CRON_PATH}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
 cmd_install() {
@@ -77,14 +81,9 @@ cmd_install() {
       daemon_mode=true
       time_spec="daemon"
       ;;
-    auto-pipeline)
-      # 완전 자율: RSS → 토픽 → S0~S9 → S10 자율 승인 → 30분 reject window → S11 publish
-      script_path="${BARROTUBE_HOME}/lib/auto-pipeline.sh"
-      extra_args=""
-      ;;
     *)
       echo "❌ 알 수 없는 routine: $routine" >&2
-      echo "사용 가능: us-close | kr-close | weekly-marketing | doctor-daily | telegram-bot | auto-pipeline"
+      echo "사용 가능: us-close | kr-close | weekly-marketing | doctor-daily | telegram-bot"
       exit 1
       ;;
   esac
@@ -270,24 +269,21 @@ Usage:
   bash install-cron.sh list
 
 Routines (cron — 정기 실행):
-  daily-producer        매일 EP brief 큐 점검 (예: "06:00") — 무비용 S0만
+  us-close              미국 증시 마감 브리핑 전체 파이프라인 (예: "06:00")
+  kr-close              국내 증시 마감 브리핑 전체 파이프라인 (예: "16:00")
   weekly-marketing      주간 마케팅 RSS fetch (예: "Mon 09:00") — 무비용
   doctor-daily          자동 진단 (예: "07:00") — 무비용
-  auto-pipeline         완전 자율 EP 산출~publish 💰 (예: "06:30")
-                        RSS → 토픽 → S0~S9 → S10 자율 → 30분 reject → S11 publish
-                        안전 가드 10개 (autonomy-pause, daily quota, budget, QA gate 등)
-
 Daemons (long-running, RunAtLoad=true + KeepAlive):
   telegram-bot          Telegram long-polling 봇 (시간 불필요)
 
 Examples:
-  bash install-cron.sh install daily-producer "06:00"
+  bash install-cron.sh install us-close "06:00"
+  bash install-cron.sh install kr-close "16:00"
   bash install-cron.sh install weekly-marketing "Mon 09:00"
   bash install-cron.sh install doctor-daily "07:00"
-  bash install-cron.sh install auto-pipeline "06:30"
   bash install-cron.sh install telegram-bot
   bash install-cron.sh list
-  bash install-cron.sh uninstall auto-pipeline
+  bash install-cron.sh uninstall us-close
 EOF
     exit 1
     ;;

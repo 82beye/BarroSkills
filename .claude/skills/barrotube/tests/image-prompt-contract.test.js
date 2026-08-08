@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  BOUNDS, CANONICAL_TAIL, TEMPLATE, KNOWN_PALETTES,
+  BOUNDS, CANONICAL_TAIL, TEMPLATE, KNOWN_PALETTES, MASCOT_CLAUSE,
   checkImagePrompt, checkEpisodePrompts, profile,
 } from '../scripts/automation/lib/image-prompt-contract.js';
 
@@ -102,4 +102,28 @@ test('템플릿이 고정 꼬리를 포함한다 — 문서와 코드가 갈라�
 test('빈 프롬프트는 EMPTY 로 막는다', () => {
   assert.ok(codes(checkImagePrompt('')).has('EMPTY'));
   assert.ok(codes(checkImagePrompt(null)).has('EMPTY'));
+});
+
+// 2026-07-29 회귀: generate-script.js 가 character-dna.md 첫 블록(1001자·금지표현 8개)을
+// image_prompt 안에 verbatim 으로 넣게 지시하고 있었다. 계약 상한이 780자·금지어 1개라
+// 만족이 원천적으로 불가능했고, EP-0072 가 10건 BLOCK 으로 멈췄다.
+// 대본용 마스코트 절은 스스로 계약을 통과해야 한다.
+test('MASCOT_CLAUSE 는 계약 안에서 실제로 사용 가능하다', () => {
+  const built = `[palette:bearish] ${MASCOT_CLAUSE}, shocked and worried, standing before a ` +
+    'giant glowing board where one index soars green while another bleeds red. ' +
+    'BACKGROUND: deep dark navy-indigo (#1E3A5F) cinematic financial newsroom, ' +
+    'red (#E63946) warning glow on the falling line, orange-gold (#F4A261) accent on the ' +
+    `rising bar, faint candlestick textures at low contrast, ${CANONICAL_TAIL}`;
+
+  assert.ok(built.length <= BOUNDS.maxChars,
+    `조립 결과 ${built.length}자 — 상한 ${BOUNDS.maxChars}자를 넘으면 모든 컷이 BLOCK 된다`);
+  assert.deepEqual(checkImagePrompt(built), [],
+    '정본 마스코트 절로 만든 프롬프트가 계약을 통과하지 못하면 생성기가 만족시킬 수 없다');
+});
+
+test('MASCOT_CLAUSE 는 캐릭터 DNA 의 핵심 시각 요소를 유지한다', () => {
+  // DNA 가 v13 으로 바뀌었는데 이 절만 낡으면 컷 간 캐릭터가 드리프트한다.
+  for (const token of ['마시', '바로경제', 'round head', 'pear-shaped', 'mitten', '#FF9A1F']) {
+    assert.ok(MASCOT_CLAUSE.includes(token), `마스코트 절에 "${token}" 가 없다`);
+  }
 });

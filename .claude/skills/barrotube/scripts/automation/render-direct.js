@@ -18,8 +18,7 @@
  * 에피소드 구조 기대:
  *   <episode_dir>/30_script.md              (YAML frontmatter 파싱)
  *   <episode_dir>/assets/images/scene_NNN.png
- *   <episode_dir>/assets/videos/scene_NNN.mp4  (선택 — media-render Grok 모션 클립,
- *                                               있으면 정지 이미지 대신 사용)
+ *   <episode_dir>/assets/videos/scene_NNN.mp4  (필수 — --allow-stills일 때만 생략 가능)
  *   <episode_dir>/assets/tts/scene_NNN.wav
  *   <episode_dir>/assets/bgm.wav            (선택)
  */
@@ -30,6 +29,9 @@ import { fileURLToPath } from 'node:url';
 import { execSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { parse as parseYAML } from 'yaml';
+
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const SKILL_DIR = resolve(SCRIPT_DIR, '..', '..');
 
 // 이모지·픽토그램(🚨📚✅ 등) 제거 — 자막 burn-in 표시 오류 방지 (2026-06-07)
 // generate-tts.js stripEmoji 와 동일 규칙.
@@ -73,7 +75,7 @@ const CLIP_AMBIENT_VOLUME = parseFloat(process.env.BT_CLIP_AMBIENT_VOLUME || '0.
 const CLIP_AMBIENT_DISABLED = /^(1|true|yes)$/i.test(process.env.BT_NO_CLIP_AMBIENT || '');
 
 /**
- * Scene 단위로 이미지+TTS를 mp4 클립으로 렌더
+ * Scene 단위로 이미지+TTS를 lossless-audio MOV 클립으로 렌더
  */
 /**
  * 나레이션을 문장 단위로 분할 (., ?, !, 및 긴 쉼표 기준)
@@ -117,7 +119,7 @@ function renderSubtitlePng(text, outPath) {
 // 채널로 고정하지 않고, config 에 채널을 추가하면 그 채널도 켜진다.
 const KARAOKE_PY = existsSync(join(process.env.HOME, 'youtube-co/.venv/bin/python3'))
   ? join(process.env.HOME, 'youtube-co/.venv/bin/python3') : 'python3';
-const KARAOKE_SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'render-karaoke-png.py');
+const KARAOKE_SCRIPT = join(SCRIPT_DIR, 'render-karaoke-png.py');
 
 function resolveSubtitleStyle(channelId) {
   const DEFAULT = {
@@ -125,7 +127,7 @@ function resolveSubtitleStyle(channelId) {
     outline_color: '#081320', font_size: 60,
   };
   let cfg = {};
-  try { cfg = JSON.parse(readFileSync(resolve('config/subtitles.json'), 'utf-8')); } catch { /* 없으면 static */ }
+  try { cfg = JSON.parse(readFileSync(join(SKILL_DIR, 'config', 'subtitles.json'), 'utf-8')); } catch { /* 없으면 static */ }
   const chan = (cfg.channels && channelId && cfg.channels[channelId]) || {};
   const style = { ...DEFAULT, ...(cfg.default || {}), ...chan };
   if (process.env.BT_SUBTITLE_MODE) style.mode = process.env.BT_SUBTITLE_MODE; // 테스트 override
@@ -184,10 +186,20 @@ function renderScene({ imagePath, videoPath = null, ttsPath, durationSec, narrat
     }
   }
 
-  // 입력 0 = 씬 소스: 모션 클립(media-render Grok)이면 TTS 길이까지 무한 루프,
-  // 아니면 기존 정지 이미지 (-t 로 최종 길이 캡)
+  // Grok 클립은 보통 10초 고정이다. 3배 이내면 한 번만 재생해 씬 길이에 맞추고,
+  // 그보다 큰 차이거나 BT_CLIP_FIT_MODE=loop일 때만 반복한다.
+  const clipFitMode = (process.env.BT_CLIP_FIT_MODE || 'speed').toLowerCase();
+  const clipDuration = videoPath ? probeDuration(videoPath) : 0;
+  const maxSpeedFactor = Number(process.env.BT_CLIP_MAX_SPEED_FACTOR) || 3;
+  const retimeFactor = clipDuration > 0.1 ? durationSec / clipDuration : 0;
+  const retimeClip = !!videoPath
+    && clipFitMode === 'speed'
+    && retimeFactor >= 1 / maxSpeedFactor
+    && retimeFactor <= maxSpeedFactor;
   const args = videoPath
-    ? ['-y', '-stream_loop', '-1', '-i', videoPath, '-i', ttsPath]
+    ? (retimeClip
+        ? ['-y', '-i', videoPath, '-i', ttsPath]
+        : ['-y', '-stream_loop', '-1', '-i', videoPath, '-i', ttsPath])
     : ['-y', '-loop', '1', '-i', imagePath, '-i', ttsPath];
   overlays.forEach(o => args.push('-loop', '1', '-i', o.png));
 
@@ -199,7 +211,8 @@ function renderScene({ imagePath, videoPath = null, ttsPath, durationSec, narrat
   let filter;
   if (videoPath) {
     // 모션 클립: 이미 움직임이 있으므로 Ken Burns 없이 캔버스 normalize만
-    filter = `[0:v]scale=${canvasW}:${canvasH}:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH},fps=30,setpts=PTS-STARTPTS[v0]`;
+    const setpts = retimeClip ? `${retimeFactor.toFixed(6)}*(PTS-STARTPTS)` : 'PTS-STARTPTS';
+    filter = `[0:v]scale=${canvasW}:${canvasH}:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH},setpts=${setpts},fps=30[v0]`;
   } else if (KEN_BURNS_ENABLED) {
     // Ken Burns: 입력 110%로 scale 후 zoompan으로 1.0→1.05 점진 줌인 (씬 길이 전체)
     const scaledW = Math.floor(canvasW * 1.10);
@@ -220,12 +233,13 @@ function renderScene({ imagePath, videoPath = null, ttsPath, durationSec, narrat
 
   // 모션 클립 자체 음성(앰비언트)을 나레이션 밑에 낮은 볼륨으로 amix.
   // 클립에 오디오가 없거나 still 렌더면 기존과 동일하게 TTS만 (1:a).
-  const withAmbient = !!videoPath && !CLIP_AMBIENT_DISABLED && probeHasAudio(videoPath);
-  let audioMap = '1:a';
+  filter += `;[1:a]apad=pad_dur=${durationSec},atrim=duration=${durationSec},asetpts=PTS-STARTPTS,aresample=44100[voice]`;
+  const withAmbient = !!videoPath && !retimeClip && !CLIP_AMBIENT_DISABLED && probeHasAudio(videoPath);
+  let audioMap = '[voice]';
   if (withAmbient) {
     filter += `;[0:a]atrim=0:${durationSec},asetpts=PTS-STARTPTS,volume=${CLIP_AMBIENT_VOLUME},`
       + `afade=t=out:st=${Math.max(0, durationSec - 0.4).toFixed(3)}:d=0.4[amb]`
-      + `;[1:a][amb]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]`;
+      + `;[voice][amb]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]`;
     audioMap = '[aout]';
   }
 
@@ -234,9 +248,8 @@ function renderScene({ imagePath, videoPath = null, ttsPath, durationSec, narrat
     '-map', `[${finalLabel}]`,
     '-map', audioMap,
     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-r', '30',
-    '-c:a', 'aac', '-b:a', '128k', '-ar', '44100',
+    '-c:a', 'pcm_s16le', '-ar', '44100', '-ac', '1',
     '-t', String(durationSec),
-    '-movflags', '+faststart',
     outPath,
   );
 
@@ -257,9 +270,8 @@ function renderStillClip({ imagePath, durationSec, canvasW, canvasH, outPath }) 
     '-f', 'lavfi', '-t', String(durationSec), '-i', 'anullsrc=channel_layout=mono:sample_rate=44100',
     '-vf', `scale=${canvasW}:${canvasH}:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH}`,
     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-r', '30',
-    '-c:a', 'aac', '-b:a', '128k', '-ar', '44100',
+    '-c:a', 'pcm_s16le', '-ar', '44100', '-ac', '1',
     '-t', String(durationSec),
-    '-movflags', '+faststart',
     outPath,
   ];
   const res = spawnSync('ffmpeg', args, { stdio: 'pipe' });
@@ -292,8 +304,7 @@ function renderOutroPad({ lastClipPath, durationSec, fadeDurationSec, outPath })
     '-af', `apad=pad_dur=${durationSec},afade=t=out:st=${fadeStart.toFixed(3)}:d=${fadeDur.toFixed(3)}`,
     '-t', totalDur.toFixed(3),
     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-r', '30',
-    '-c:a', 'aac', '-b:a', '128k', '-ar', '44100',
-    '-movflags', '+faststart',
+    '-c:a', 'pcm_s16le', '-ar', '44100', '-ac', '1',
     outPath,
   ];
   const res = spawnSync('ffmpeg', args, { stdio: 'pipe' });
@@ -324,8 +335,7 @@ function renderOutroSlotClip({ imagePath, ttsPath, durationSec, canvasW, canvasH
     '-t', durationSec.toFixed(3),
     '-r', '30',
     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'medium', '-crf', '20',
-    '-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-ac', '1',
-    '-movflags', '+faststart',
+    '-c:a', 'pcm_s16le', '-ar', '44100', '-ac', '1',
     outPath,
   ];
   const res = spawnSync('ffmpeg', args, { stdio: 'pipe' });
@@ -375,20 +385,36 @@ function mixBgm(videoPath, bgmPath, outPath, bgmVolume = null) {
     //    voice 구간에서 BGM 추가 약 -12dB 감쇠. 무음 구간엔 baseline 유지.
     `[bgm_loop][0:a]sidechaincompress=threshold=0.03:ratio=14:attack=20:release=400:makeup=1:mix=1[bgm_ducked]`,
     // 3) Voice + ducked BGM 합성. normalize=0으로 voice 레벨 보존
-    `[0:a][bgm_ducked]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]`,
+    `[0:a][bgm_ducked]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aformat=sample_rates=44100:channel_layouts=mono,alimiter=limit=0.841395:level=false[aout]`,
   ].join(';');
 
   const res = spawnSync('ffmpeg', [
     '-y', '-i', videoPath, '-i', bgmPath,
     '-filter_complex', filter,
     '-map', '0:v', '-map', '[aout]',
-    '-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k',
+    '-c:v', 'copy', '-c:a', 'aac', '-b:a', '160k', '-ar', '44100', '-ac', '1',
     '-shortest',
+    '-movflags', '+faststart',
     outPath,
   ], { stdio: 'pipe' });
 
   if (res.status !== 0) {
     throw new Error(`ffmpeg bgm mix failed: ${res.stderr.toString().slice(-500)}`);
+  }
+  return outPath;
+}
+
+function encodeFinal(videoPath, outPath) {
+  const res = spawnSync('ffmpeg', [
+    '-y', '-i', videoPath,
+    '-map', '0:v', '-map', '0:a',
+    '-af', 'alimiter=limit=0.841395:level=false',
+    '-c:v', 'copy', '-c:a', 'aac', '-b:a', '160k', '-ar', '44100', '-ac', '1',
+    '-movflags', '+faststart',
+    outPath,
+  ], { stdio: 'pipe' });
+  if (res.status !== 0) {
+    throw new Error(`ffmpeg final encode failed: ${res.stderr.toString().slice(-500)}`);
   }
   return outPath;
 }
@@ -414,17 +440,13 @@ function resolveBgmPath(epAssetsDir, scriptFm) {
   else if (persona === 'barro-recap') category = 'recap';
   else category = 'analysis';
 
-  const globalBgm = resolve('assets/bgm', `${category}.mp3`);
+  const globalBgm = join(SKILL_DIR, 'assets', 'bgm', `${category}.mp3`);
   if (existsSync(globalBgm)) return { path: globalBgm, source: `global-${category}` };
 
   return null;
 }
 
-export function renderDirect({ episodeDir, outPath, canvas, platform: platformHint }) {
-  if (!hasFfmpeg()) {
-    throw new Error('ffmpeg not found. Install: brew install ffmpeg');
-  }
-
+export function renderDirect({ episodeDir, outPath, canvas, platform: platformHint, allowStills = false }) {
   // v2 (platforms/{long|shorts}/) 우선 → v1 legacy (episodeDir 직접) fallback.
   // platformHint가 있으면 해당 플랫폼만 시도, 없으면 long → shorts → legacy 순으로 탐색.
   const candidates = platformHint
@@ -448,6 +470,24 @@ export function renderDirect({ episodeDir, outPath, canvas, platform: platformHi
   if (!existsSync(assetsDir)) assetsDir = join(baseDir, 'assets');
   if (!existsSync(assetsDir)) throw new Error(`Missing assets dir under ${baseDir}`);
 
+  const missingMotion = scenes
+    .map((scene, i) => scene.scene_id || String(i + 1).padStart(3, '0'))
+    .filter(sceneId => !existsSync(join(assetsDir, 'videos', `scene_${sceneId}.mp4`)));
+  if (missingMotion.length && !allowStills) {
+    const error = new Error([
+      `Grok 모션 클립 누락 (${missingMotion.length}/${scenes.length} 씬): ${missingMotion.join(', ')}`,
+      `barrotube-media-render로 ${join(assetsDir, 'videos')}/scene_NNN.mp4 를 먼저 만드세요.`,
+      '(비권장) 정지 이미지 렌더는 --allow-stills 로 허용할 수 있습니다.',
+    ].join('\n'));
+    error.code = 3;
+    error.exitCode = 3;
+    throw error;
+  }
+
+  if (!hasFfmpeg()) {
+    throw new Error('ffmpeg not found. Install: brew install ffmpeg');
+  }
+
   // Canvas: explicit arg > format-based default
   const format = meta.format || 'shorts';
   const defaultCanvas = format === 'long-3min' ? 'horizontal' : 'vertical';
@@ -468,7 +508,7 @@ export function renderDirect({ episodeDir, outPath, canvas, platform: platformHi
   const introPath = introCandidates.find(p => existsSync(p));
   const INTRO_DURATION_SEC = Number(process.env.BT_INTRO_SEC) || 2;
   if (introPath) {
-    const introClipPath = join(workDir, 'clip_000_intro.mp4');
+    const introClipPath = join(workDir, 'clip_000_intro.mov');
     renderStillClip({
       imagePath: introPath,
       durationSec: INTRO_DURATION_SEC,
@@ -492,20 +532,17 @@ export function renderDirect({ episodeDir, outPath, canvas, platform: platformHi
     const scene = scenes[i];
     const sceneId = scene.scene_id || String(i + 1).padStart(3, '0');
     const imagePath = join(assetsDir, 'images', `scene_${sceneId}.png`);
-    // 2026-07-02: media-render(Grok image→video) 모션 클립이 있으면 정지 이미지 대신
-    // 사용 (기본). 없으면 기존 still 기반 렌더 (레거시). 산출물 경로는 동일.
     const videoPath = join(assetsDir, 'videos', `scene_${sceneId}.mp4`);
     const hasMotion = existsSync(videoPath);
     const ttsPath = join(assetsDir, 'tts', `scene_${sceneId}.wav`);
-    const clipPath = join(workDir, `clip_${sceneId}.mp4`);
+    const clipPath = join(workDir, `clip_${sceneId}.mov`);
 
     if (!hasMotion && !existsSync(imagePath)) throw new Error(`Missing image: ${imagePath} (and no motion clip ${videoPath})`);
     if (!existsSync(ttsPath)) throw new Error(`Missing tts: ${ttsPath}`);
 
-    // Use ACTUAL TTS duration for clip length + subtitle timing
-    // (was: scene.target_seconds — produced up to 46s of silence across 7 scenes)
     const ttsDur = probeDuration(ttsPath);
-    const durationSec = ttsDur > 0 ? ttsDur : (scene.target_seconds || 12);
+    const targetDur = Number(scene.target_seconds) || 0;
+    const durationSec = Math.max(ttsDur, targetDur) || 12;
     const targetNote = scene.target_seconds ? ` (script target ${scene.target_seconds}s)` : '';
 
     renderScene({
@@ -513,7 +550,8 @@ export function renderDirect({ episodeDir, outPath, canvas, platform: platformHi
       videoPath: hasMotion ? videoPath : null,
       ttsPath,
       durationSec,
-      narration: scene.narration || '',
+      // TTS는 narration(한글 수사), 화면 자막은 subtitle_text(숫자 표기)를 사용한다.
+      narration: scene.subtitle_text || scene.narration || '',
       workDir,
       sceneId,
       outPath: clipPath,
@@ -523,7 +561,7 @@ export function renderDirect({ episodeDir, outPath, canvas, platform: platformHi
     });
 
     clipPaths.push(clipPath);
-    console.log(`  ✅ Scene ${sceneId} (${durationSec.toFixed(2)}s TTS${targetNote}${hasMotion ? ', motion clip' : ''})`);
+    console.log(`  ✅ Scene ${sceneId} (${durationSec.toFixed(2)}s, TTS ${ttsDur.toFixed(2)}s${targetNote}${hasMotion ? ', motion clip' : ''})`);
   }
 
   // Outro pad: 마지막 씬 끝에 freeze + audio fadeout (abrupt cut 방지)
@@ -545,7 +583,7 @@ export function renderDirect({ episodeDir, outPath, canvas, platform: platformHi
   if (clipPaths.length > 0 && OUTRO_PAD_SEC > 0) {
     const lastIdx = clipPaths.length - 1;
     const lastClipPath = clipPaths[lastIdx];
-    const paddedPath = join(workDir, `clip_outro_padded.mp4`);
+    const paddedPath = join(workDir, 'clip_outro_padded.mov');
     renderOutroPad({
       lastClipPath,
       durationSec: OUTRO_PAD_SEC,
@@ -562,7 +600,7 @@ export function renderDirect({ episodeDir, outPath, canvas, platform: platformHi
     const lastScene = scenes[scenes.length - 1];
     const lastSceneId = lastScene.scene_id || String(scenes.length).padStart(3, '0');
     const outroImagePath = join(assetsDir, 'images', `scene_${lastSceneId}.png`);
-    const outroClipPath = join(workDir, 'clip_zzz_outro.mp4');
+    const outroClipPath = join(workDir, 'clip_zzz_outro.mov');
     const outroTtsDur = probeDuration(outroTtsPath);
     // outro 클립은 TTS + 0.3s tail silence + 0.3s fade
     const outroClipDur = Math.min(6.0, outroTtsDur + 0.3); // 6s 상한 (shorts 60s 보호)
@@ -589,7 +627,7 @@ export function renderDirect({ episodeDir, outPath, canvas, platform: platformHi
     // BT_ENDCARD_SEC로 조절 가능 (Shorts 60초 정합 등 미세 조정용).
     const endcardDurationSec = Number(process.env.BT_ENDCARD_SEC)
       || (chosenCanvas === 'vertical' ? 2.5 : 3.5);
-    const endcardClipPath = join(workDir, 'clip_zzzz_endcard.mp4');
+    const endcardClipPath = join(workDir, 'clip_zzzz_endcard.mov');
     renderStillClip({
       imagePath: endcardPath,
       durationSec: endcardDurationSec,
@@ -602,7 +640,7 @@ export function renderDirect({ episodeDir, outPath, canvas, platform: platformHi
   }
 
   // Concat
-  const concatPath = join(workDir, 'concat.mp4');
+  const concatPath = join(workDir, 'concat.mov');
   console.log('🔗 Concatenating scenes...');
   concatScenes(clipPaths, concatPath);
 
@@ -612,7 +650,7 @@ export function renderDirect({ episodeDir, outPath, canvas, platform: platformHi
     console.log(`🎵 Mixing BGM (${bgmResolved.source}, voice-ducked)...`);
     mixBgm(concatPath, bgmResolved.path, outPath);
   } else {
-    execSync(`cp "${concatPath}" "${outPath}"`);
+    encodeFinal(concatPath, outPath);
   }
 
   const stats = execSync(`du -h "${outPath}" | cut -f1`).toString().trim();
@@ -642,8 +680,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
 
   if (!opts.episode || !opts.out) {
-    console.error('Usage: render-direct.js --episode <dir> --out <path.mp4> [--canvas vertical|horizontal]');
+    console.error('Usage: render-direct.js --episode <dir> --out <path.mp4> [--canvas vertical|horizontal] [--allow-stills]');
     console.error('  (canvas auto-inferred from script frontmatter.format if omitted)');
+    console.error('  --allow-stills: 모션 클립 없이 정지 이미지 렌더 허용 (비권장)');
     process.exit(1);
   }
 
@@ -662,9 +701,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       outPath: resolve(opts.out),
       canvas: opts.canvas,
       platform: opts.platform,
+      allowStills: Boolean(opts['allow-stills']),
     });
   } catch (e) {
     console.error(`❌ Render failed: ${e.message}`);
-    process.exit(1);
+    process.exit(e.exitCode || 1);
   }
 }

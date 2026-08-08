@@ -38,7 +38,7 @@ FORCE_TOPIC="${FORCE_TOPIC:-}"
 RESUME_EP="${RESUME_EP:-}"
 SLOT="${SLOT:-}"
 BT_SKIP_MEDIA_RENDER="${BT_SKIP_MEDIA_RENDER:-0}"
-MEDIA_RENDER_TIMEOUT="${MEDIA_RENDER_TIMEOUT:-2400}"   # 40분
+MEDIA_RENDER_TIMEOUT="${MEDIA_RENDER_TIMEOUT:-3600}"  # ChatGPT 7장 + Grok 5개 생성 상한
 RESEARCH_TIMEOUT="${RESEARCH_TIMEOUT:-600}"            # 10분
 
 while [ $# -gt 0 ]; do
@@ -113,6 +113,33 @@ run_with_timeout() {
   return $rc
 }
 
+media_assets_ready() {
+  local base="$1" id path hash hashes="" missing=""
+  for id in 001 002 003 004 005; do
+    path="${base}/40_assets/images/scene_${id}.png"
+    [ -s "$path" ] || missing="${missing}${missing:+, }images/scene_${id}.png"
+
+    path="${base}/40_assets/videos/scene_${id}.mp4"
+    if [ ! -s "$path" ] || ! ffprobe -v error "$path" >/dev/null 2>&1; then
+      missing="${missing}${missing:+, }videos/scene_${id}.mp4"
+    elif [ "$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name \
+        -of csv=p=0 "$path" 2>/dev/null | head -1)" != "aac" ]; then
+      missing="${missing}${missing:+, }videos/scene_${id}.mp4(AAC audio)"
+    else
+      hash=$(shasum -a 256 "$path" | awk '{print $1}')
+      if printf '%s\n' "$hashes" | grep -qx "$hash"; then
+        missing="${missing}${missing:+, }videos/scene_${id}.mp4(duplicate bytes)"
+      fi
+      hashes="${hashes}${hashes:+$'\n'}${hash}"
+    fi
+  done
+  for path in 45_intro.png 47_thumbnail.png; do
+    [ -s "${base}/${path}" ] || missing="${missing}${missing:+, }${path}"
+  done
+  MEDIA_ASSETS_MISSING="$missing"
+  [ -z "$missing" ]
+}
+
 # ─────────────────────────────────────────────────
 # 슬롯 로드
 # ─────────────────────────────────────────────────
@@ -179,6 +206,7 @@ fi
 # ─────────────────────────────────────────────────
 TOPIC=""
 RESEARCH_MD=""
+STRATEGY_MD=""
 
 if [ -n "$RESUME_EP" ]; then
   log_stage "♻️  Phase 2 — RESUME 모드: $RESUME_EP"
@@ -192,9 +220,10 @@ elif [ -n "$FORCE_TOPIC" ]; then
   TOPIC="$FORCE_TOPIC"
 
 else
-  log_stage "🔎 Phase 2 — 리서치 + 토픽 선정 (소셜 검색 포함)"
+  log_stage "🔎 Phase 2 — 시장 리서치 + 콘텐츠 전략 + 토픽 선정"
   TOPIC_JSON="${NEWS_DIR}/topic-${SLOT}.json"
   RESEARCH_MD="${NEWS_DIR}/research-${SLOT}.md"
+  STRATEGY_MD="${NEWS_DIR}/strategy-${SLOT}.md"
 
   if [ "$DRY_RUN" = "1" ]; then
     run_or_echo node scripts/automation/research-brief.js --slot "$SLOT" --date "$TODAY" --dry-run
@@ -202,26 +231,51 @@ else
   else
     node scripts/automation/research-brief.js --slot "$SLOT" --date "$TODAY" --timeout "$RESEARCH_TIMEOUT"
     RC=$?
-    if [ $RC -eq 0 ] && [ -f "$TOPIC_JSON" ]; then
+    if [ $RC -eq 0 ] && [ -s "$TOPIC_JSON" ] && [ -s "$RESEARCH_MD" ] && [ -s "$STRATEGY_MD" ]; then
       TOPIC=$(json_get "$TOPIC_JSON" "d['topic']")
     else
-      # 폴백: 뉴스 첫 헤드라인. 리서치 실패로 그날 방송을 통째로 거르지는 않는다.
-      echo "⚠️  리서치 실패(exit $RC) — 뉴스 헤드라인 폴백"
-      RESEARCH_MD=""
-      TOPIC=$(python3 -c "
-import json,sys
-try:
-    d=json.load(open('${NEWS_DIR}/news.json'))
-    for s in d.get('sources',[]):
-        if s.get('items'): print(s['items'][0]['title']); break
-except Exception: pass" 2>/dev/null)
-      [ -n "$TOPIC" ] || {
+      # 모델 한도·오류 시에도 수집 원문으로 S2/S3를 만든다. 분석 파일 없이 대본부터
+      # 생성하면 이후 팩트체크가 대본의 사실 근거를 복구할 수 없다.
+      echo "⚠️  자동 리서치 실패(exit $RC) — 시세·뉴스 기반 결정론적 폴백"
+      if node scripts/automation/research-brief.js --slot "$SLOT" --date "$TODAY" --fallback; then
+        TOPIC=$(json_get "$TOPIC_JSON" "d['topic']")
+      else
         audit "auto_pipeline_idle" "INFO" "slot=$SLOT no topic — exit clean"
-        notify_telegram "💤 <b>${SLOT_LABEL} idle</b>\n$TODAY 토픽을 만들지 못했습니다 (리서치 실패 + 뉴스 빈약)"
+        notify_telegram "💤 <b>${SLOT_LABEL} idle</b>\n$TODAY 분석 자료를 만들지 못했습니다 (리서치 실패 + 시세·뉴스 빈약)"
         exit 0
-      }
-      notify_telegram "⚠️ <b>${SLOT_LABEL}</b> 리서치 실패 — 헤드라인 폴백으로 진행\n토픽: $TOPIC"
+      fi
+      notify_telegram "⚠️ <b>${SLOT_LABEL}</b> 자동 리서치 실패 — 시세·뉴스 폴백 분석으로 진행\n토픽: $TOPIC"
     fi
+  fi
+fi
+
+# 리서치 성공/헤드라인 폴백 모두 같은 휴장 모드를 따른다. FORCE_TOPIC은 운영자 입력이므로 보존한다.
+if [ -z "$RESUME_EP" ] && [ -z "$FORCE_TOPIC" ]; then
+  CONTENT_MODE=""
+  MODE_FILE="${NEWS_DIR}/topic-${SLOT}.json"
+  [ -f "$MODE_FILE" ] && CONTENT_MODE=$(json_get "$MODE_FILE" "d.get('content_mode','')")
+  if [ -z "$CONTENT_MODE" ]; then
+    MODE_FILE="${NEWS_DIR}/market-${SLOT}.json"
+    [ -f "$MODE_FILE" ] && CONTENT_MODE=$(json_get "$MODE_FILE" "d.get('content_mode','')")
+  fi
+  if [ -z "$CONTENT_MODE" ]; then
+    case "$(date +%u)" in
+      6) CONTENT_MODE="closed_market_issue" ;;
+      7) CONTENT_MODE="sunday_preopen" ;;
+    esac
+  fi
+
+  case "$CONTENT_MODE" in
+    closed_market_issue)
+      case "$TOPIC" in "최신 주식·경제 이슈:"*) ;; *) TOPIC="최신 주식·경제 이슈: $TOPIC" ;; esac
+      ;;
+    sunday_preopen)
+      case "$TOPIC" in "다음 장 전 이슈 정리:"*) ;; *) TOPIC="다음 장 전 이슈 정리: $TOPIC" ;; esac
+      ;;
+  esac
+  if [ -n "$CONTENT_MODE" ] && [ "$CONTENT_MODE" != "market_close" ]; then
+    echo "🔁 휴장 대체 모드: $CONTENT_MODE"
+    audit "auto_pipeline_content_mode" "INFO" "slot=$SLOT mode=$CONTENT_MODE topic=$TOPIC"
   fi
 fi
 
@@ -241,10 +295,15 @@ if [ -z "$RESUME_EP" ]; then
     [ -n "$EP_ID" ] || fail_with_alert "Phase 3" "create-episode.js 출력에서 EP ID 추출 실패"
     EP_DIR="${BARROTUBE_HOME}/workspace/episodes/${EP_ID}"
 
-    # 리서치 결과를 S2 산출물 자리에 설치 (있을 때만)
-    if [ -n "$RESEARCH_MD" ] && [ -f "$RESEARCH_MD" ]; then
-      cp "$RESEARCH_MD" "${EP_DIR}/10_market_research.md"
+    if [ -n "$STRATEGY_MD" ]; then
+      [ -s "$RESEARCH_MD" ] && [ -s "$STRATEGY_MD" ] \
+        || fail_with_alert "Phase 3 analysis" "S2/S3 분석 산출물이 없습니다. 대본 생성을 시작하지 않습니다."
+      cp "$RESEARCH_MD" "${EP_DIR}/10_market_research.md" \
+        || fail_with_alert "Phase 3 analysis" "10_market_research.md 설치 실패"
+      cp "$STRATEGY_MD" "${EP_DIR}/20_strategy.md" \
+        || fail_with_alert "Phase 3 analysis" "20_strategy.md 설치 실패"
       echo "  ✓ 10_market_research.md 설치"
+      echo "  ✓ 20_strategy.md 설치"
     fi
   fi
   audit "auto_pipeline_ep_created" "INFO" "slot=$SLOT ep=$EP_ID topic=$TOPIC"
@@ -259,9 +318,14 @@ echo "▶ 디렉토리: $EP_DIR"
 # ─────────────────────────────────────────────────
 log_stage "✍️  Phase 4 — S4 대본 생성 (Gemini)"
 
-run_or_echo node scripts/automation/generate-script.js \
-  --episode "$EP_DIR" --platform "$PLATFORM" \
-  || fail_with_alert "Phase 4 script" "generate-script.js 실패"
+SCRIPT_PATH="${EP_DIR}/platforms/${PLATFORM}/30_script.md"
+if [ -n "$RESUME_EP" ] && [ -s "$SCRIPT_PATH" ]; then
+  echo "⏭  RESUME: 기존 대본 유지 — $SCRIPT_PATH"
+else
+  run_or_echo node scripts/automation/generate-script.js \
+    --episode "$EP_DIR" --platform "$PLATFORM" \
+    || fail_with_alert "Phase 4 script" "generate-script.js 실패"
+fi
 
 # ─────────────────────────────────────────────────
 # Stage A — Phase 5: image_prompt 계약 게이트  ★이미지 굽기 전
@@ -286,48 +350,106 @@ fi
 # ─────────────────────────────────────────────────
 log_stage "🔬 Phase 6 — S5 팩트체크 (Gemini)"
 
-run_or_echo node scripts/automation/run-factcheck.js \
-  --episode "$EP_ID" --platform "$PLATFORM" \
-  || fail_with_alert "Phase 6 factcheck" "run-factcheck.js 실패"
+FACTCHECK_PATH="${EP_DIR}/platforms/${PLATFORM}/35_factcheck.md"
+if [ -n "$RESUME_EP" ] && [ -s "$FACTCHECK_PATH" ] && grep -q '^pass: true$' "$FACTCHECK_PATH"; then
+  echo "⏭  RESUME: 기존 PASS 팩트체크 유지 — $FACTCHECK_PATH"
+else
+  run_or_echo node scripts/automation/run-factcheck.js \
+    --episode "$EP_ID" --platform "$PLATFORM" \
+    || fail_with_alert "Phase 6 factcheck" "run-factcheck.js 실패"
+fi
+
+if [ "$DRY_RUN" = "0" ] && [ -s "$FACTCHECK_PATH" ]; then
+  MED_COUNT=$(sed -n 's/^med_risk_count:[[:space:]]*//p' "$FACTCHECK_PATH" | head -1)
+  GROUNDED=$(sed -n 's/^grounded:[[:space:]]*//p' "$FACTCHECK_PATH" | head -1)
+  case "${MED_COUNT:-0}" in ''|*[!0-9]*) MED_COUNT=0 ;; esac
+  if { [ "$MED_COUNT" -gt 0 ] && [ "$GROUNDED" != "true" ]; } || \
+     { grep -q '^### \[MED\]' "$FACTCHECK_PATH" && grep -q '\*\*검증 결과\*\*: 부정확' "$FACTCHECK_PATH"; }; then
+    halt_for_human "Phase 6 factcheck" \
+      "MED 부정확 또는 미접지(grounded=false) 주장이 있습니다. 수치·최상급 표현을 중립 문구로 고치고 팩트체크를 다시 실행하세요."
+  fi
+fi
 
 # ─────────────────────────────────────────────────
 # Stage B — Phase 7: media-render (브라우저, 하이브리드)
 # ─────────────────────────────────────────────────
-log_stage "🎨 Phase 7 — media-render 씬 이미지·모션 클립 (브라우저)"
+log_stage "🎨 Phase 7 — ChatGPT 이미지 → Grok 모션 클립 (브라우저)"
 
-IMG_DIR="${EP_DIR}/platforms/${PLATFORM}/40_assets/images"
+MEDIA_BASE="${EP_DIR}/platforms/${PLATFORM}"
 
 if [ "$DRY_RUN" = "1" ]; then
-  echo "[DRY_RUN] media-render 단계 생략"
+  echo "[DRY_RUN] codex exec → ChatGPT 이미지 5장·인트로·썸네일 → Grok 영상 5개"
+elif media_assets_ready "$MEDIA_BASE"; then
+  echo "⏭  media-render 자산 12/12 검증 완료 — 건너뜀"
 elif [ "$BT_SKIP_MEDIA_RENDER" = "1" ]; then
-  echo "⏭  BT_SKIP_MEDIA_RENDER=1 — 건너뜀"
-elif [ -f "${IMG_DIR}/scene_001.png" ] && [ -f "${IMG_DIR}/scene_005.png" ]; then
-  echo "⏭  씬 이미지 이미 존재 — 건너뜀"
+  halt_for_human "Phase 7 media-render" "BT_SKIP_MEDIA_RENDER=1 이지만 필수 자산이 불완전합니다: ${MEDIA_ASSETS_MISSING}"
 else
-  # 로그인된 Chrome 이 필요하다. 무인 시도 후 실패하면 사람을 부른다 (하이브리드).
-  MEDIA_PROMPT="barrotube-media-render 스킬로 ${EP_ID} 의 씬 이미지와 모션 클립을 생성해라.
+  # workspace/ 가 ~/BarroTubeData 로 가는 심볼릭이라 실경로가 프로젝트 밖이다.
+  # --add-dir 와 프롬프트 경로를 심볼릭으로 주면 쓰기가 "민감 파일"로 차단된다 (실측).
+  EP_REAL=$(cd "$EP_DIR" && pwd -P)
+  DATA_REAL="${EP_REAL%/workspace/episodes/*}"
+  MEDIA_BASE_REAL="${EP_REAL}/platforms/${PLATFORM}"
+  CHARACTER_SHEET_REAL="${DATA_REAL}/workspace/docs/바로경제_캐릭터시트.png"
+  [ -s "$CHARACTER_SHEET_REAL" ] \
+    || halt_for_human "Phase 7 media-render" "캐릭터 시트를 찾지 못했습니다: ${CHARACTER_SHEET_REAL}"
+  PROJECT_ROOT=$(git -C "$BARROTUBE_HOME" rev-parse --show-toplevel 2>/dev/null) \
+    || halt_for_human "Phase 7 media-render" "BarroSkills 프로젝트 루트를 찾지 못했습니다."
 
-대본: ${EP_DIR}/platforms/${PLATFORM}/30_script.md 의 image_prompt 를 그대로 사용한다.
-캐릭터 시트: workspace/channels/econ-daily/character-dna.md 의 첫 코드블록 규격을 지킨다.
+  # 로그인된 Chrome을 Codex 브라우저 플러그인으로 제어한다. 성공 판정은 에이전트 응답이
+  # 아니라 아래의 파일/ffprobe 게이트만 신뢰한다.
+  MEDIA_PROMPT="barrotube-media-render 스킬을 사용해 ${EP_ID} 브라우저 자산만 완성해라.
+
+대본: ${EP_REAL}/platforms/${PLATFORM}/30_script.md 의 사실·중심 오브젝트·장면 동작을 유지하고,
+아래 브라우저 이미지 수락 기준을 함께 적용한다.
+캐릭터 시트: ${CHARACTER_SHEET_REAL} 를 ChatGPT 이미지 생성마다 첨부한다.
+캐릭터 DNA: ${DATA_REAL}/workspace/channels/econ-daily/character-dna.md 의 첫 코드블록 규격을 지킨다.
+파일 URL 권한으로 시트 첨부가 막히면 클립보드 첨부를 시도하고, 그것도 불가능하면 첫 캐릭터 DNA 코드블록 전문을 각 이미지 프롬프트에 포함해 계속한다.
+운영자는 이 cron 작업의 ChatGPT/Grok 파일 첨부와 생성 실행을 이미 허용했다. 로그인·캡차·결제 차단이 아니면 같은 허용을 다시 묻지 말고 계속한다.
 
 저장 경로 (반드시 이 경로 그대로):
-  씬 이미지  ${IMG_DIR}/scene_NNN.png        (1080x1920 9:16)
-  모션 클립  ${EP_DIR}/platforms/${PLATFORM}/40_assets/videos/scene_NNN.mp4
-  인트로     ${EP_DIR}/platforms/${PLATFORM}/45_intro.png
+  씬 이미지  ${MEDIA_BASE_REAL}/40_assets/images/scene_NNN.png        (1080x1920 9:16)
+  모션 클립  ${MEDIA_BASE_REAL}/40_assets/videos/scene_NNN.mp4
+  인트로     ${MEDIA_BASE_REAL}/45_intro.png
+  썸네일     ${MEDIA_BASE_REAL}/47_thumbnail.png
+
+순서를 바꾸지 마라:
+1. Chrome의 ChatGPT에서 씬 이미지 5장, 인트로, 썸네일을 한 번에 하나씩 생성·저장·검증한다.
+2. 위 이미지가 모두 저장된 뒤에만 Chrome의 Grok Imagine에서 각 scene_NNN.png를 첨부해 영상 5개를 한 번에 하나씩 생성·저장하고 ffprobe한다.
+3. 기존 정상 파일은 재생성하지 않는다. CapCut·FFmpeg·QA·메타데이터·게시 작업은 하지 않는다.
+
+브라우저 이미지 수락 기준:
+- 마시는 씬 동작의 주어이자 중앙 주인공이다. 구석 스티커·작은 워터마크 크기면 재생성한다.
+- 설명 씬은 기본 크림-화이트, 정장은 정책·비즈니스 상황에만 쓴다. 행동·CTA 씬은 크림/네이비/오렌지 계열의 상황별 착장을 쓰며 전 씬 정장 반복은 거부한다.
+- 방향성을 다루는 씬·인트로·썸네일은 레버·다이얼·갈림길·스위치·화살표 중 하나의 방향 트리거를 중심 오브젝트로 둔다.
+- 인트로·썸네일은 sibling EP 중 최근 완료본 최대 3개의 실제 이미지를 먼저 비교해 캐릭터 크기·헤드라인 위치·배경 톤을 맞춘다.
+
+이미지는 전부 브라우저(ChatGPT)로 만든다. Gemini·gpt-image-1 같은 이미지 API는 쓰지 마라.
+ChatGPT 공유·다운로드 버튼이 미디어 뷰어에 없으면 중단하지 말고 references/chatgpt-image.md 의 programmatic download 폴백으로 현재 생성 이미지 Blob 다운로드를 실행해 저장·검증한 뒤 계속한다.
+각 생성 요청 직전에 marker 파일을 만들고 Downloads 후보는 marker보다 새 파일만 수락한다. Chrome History의 이전 실행 파일을 최신 결과로 복사하지 마라.
+Grok은 image-to-video 9:16/720p/10s만 사용한다. 매 컷 전 Video audio 버튼이 aria-pressed=true인지 확인한다.
+Grok 로컬 이미지 선택이 확장 파일 접근 제한으로 막히면 해당 PNG를 macOS 클립보드에 넣어 Cmd+V로 첨부하고 계속한다. 파일 URL 권한 때문에 중단하거나 운영자에게 다시 묻지 마라.
+첨부 완료는 filename이 아니라 Remove image/thumbnail로 판정하고, 다운로드 뒤 H.264 세로 영상+AAC 오디오를 ffprobe한다.
+AAC가 없으면 완료로 세지 말고 Video audio를 켠 뒤 같은 컷을 재생성한다. 결제·구독은 절대 하지 마라.
+영상 5개 저장 후 SHA-256을 비교해 중복 바이트가 있으면 해당 뒤쪽 컷을 재생성한다.
 
 인트로 타이틀은 저장 전 한글 철자를 확대 검수해라 (AI 렌더 오타 사례 있음).
-로그인 세션이 없거나 캡차가 뜨면 즉시 중단하고 그 사실을 보고해라 — 우회하지 마라."
+로그인 판정은 URL이나 이전 worker 문장만으로 하지 마라. 기존 탭에서 프로필+composer를 직접 확인한다.
+ChatGPT 탭이 여러 개면 하나의 로그아웃 탭만 보고 중단하지 말고 모든 기존 chatgpt.com 탭을 확인해 프로필+composer가 보이는 탭을 사용한다.
+명시적 로그인 폼/캡차가 보이고 composer가 없을 때만 해당 탭을 Chrome 전면에 남긴 뒤 중단한다 — 우회하지 마라."
 
-  command -v claude >/dev/null 2>&1 \
-    || halt_for_human "Phase 7 media-render" "claude CLI 를 PATH 에서 찾지 못했습니다 (launchd plist 의 PATH 확인)."
+  command -v codex >/dev/null 2>&1 \
+    || halt_for_human "Phase 7 media-render" "codex CLI를 PATH에서 찾지 못했습니다 (launchd plist PATH 확인)."
 
-  run_with_timeout "$MEDIA_RENDER_TIMEOUT" claude -p "$MEDIA_PROMPT" \
-      --permission-mode acceptEdits \
-      --add-dir "$EP_DIR" \
-    || halt_for_human "Phase 7 media-render" "브라우저 단계 실패 또는 타임아웃(${MEDIA_RENDER_TIMEOUT}s). Chrome 로그인(ChatGPT/Grok)을 확인하고 재개하세요."
+  run_with_timeout "$MEDIA_RENDER_TIMEOUT" codex \
+      -a never -s workspace-write -m "${BT_MEDIA_RENDER_MODEL:-gpt-5.6-terra}" \
+      -c model_reasoning_effort="${BT_MEDIA_RENDER_REASONING:-medium}" \
+      -C "$PROJECT_ROOT" --add-dir "$EP_REAL" --add-dir "$DATA_REAL/workspace/docs" \
+      --add-dir "$DATA_REAL/workspace/channels/econ-daily" --add-dir "$HOME/Downloads" \
+      exec --ephemeral "$MEDIA_PROMPT" \
+    || halt_for_human "Phase 7 media-render" "브라우저 작업 실패 또는 타임아웃(${MEDIA_RENDER_TIMEOUT}s). Chrome 로그인·ChatGPT/Grok 한도·Codex 로그를 확인하고 재개하세요."
 
-  [ -f "${IMG_DIR}/scene_001.png" ] \
-    || halt_for_human "Phase 7 media-render" "씬 이미지가 생성되지 않았습니다 (${IMG_DIR})."
+  media_assets_ready "$MEDIA_BASE" \
+    || halt_for_human "Phase 7 media-render" "브라우저 작업 후 필수 자산이 불완전합니다: ${MEDIA_ASSETS_MISSING}"
 fi
 
 # ─────────────────────────────────────────────────
@@ -336,7 +458,13 @@ fi
 log_stage "🎬 Phase 8 — S6~S9 자산·렌더·QA·메타 (💰 TTS 비용)"
 
 # 예약 공개 시각을 S9 metadata 로 전달 (BT_IMAGE_ENGINE 과 같은 env 관례)
-if [ -n "$PUBLISH_AT" ]; then
+# BT_NO_SCHEDULE=1 은 예약을 걸지 않고 private 로만 올린다 — 슬롯 시각을 놓친 수동
+# 만회 실행에서 쓴다. 시각이 지나서 "우연히" 예약이 안 걸리는 것과 명시적으로 끄는 것은
+# 다르다. 파이프라인이 빨리 끝나면 전자는 의도치 않게 공개된다.
+if [ "${BT_NO_SCHEDULE:-0}" = "1" ]; then
+  unset BT_PUBLISH_AT
+  echo "  ⏸  BT_NO_SCHEDULE=1 — 예약 없이 private 업로드 (운영자가 수동 공개)"
+elif [ -n "$PUBLISH_AT" ]; then
   export BT_PUBLISH_AT="$PUBLISH_AT"
   echo "  ⏰ 예약 공개 목표: ${PUBLISH_AT} KST"
 fi
@@ -367,18 +495,29 @@ if [ "$DRY_RUN" = "0" ]; then
 fi
 
 # ─────────────────────────────────────────────────
-# Stage C — Phase 10: S10 승인
+# Stage C — Phase 10: S10 사람 승인
 # ─────────────────────────────────────────────────
-log_stage "📋 Phase 10 — S10 자율 승인"
+log_stage "📋 Phase 10 — S10 사람 승인"
 
-run_or_echo node scripts/automation/approve-episode.js \
-  --episode "$EP_ID" \
-  --platform "$PLATFORM" \
-  --by "routine-${SLOT:-adhoc}" \
-  --note "scheduled-auto: slot=${SLOT:-adhoc} topic=$TOPIC" \
-  || fail_with_alert "Phase 10 approve" "approve-episode.js 실패 (QA·정책 게이트 확인)"
+PUBLISH_HUMAN_ONLY=$(json_get "$AUTONOMY_FILE" "d.get('guards',{}).get('publish_remains_human_only',False)")
+if [ "$DRY_RUN" = "0" ] && [ "$PUBLISH_HUMAN_ONLY" = "True" ]; then
+  audit "auto_pipeline_publish_disabled" "INFO" "slot=$SLOT ep=$EP_ID"
+  echo "⏸  발행 중지 상태 — 렌더·QA 검증까지만 완료"
+  exit 0
+fi
 
-audit "auto_pipeline_approved" "INFO" "slot=$SLOT ep=$EP_ID"
+APPROVAL_PATH="${MEDIA_BASE}/75_board_approval.json"
+if [ "$DRY_RUN" = "1" ]; then
+  echo "[DRY_RUN] 사람 승인 토큰 확인: $APPROVAL_PATH"
+elif [ ! -s "$APPROVAL_PATH" ]; then
+  notify_telegram "📋 <b>${EP_ID}</b> QA PASS — 게시 승인 필요\n승인: <code>/approve ${EP_ID}</code>\n취소: <code>/cancel ${EP_ID}</code>"
+  audit "auto_pipeline_awaiting_approval" "INFO" "slot=$SLOT ep=$EP_ID"
+  echo "⏸  S10 사람 승인 대기: /approve ${EP_ID}"
+  exit 0
+else
+  echo "✅ S10 사람 승인 토큰 확인: $APPROVAL_PATH"
+  audit "auto_pipeline_approved" "INFO" "slot=$SLOT ep=$EP_ID"
+fi
 
 # ─────────────────────────────────────────────────
 # Stage C — Phase 11: 거부 창구
@@ -400,7 +539,7 @@ log_stage "🚀 Phase 12 — S11 YouTube 업로드 (private + publishAt)"
 # run-episode.js 경유 — publish-youtube.js 를 직접 부르면 인자 8개를 조립해야 하고,
 # 무엇보다 성공 시 in-flight 락 해제가 run-episode.js 안에만 있다.
 run_or_echo node scripts/automation/run-episode.js \
-  --episode "$EP_ID" --from S11 \
+  --episode "$EP_ID" --platform "$PLATFORM" --from S11 \
   || fail_with_alert "Phase 12 publish" "run-episode.js S11 실패"
 
 audit "auto_pipeline_published" "INFO" "slot=$SLOT ep=$EP_ID"

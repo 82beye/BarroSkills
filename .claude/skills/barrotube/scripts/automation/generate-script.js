@@ -10,6 +10,7 @@
  *
  * 입력:
  *   - 00_brief.md (topic, channel_id, format, persona, series_id?, series_episode?)
+ *   - 10_market_research.md + 20_strategy.md (있으면 대본의 분석 입력으로 우선 주입)
  *   - 05_topic_references.md (선택)
  *   - workspace/channels/{channel}/style-guide-{format}.md
  *   - workspace/channels/{channel}/persona/{persona}.md (있으면)
@@ -33,7 +34,7 @@ import {
   resolveFiguresForBrief,
   buildAllowlistContextBlock,
 } from './lib/public-figures.js';
-import { TEMPLATE, BOUNDS, KNOWN_PALETTES, CANONICAL_TAIL } from './lib/image-prompt-contract.js';
+import { TEMPLATE, BOUNDS, KNOWN_PALETTES, CANONICAL_TAIL, MASCOT_CLAUSE } from './lib/image-prompt-contract.js';
 
 const DEFAULT_MODEL = process.env.GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
@@ -68,13 +69,17 @@ const FORMAT_SPECS = {
  * 모른 채 "cartoon stick figure" 를 쓰고, 렌더 단계에서 사람이 즉흥으로 메웠다.
  * 프롬프트가 EP마다 갈라진 근본 원인이다.
  */
+/**
+ * 대본에 넣을 마스코트 절.
+ *
+ * 이전에는 character-dna.md 첫 코드블록(1001자)을 900자로 잘라 "verbatim 사용"으로 넘겼는데,
+ * 그러면 image_prompt 하나가 계약 상한(780자·금지어 1개)을 구조적으로 넘겨 전 컷이 BLOCK 된다.
+ * DNA 는 이미지 API prefix 용 정본이고, 대본용 정본은 계약 모듈의 MASCOT_CLAUSE 다.
+ * 채널에 DNA 가 없으면 인라인 서술로 폴백한다(기존 동작 유지).
+ */
 function loadMascotClause(channel) {
   const path = resolve('workspace/channels', channel, 'character-dna.md');
-  if (!existsSync(path)) return null;
-  const block = readFileSync(path, 'utf-8').match(/```(?:\w+)?\n([\s\S]*?)```/);
-  if (!block) return null;
-  const dna = block[1].replace(/\s+/g, ' ').trim();
-  return dna.length > 900 ? `${dna.slice(0, 900)}…` : dna;   // 시스템 프롬프트 예산 보호
+  return existsSync(path) ? MASCOT_CLAUSE : null;
 }
 
 /**
@@ -141,7 +146,7 @@ RULES:
 2. Voice is Yohan Koo (ElevenLabs Korean male) at ~6-7 Korean chars/sec.
 3. Image prompts in ENGLISH. They MUST satisfy the image_prompt contract below (RULE 3-CONTRACT). It is machine-checked by validate-image-prompts.js before any image is generated — a violation blocks the pipeline.
 ${buildImagePromptContractBlock(mascotClause)}
-4. Korean numbers as Korean words (예: "사십 퍼센트" not "40%").
+4. CRITICAL — narration is TTS input: write every date, number, decimal, percentage, and range as Korean spoken words; never use Arabic digits. Add subtitle_text for every scene with the same meaning, using Arabic number display where useful (예: narration "사십 퍼센트", subtitle_text "40%").
 5. BGM moods: tense_intro, calm_explain, dramatic_reveal, hopeful_outro, neutral_bg, upbeat_energy.
 6. emphasis_tokens: 1~3 Korean keywords per scene.
 7. Target audience: 20~40대 한국 투자자.
@@ -189,6 +194,7 @@ OUTPUT SCHEMA:
       "scene_id": "001",
       "role": "hook",
       "narration": "...",
+      "subtitle_text": "...",
       "image_prompt": "[palette:bearish] <mascot clause>, worried, standing before <one scene object> …. BACKGROUND: …, ${CANONICAL_TAIL}",
       "bgm_mood": "tense_intro",
       "target_seconds": 15,
@@ -295,6 +301,8 @@ async function main() {
   }
   const brief = readIfExists(briefPath);
   const refs = readIfExists(join(epDir, '05_topic_references.md'));
+  const research = readIfExists(join(epDir, '10_market_research.md'));
+  const strategy = readIfExists(join(epDir, '20_strategy.md'));
 
   if (!brief) {
     console.error(`❌ Missing brief: ${briefPath}`);
@@ -374,6 +382,8 @@ async function main() {
     brief,
     '',
   ];
+  if (research) userPromptParts.push(`[MARKET RESEARCH]`, research, '');
+  if (strategy) userPromptParts.push(`[CONTENT STRATEGY]`, strategy, '');
   if (refs) userPromptParts.push(`[NEWS REFERENCES]`, refs, '');
   if (brand) userPromptParts.push(`[CHANNEL BRAND]`, brand, '');
   if (styleGuide) userPromptParts.push(`[STYLE GUIDE: ${spec.style_guide_filename}]`, styleGuide, '');
@@ -389,7 +399,7 @@ async function main() {
 
   userPromptParts.push(
     `[TASK]`,
-    `위 브리프·뉴스·채널 가이드·페르소나 규칙을 바탕으로 ${spec.scene_count}씬 ${spec.target_total_seconds}초 ${format} 스크립트를 JSON으로 작성하라.`,
+    `위 브리프·시장 리서치·콘텐츠 전략·뉴스·채널 가이드·페르소나 규칙을 바탕으로 ${spec.scene_count}씬 ${spec.target_total_seconds}초 ${format} 스크립트를 JSON으로 작성하라.`,
     format === 'long-3min'
       ? `- 시리즈 컨텍스트 준수: 씬 2에 이전 편 리캡 (EP01 제외), 씬 7에 다음 편 티저 + 음성 면책.`
       : `- 뉴스 레퍼런스 중 가장 관련성 높은 것을 훅(hook)으로 활용하되, 운영자 의도(주제)가 우선.`,

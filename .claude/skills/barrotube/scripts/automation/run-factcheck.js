@@ -46,6 +46,8 @@ RULES:
 5. For HIGH/MED, always provide "suggested_revision" (corrected Korean sentence, same 스타일/길이).
 6. Cite "evidence" with source URL or official document name. Min 2 independent sources for HIGH.
 7. If a claim cannot be verified via search, mark HIGH with risk_reason="unverifiable".
+8. Bind every market claim to the exact date and traded_at in the attached pipeline research. Never substitute the previous trading day's close.
+9. Treat pipeline snapshots as primary dated evidence, then corroborate them by searching the exact YYYY-MM-DD plus the quoted value. If search results conflict, explain the date mismatch instead of silently choosing another session.
 
 OUTPUT SCHEMA:
 {
@@ -333,17 +335,25 @@ async function main() {
   }
 
   const scriptText = readFileSync(scriptPath, 'utf-8');
+  const researchText = readIfExists(join(absEp, '10_market_research.md'));
+  const strategyText = readIfExists(join(absEp, '20_strategy.md'));
   const fm = parseScriptFrontmatter(scriptText);
   const episodeId = fm.episode_id || 'EP-UNKNOWN';
   const channelId = fm.channel_id || 'econ-daily';
   const scriptRevision = fm.revision ?? 1;
 
   const userPrompt = [
+    '[AUTHORITATIVE PIPELINE MARKET RESEARCH]',
+    researchText || '(not available)',
+    '',
+    '[CONTENT STRATEGY AND FACT BOUNDARIES]',
+    strategyText || '(not available)',
+    '',
     '[EPISODE SCRIPT TO FACT-CHECK]',
     scriptText,
     '',
     '---',
-    'Extract every verifiable claim from every scene narration. Verify each using google_search against reliable sources.',
+    'Extract every verifiable claim from every scene narration. Verify each using google_search against reliable sources for the exact date/traded_at in the pipeline research.',
     'Return the JSON object per the OUTPUT SCHEMA. Do not include the script itself in the output.',
   ].join('\n');
 

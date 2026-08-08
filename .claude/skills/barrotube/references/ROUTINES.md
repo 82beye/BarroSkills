@@ -26,8 +26,8 @@ launchd `StartCalendarInterval` 이 단일 dict 라 **하루 2회는 라벨을 �
 ```
 Stage A  무인·결정론 (브라우저 불필요)
   Phase 1  시세 스냅샷(네이버) · 뉴스 RSS · 경쟁 채널
-  Phase 2  리서치 + 토픽 선정 (claude -p, 소셜 검색)
-  Phase 3  S0 brief 생성 + 리서치 설치
+  Phase 2  리서치 + 전략 + 토픽 선정 (claude -p, 소셜 검색; 실패 시 수집 원문 폴백)
+  Phase 3  S0 brief 생성 + `10_market_research.md` + `20_strategy.md` 설치
   Phase 4  S4 대본 (Gemini)
   Phase 5  📐 image_prompt 계약 게이트  ← 이미지 굽기 전에 막는 지점
   Phase 6  S5 팩트체크
@@ -85,7 +85,13 @@ Chrome 의 ChatGPT/Grok 로그인을 확인한 뒤:
 RESUME_EP=EP-2026-NNNN bash lib/auto-pipeline.sh --slot us-close
 ```
 
-이미 이미지를 손으로 넣었다면 브라우저 단계를 건너뛴다:
+Phase 7 worker의 로그인 보고는 참고값이다. 사용자가 로그인을 확인했거나 기존 탭이 보이면
+PD가 Playwright로 같은 브라우저의 기존 ChatGPT/Grok 탭을 한 번 선택해 프로필+composer를
+확인한다. 로그인 상태면 누락 브라우저 자산만 직접 완성한다. 완료 정본은 worker 응답이
+아니라 씬 PNG 5장 + 오디오 포함 MP4 5개 + 인트로 + 썸네일의 12/12 파일 게이트다.
+
+12/12가 완성되면 위의 plain `RESUME_EP` 명령이 Phase 7을 자동으로 건너뛴다.
+`BT_SKIP_MEDIA_RENDER=1`은 불완전 자산을 우회하지 못하며 진단용으로만 쓴다:
 
 ```bash
 BT_SKIP_MEDIA_RENDER=1 RESUME_EP=EP-2026-NNNN bash lib/auto-pipeline.sh --slot us-close
@@ -95,8 +101,8 @@ BT_SKIP_MEDIA_RENDER=1 RESUME_EP=EP-2026-NNNN bash lib/auto-pipeline.sh --slot u
 `references/IMAGE-PROMPT.md` 를 보고 `30_script.md` 의 `image_prompt` 를 고친 뒤 재개한다.
 **이미지를 굽기 전에 멈추므로 비용은 나가지 않는다.**
 
-**리서치 실패** — 뉴스 첫 헤드라인으로 폴백하고 텔레그램에 알린다. 그날 방송을
-통째로 거르지는 않는다.
+**리서치 모델 실패** — 수집된 시세·뉴스 원문으로 보수적인 `10_market_research.md`와
+`20_strategy.md`를 만들고 텔레그램에 알린다. 두 파일이 없으면 대본 생성 전에 멈춘다.
 
 ## 환경 변수
 
