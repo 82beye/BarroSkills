@@ -171,6 +171,10 @@ async function main() {
   }
 
   updateEnvFile('YOUTUBE_OAUTH_REFRESH_TOKEN', tokens.refresh_token);
+  // 발급 시각을 남긴다. 동의 화면이 "테스트" 상태면 Google 이 7일 뒤 이 토큰을 만료시키는데,
+  // 기록이 없으면 check-oauth-expiry.js 가 .env mtime 으로 추정할 수밖에 없다
+  // (.env 는 다른 이유로도 바뀌므로 남은 날을 실제보다 길게 본다).
+  updateEnvFile('YOUTUBE_OAUTH_ISSUED_AT', new Date().toISOString());
 
   console.log('\n✅ 저장 완료!');
   console.log(`   .env의 YOUTUBE_OAUTH_REFRESH_TOKEN 업데이트됨`);

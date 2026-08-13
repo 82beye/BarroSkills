@@ -84,7 +84,20 @@ else
   add_result "paperclip_leak" "YELLOW" "$PAPERCLIP_LEAK files still reference Paperclip API URL"
 fi
 
-# 7. 최근 24h audit 활동
+# 7. YouTube OAuth 만료 임박
+# 동의 화면이 "테스트" 상태면 refresh token 이 7일 뒤 만료된다. 무비용 경과일 검사만 한다
+# (실검증은 1 unit 이라 doctor 에 넣지 않는다 — check-oauth-expiry.js --verify 로 따로).
+OAUTH_LEVEL=$(node scripts/automation/check-oauth-expiry.js --json 2>/dev/null \
+  | grep -o '"level": "[^"]*"' | head -1 | cut -d'"' -f4)
+case "${OAUTH_LEVEL:-UNKNOWN}" in
+  OK)       add_result "youtube_oauth" "GREEN"  "refresh token 유효 범위" ;;
+  WARN)     add_result "youtube_oauth" "YELLOW" "만료 임박 — setup-youtube-oauth.js 실행 권장" ;;
+  CRITICAL) add_result "youtube_oauth" "YELLOW" "만료 직전 — 오늘 갱신 필요" ;;
+  EXPIRED)  add_result "youtube_oauth" "RED"    "만료됨 — setup-youtube-oauth.js 실행 필요" ;;
+  *)        add_result "youtube_oauth" "INFO"   "발급 시각 미기록 — 다음 갱신 시 기록된다" ;;
+esac
+
+# 8. 최근 24h audit 활동
 AUDIT_TODAY=$(wc -l < "$AUDIT_LOG" 2>/dev/null || echo 0)
 add_result "audit_today" "INFO" "$AUDIT_TODAY entries"
 

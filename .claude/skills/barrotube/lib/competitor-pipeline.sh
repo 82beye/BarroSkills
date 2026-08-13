@@ -51,6 +51,11 @@ echo "📡 경쟁 인텔 루틴 — ${DATE}"
 # 관측은 계속하고, 의사결정을 유발하는 핸드오프(Rule I1/I2)만 게이트를 지킨다
 # — 그 가드는 intel-handoff.js 안에 있다.
 
+# OAuth 만료를 먼저 알린다. 동의 화면이 "테스트" 상태면 refresh token 이 7일 뒤 죽는데,
+# 만료돼야 알 수 있으면 그 사이 수집이 조용히 실패한다 (2026-08-13 실제 사례).
+# 무비용 경과일 검사이며 WARN 이상일 때만 텔레그램을 보낸다. 실패해도 수집은 그대로 시도한다.
+run_step "oauth_check" node scripts/automation/check-oauth-expiry.js --notify
+
 run_step "fetch"    node scripts/automation/fetch-competitor-stats.js --date "$DATE"
 run_step "analyze"  node scripts/automation/analyze-competitors.js  --date "$DATE"
 run_step "handoff"  node scripts/automation/intel-handoff.js        --date "$DATE"
