@@ -20,13 +20,22 @@
  * 출력:
  *   - 30_script.md (YAML frontmatter + N씬 narration/image_prompt/bgm_mood/emphasis_tokens)
  *
+ * 엔진 (2026-08-13):
+ *   기본은 claude → codex → gemini 순으로 시도한다. 앞의 둘은 메인 세션이 쓰는 CLI라
+ *   구독으로 돌고, Gemini 는 선불 크레딧이 말라 파이프라인을 세운 전력이 있다.
+ *
  * Usage:
- *   node generate-script.js --episode <dir>
- *   node generate-script.js --episode <dir> --model gemini-2.5-flash
+ *   node generate-script.js --episode <dir>                   # auto (체인)
+ *   node generate-script.js --episode <dir> --engine claude    # 단일 지정 (폴백 없음)
+ *   node generate-script.js --episode <dir> --engine codex
+ *   node generate-script.js --episode <dir> --engine gemini --model gemini-2.5-flash
+ *   BT_SCRIPT_ENGINE_CHAIN=codex,claude node generate-script.js --episode <dir>
  */
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { parseArgs } from 'node:util';
 import { parse as parseYAML, stringify as stringifyYAML } from 'yaml';
 import { getSecret } from './config-loader.js';
@@ -37,8 +46,19 @@ import {
 import { formatToPlatform } from './paths.js';
 import { TEMPLATE, BOUNDS, KNOWN_PALETTES, CANONICAL_TAIL, MASCOT_CLAUSE } from './lib/image-prompt-contract.js';
 
+const ROOT = resolve(import.meta.dirname, '../..');
 const DEFAULT_MODEL = process.env.GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
+
+/**
+ * auto 모드의 시도 순서.
+ *
+ * 메인 세션이 쓰는 CLI(claude·codex)를 먼저 둔다 — 구독으로 도는 경로라
+ * 별도 크레딧이 마르지 않고, research-brief.js 도 이미 claude -p 로 돈다.
+ * Gemini 는 API 키·선불 크레딧이 필요해 2026-08-13 파이프라인을 세운 전력이 있다.
+ */
+const ENGINE_CHAIN = (process.env.BT_SCRIPT_ENGINE_CHAIN || 'claude,codex,gemini')
+  .split(',').map((e) => e.trim()).filter(Boolean);
 
 const FORMAT_SPECS = {
   'shorts': {
@@ -280,9 +300,118 @@ async function callGemini(systemPrompt, userPrompt, model = DEFAULT_MODEL, maxOu
   return text;
 }
 
+/**
+ * claude -p 로 같은 JSON 을 받는다.
+ *
+ * Gemini 선불 크레딧이 마르면(2026-08-13 RESOURCE_EXHAUSTED) 대본 단계에서
+ * 파이프라인이 통째로 멈춘다. research-brief.js 는 이미 claude -p 로 도는데
+ * 대본만 단일 공급자에 묶여 있을 이유가 없다.
+ *
+ * 파일을 쓰게 하지 않고 stdout 으로 받는다 — 기존 파싱·계약 검증
+ * (image_prompt contract, TTS 정책)을 그대로 통과시켜야 하기 때문이다.
+ */
+export function callClaudeCode(systemPrompt, userPrompt, model = 'sonnet', timeoutSec = 600) {
+  const prompt = [
+    systemPrompt,
+    '',
+    '───────────────',
+    '',
+    userPrompt,
+    '',
+    '───────────────',
+    '출력 규칙: JSON 객체 **하나만** 출력해라.',
+    '- 코드펜스(```), 머리말, 설명, 요약을 붙이지 마라.',
+    '- 파일을 쓰지 마라. 표준출력에 JSON 만 낸다.',
+  ].join('\n');
+
+  const r = spawnSync('claude', [
+    '-p', prompt,
+    '--model', model,
+    '--permission-mode', 'default',
+    '--allowed-tools', '',        // 도구 없이 텍스트만 — 파일·명령 접근 차단
+  ], {
+    cwd: ROOT,
+    encoding: 'utf-8',
+    timeout: timeoutSec * 1000,
+    maxBuffer: 10 * 1024 * 1024,
+    env: process.env,
+  });
+
+  if (r.error?.code === 'ENOENT') {
+    throw new Error('claude CLI 를 찾을 수 없다. launchd PATH 에 ~/.local/bin 이 있는지 확인하라.');
+  }
+  if (r.signal === 'SIGTERM') throw new Error(`claude -p 타임아웃 (${timeoutSec}s)`);
+  if (r.status !== 0) throw new Error(`claude -p 종료코드 ${r.status}: ${(r.stderr || '').slice(0, 300)}`);
+
+  const out = (r.stdout || '').trim();
+  if (!out) throw new Error('claude -p 응답이 비었다');
+
+  // 지시해도 코드펜스가 붙어 나오는 경우가 있어 한 번 벗긴다.
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(out);
+  const body = fenced ? fenced[1].trim() : out;
+
+  // 앞뒤에 문장이 섞였으면 가장 바깥 JSON 객체만 잘라낸다.
+  const start = body.indexOf('{');
+  const end = body.lastIndexOf('}');
+  if (start < 0 || end <= start) throw new Error(`JSON 을 찾지 못했다: ${body.slice(0, 200)}`);
+  return body.slice(start, end + 1);
+}
+
+/**
+ * codex exec 로 같은 JSON 을 받는다.
+ *
+ * -o(--output-last-message)가 마지막 응답만 파일로 떨궈 준다 — stdout 은 진행 로그가
+ * 섞이므로 이쪽이 안전하다. 파이프라인이 이미 Phase 7 에서 codex 를 쓰므로
+ * 설치·인증은 보장돼 있다.
+ *
+ * -s read-only: 대본 생성은 파일을 쓸 일이 없다. 쓰게 두면 계약 게이트를 우회한다.
+ * -a never: 비대화형이라 승인을 물어볼 사람이 없다.
+ */
+export function callCodex(systemPrompt, userPrompt, model = null, timeoutSec = 600) {
+  const prompt = [
+    systemPrompt, '', '───────────────', '', userPrompt, '', '───────────────',
+    '출력 규칙: JSON 객체 **하나만** 출력해라.',
+    '- 코드펜스(```), 머리말, 설명, 요약을 붙이지 마라.',
+    '- 파일을 쓰지 마라.',
+  ].join('\n');
+
+  const outFile = join(tmpdir(), `bt-script-${process.pid}-${Math.random().toString(36).slice(2)}.txt`);
+  const args = ['-a', 'never', '-s', 'read-only'];
+  if (model) args.push('-m', model);
+  args.push('exec', '--ephemeral', '-o', outFile, prompt);
+
+  try {
+    const r = spawnSync('codex', args, {
+      cwd: ROOT, encoding: 'utf-8', timeout: timeoutSec * 1000,
+      maxBuffer: 10 * 1024 * 1024, env: process.env,
+    });
+    if (r.error?.code === 'ENOENT') throw new Error('codex CLI 를 찾을 수 없다 (launchd PATH 확인)');
+    if (r.signal === 'SIGTERM') throw new Error(`codex 타임아웃 (${timeoutSec}s)`);
+    if (r.status !== 0) throw new Error(`codex 종료코드 ${r.status}: ${(r.stderr || '').slice(0, 300)}`);
+
+    const out = existsSync(outFile) ? readFileSync(outFile, 'utf-8').trim() : '';
+    if (!out) throw new Error('codex 응답이 비었다');
+
+    const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(out);
+    const body = fenced ? fenced[1].trim() : out;
+    const start = body.indexOf('{');
+    const end = body.lastIndexOf('}');
+    if (start < 0 || end <= start) throw new Error(`JSON 을 찾지 못했다: ${body.slice(0, 200)}`);
+    return body.slice(start, end + 1);
+  } finally {
+    try { unlinkSync(outFile); } catch {}
+  }
+}
+
+/** Gemini 크레딧·쿼터 고갈은 재시도해도 안 풀린다 — 즉시 다른 엔진으로 간다. */
+export function isExhausted(err) {
+  return /RESOURCE_EXHAUSTED|prepayment credits are depleted|quotaExceeded|\b429\b/i.test(String(err?.message ?? err));
+}
+
 async function main() {
   const { values } = parseArgs({
     options: {
+      engine: { type: 'string' },   // claude | gemini | auto(기본)
       episode: { type: 'string', short: 'e' },
       model: { type: 'string', short: 'm' },
       platform: { type: 'string' },          // long | shorts — 명시 시 platforms/<platform>/00_brief.md 우선 + 출력 platforms/<platform>/30_script.md 강제
@@ -426,7 +555,48 @@ async function main() {
   // Shorts 5000 → 8000 (2026-05-14): 시사·해설 EP에서 길어진 brief+refs로 응답이 잘리는 사례
   // (EP-2026-0050) 대응. 일반 shorts는 보통 1.5~2k token 출력이라 비용 영향 없음.
   const maxTokens = format.endsWith('3min') ? 12000 : 8000;
-  const rawJson = await callGemini(systemPrompt, userPrompt, values.model, maxTokens);
+  const requested = values.engine || process.env.BT_SCRIPT_ENGINE || 'auto';
+  const chain = requested === 'auto' ? ENGINE_CHAIN : [requested];
+
+  // 한 엔진씩 시도한다. 명시 지정(--engine X)이면 체인이 한 개라 폴백 없이 실패한다
+  // — 그 뜻을 존중해야 원인이 드러난다.
+  const runEngine = async (name) => {
+    switch (name) {
+      case 'claude':
+        return { json: callClaudeCode(systemPrompt, userPrompt, values.model || 'sonnet'), used: 'claude-code' };
+      case 'codex':
+        return { json: callCodex(systemPrompt, userPrompt, values.model || null), used: 'codex' };
+      case 'gemini':
+        return { json: await callGemini(systemPrompt, userPrompt, values.model, maxTokens),
+                 used: values.model || DEFAULT_MODEL };
+      default:
+        throw new Error(`알 수 없는 엔진: ${name} (가능: ${['claude', 'codex', 'gemini'].join(' | ')})`);
+    }
+  };
+
+  let rawJson;
+  let engineUsed;   // 산출물 frontmatter 에 실제 사용 엔진을 남긴다
+  const failures = [];
+  for (const [i, name] of chain.entries()) {
+    try {
+      console.log(`   Engine: ${name}${i > 0 ? ` (폴백 ${i}/${chain.length - 1})` : ''}`);
+      const got = await runEngine(name);
+      rawJson = got.json;
+      engineUsed = failures.length ? `${got.used} (fallback from ${failures.map((f) => f.name).join('→')})` : got.used;
+      break;
+    } catch (e) {
+      failures.push({ name, message: String(e.message).slice(0, 120) });
+      const last = i === chain.length - 1;
+      if (last) {
+        console.error(`❌ 모든 엔진 실패:\n${failures.map((f) => `   - ${f.name}: ${f.message}`).join('\n')}`);
+        throw e;
+      }
+      // 크레딧 고갈은 예상된 폴백 사유고, 나머지는 사람이 봐야 할 결함이다.
+      // cron 로그에서 이 둘이 같은 모양이면 아무도 후자를 못 찾는다.
+      const why = isExhausted(e) ? ' [크레딧·쿼터 고갈]' : '';
+      console.warn(`   ⚠ ${name} 실패${why}(${failures.at(-1).message}) → 다음 엔진`);
+    }
+  }
 
   let parsed;
   try {
@@ -453,7 +623,7 @@ async function main() {
     persona,
     target_total_seconds: total,
     language: 'ko',
-    writer: 'writer-agent (gemini)',
+    writer: `writer-agent (${engineUsed})`,
     created_at: new Date().toISOString(),
     revision: 1,
   };
@@ -523,4 +693,9 @@ async function main() {
   });
 }
 
-main().catch(e => { console.error('❌', e.message); process.exit(1); });
+// CLI 로 직접 실행할 때만 돈다.
+// 가드가 없으면 이 파일을 import 하는 순간 main() 이 돌아 usage 를 뱉고 죽는다
+// (2026-08-13: 테스트가 isExhausted 를 import 하다 발견).
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch(e => { console.error('❌', e.message); process.exit(1); });
+}

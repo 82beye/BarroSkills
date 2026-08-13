@@ -357,7 +357,7 @@ fi
 # ─────────────────────────────────────────────────
 # Stage A — Phase 6: S5 팩트체크
 # ─────────────────────────────────────────────────
-log_stage "🔬 Phase 6 — S5 팩트체크 (Gemini)"
+log_stage "🔬 Phase 6 — S5 팩트체크 (claude WebSearch → Gemini, 인용 URL 실존 검증)"
 
 FACTCHECK_PATH="${EP_DIR}/platforms/${PLATFORM}/35_factcheck.md"
 if [ -n "$RESUME_EP" ] && [ -s "$FACTCHECK_PATH" ] && grep -q '^pass: true$' "$FACTCHECK_PATH"; then

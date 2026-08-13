@@ -1,8 +1,8 @@
 {
-  "status": "paused",
+  "status": "active",
   "version": 1,
-  "updated_at": "2026-08-03T20:20:51+09:00",
-  "updated_by": "codex-cron-pause",
+  "updated_at": "2026-08-13T17:38:33.394303+09:00",
+  "updated_by": "operator-resume-2026-08-13",
   "note": "BarroSkills 자율 운영 마스터 스위치. status=paused 시 auto-pipeline + 모든 routine cron 즉시 종료. 운영자가 수동 편집 또는 Telegram /pause·/resume으로 토글.",
   "guards": {
     "max_episodes_per_day": 2,
