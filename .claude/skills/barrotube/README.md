@@ -121,7 +121,7 @@ YouTube PUT 결과가 네트워크 오류로 불명확하면 `80_publish_result.
 | [references/PIPELINE.md](./references/PIPELINE.md) | S0~S12 단계별 상세 |
 | [references/MARKETING.md](./references/MARKETING.md) | 마케팅 → 시리즈 부트스트랩 |
 | [references/SECRETS.md](./references/SECRETS.md) | API key·OAuth 셋업 |
-| [references/ARCHITECTURE.md](./references/ARCHITECTURE.md) | 17 에이전트 + 위임 라인 |
+| [references/ARCHITECTURE.md](./references/ARCHITECTURE.md) | 에이전트 조직도 + 위임 라인 |
 
 ## 의존성
 
@@ -137,7 +137,7 @@ BarroSkills는 ~/youtube-co/의 70%를 재사용하지만 **완전 독립**:
 - 시크릿 분리 (BarroSkills `.env`)
 - Paperclip API 호출 0% (`_legacy_paperclip/` 격리)
 - launchd 데몬 분리 (`com.barroskills.*` ≠ `com.barrotube.*`)
-- 17 에이전트 공유 (`~/.claude/agents/` user-scope)
+- 에이전트 공유 (`~/.claude/agents/` user-scope) — 파이프라인 필수 16 + 선택(reel-director 등)
 
 기존 ~/youtube-co/를 무수정 보존. 두 시스템 병행 가능.
 

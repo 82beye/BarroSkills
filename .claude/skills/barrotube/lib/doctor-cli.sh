@@ -50,12 +50,26 @@ else
   add_result "paperclip_isolation" "YELLOW" "PAPERCLIP_DISABLED 미설정 — BarroSkills 권장: =1"
 fi
 
-# 3. 17 agents
+# 3. 파이프라인 필수 에이전트
+#
+# 개수를 정확히 세던 검사("17이면 GREEN")는 두 방향으로 틀렸다:
+# 에이전트가 하나 늘면 멀쩡한데 RED 가 되고(2026-08-13 실측 18/17),
+# 반대로 엉뚱한 17개여도 통과했다. 이름으로 필수 항목을 확인한다.
+# 선택 에이전트(reel-director, producer-shorts 등)는 개수에만 잡힌다.
+REQUIRED_AGENTS="ceo cmo marketing-analyst content-manager producer researcher strategist \
+writer fact-checker asset-pm voice-engineer image-generator capcut-composer qa-reviewer \
+metadata-writer publisher"
+
 AGENT_COUNT=$(ls ~/.claude/agents/barrotube-*.md 2>/dev/null | wc -l | tr -d ' ')
-if [ "$AGENT_COUNT" = "17" ]; then
-  add_result "agents" "GREEN" "17/17"
+MISSING_AGENTS=""
+for _a in $REQUIRED_AGENTS; do
+  [ -f "$HOME/.claude/agents/barrotube-${_a}.md" ] || MISSING_AGENTS="${MISSING_AGENTS}${MISSING_AGENTS:+, }${_a}"
+done
+
+if [ -n "$MISSING_AGENTS" ]; then
+  add_result "agents" "RED" "missing: ${MISSING_AGENTS} (installed ${AGENT_COUNT})"
 else
-  add_result "agents" "RED" "$AGENT_COUNT/17"
+  add_result "agents" "GREEN" "${AGENT_COUNT} installed, all required present"
 fi
 
 # 4. In-flight lock
