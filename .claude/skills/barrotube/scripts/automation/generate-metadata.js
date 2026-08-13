@@ -22,6 +22,7 @@ import {
   pickPrimaryKeywordCandidates,
 } from './lib/public-figures.js';
 import { recordCost } from './lib/cost-tracker.js';
+import { callClaudeCode, callCodex, resolveChain, runEngineChain } from './lib/text-engine.js';
 
 // 스킬 루트 기준 경로. resolve('config/…') 는 CWD 의존이라
 // launchd 처럼 CWD 가 다른 실행 환경에서 조용히 깨진다.
@@ -29,6 +30,15 @@ const SKILL_ROOT = resolve(import.meta.dirname, '../..');
 const SERIES_CONFIG = join(SKILL_ROOT, 'config', 'series.json');
 
 const DEFAULT_MODEL = process.env.GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
+
+/**
+ * S9 메타데이터도 대본과 같은 체인을 쓴다.
+ *
+ * 2026-08-13: 대본·팩트체크를 옮긴 뒤에도 여기가 Gemini 전용이라 EP-2026-0091 이
+ * 렌더까지 끝난 상태에서 429 로 멈췄다. 검색 도구가 필요 없는 순수 텍스트 생성이라
+ * 대본과 동일한 claude → codex → gemini 순서를 그대로 적용한다.
+ */
+const ENGINE_CHAIN = resolveChain(process.env.BT_METADATA_ENGINE_CHAIN);
 
 function buildSystemPrompt(format, seriesInfo, publicFiguresInfo = null) {
   const isShorts = format.startsWith('shorts');
@@ -173,9 +183,11 @@ async function main() {
   const { values } = parseArgs({ options: {
     episode: { type: 'string', short: 'e' },
     platform: { type: 'string' },
+    engine: { type: 'string' },         // claude | codex | gemini | auto(기본)
+    model: { type: 'string', short: 'm' },
     'publish-at': { type: 'string' },   // "HH:MM" (KST) 또는 완전한 ISO8601. 예약 공개.
   } });
-  if (!values.episode) { console.error('Usage: generate-metadata.js --episode <dir> [--platform long|shorts] [--publish-at HH:MM]'); process.exit(1); }
+  if (!values.episode) { console.error('Usage: generate-metadata.js --episode <dir> [--platform long|shorts] [--engine claude|codex|gemini] [--publish-at HH:MM]'); process.exit(1); }
 
   // produce-episode.js 가 S9 를 spawn 할 때 인자를 갈아끼우지 않아도 되도록 env 도 받는다
   // (BT_IMAGE_ENGINE 과 같은 관례 — 상위 오케스트레이터가 export 하면 그대로 전달됨).
@@ -265,11 +277,19 @@ async function main() {
 
   // Long-form needs more tokens (description is longer + series context)
   const maxTokens = format.endsWith('3min') ? 8000 : 4000;
-  const raw = await callGemini(systemPrompt, userPrompt, DEFAULT_MODEL, maxTokens, {
-    episode: fm.episode_id,
-    stage: 'S9',
-    note: 'metadata-gen',
-  });
+  const requested = values.engine || process.env.BT_METADATA_ENGINE || 'auto';
+  const chain = requested === 'auto' ? ENGINE_CHAIN : [requested];
+  const runners = {
+    claude: () => ({ json: callClaudeCode(systemPrompt, userPrompt, values.model || 'sonnet'), used: 'claude-code' }),
+    codex:  () => ({ json: callCodex(systemPrompt, userPrompt, values.model || null), used: 'codex' }),
+    gemini: async () => ({
+      json: await callGemini(systemPrompt, userPrompt, values.model || DEFAULT_MODEL, maxTokens, {
+        episode: fm.episode_id, stage: 'S9', note: 'metadata-gen',
+      }),
+      used: values.model || DEFAULT_MODEL,
+    }),
+  };
+  const { json: raw, engineUsed } = await runEngineChain(chain, runners, { log: console.error, warn: console.error });
 
   function safeParse(text) {
     try { return JSON.parse(text); } catch {}
@@ -389,6 +409,9 @@ async function main() {
       meta.title = corrected;
     }
   }
+
+  // 어느 엔진이 만들었는지 남긴다 — 폴백이 일어난 EP 를 사후에 가릴 수 있어야 한다.
+  meta.generated_by = `metadata-writer (${engineUsed})`;
 
   const outPath = join(baseDir, '70_publish_meta.json');
   writeFileSync(outPath, JSON.stringify(meta, null, 2), 'utf-8');
