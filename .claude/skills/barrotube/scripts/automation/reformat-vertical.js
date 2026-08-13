@@ -25,6 +25,11 @@ import { join, resolve, dirname, basename } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { parse as parseYAML } from 'yaml';
 
+// 스킬 루트 기준 경로. resolve('config/…') 는 CWD 의존이라
+// launchd 처럼 CWD 가 다른 실행 환경에서 조용히 깨진다.
+const SKILL_ROOT = resolve(import.meta.dirname, '../..');
+const SERIES_CONFIG = join(SKILL_ROOT, 'config', 'series.json');
+
 function probeDims(p) {
   const r = spawnSync('ffprobe', [
     '-v', 'error', '-select_streams', 'v:0',
@@ -120,7 +125,7 @@ function main() {
   }
 
   if (opts.series) {
-    const seriesPath = resolve('paperclip/config/series.json');
+    const seriesPath = SERIES_CONFIG;
     if (!existsSync(seriesPath)) { console.error('❌ paperclip/config/series.json not found'); process.exit(1); }
     const cfg = JSON.parse(readFileSync(seriesPath, 'utf-8'));
     const s = (cfg.series || []).find(x => x.id === opts.series);

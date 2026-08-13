@@ -45,7 +45,7 @@ import { parseArgs } from 'node:util';
 const ROOT = resolve(import.meta.dirname, '../..');
 const WORKSPACE = join(ROOT, 'workspace');
 const LOCK_FILE = join(WORKSPACE, '.in-flight.json');
-const GOV_FILE = join(ROOT, 'paperclip', 'config', 'company.json');
+const GOV_FILE = join(ROOT, 'config', 'company.json');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Defaults / config

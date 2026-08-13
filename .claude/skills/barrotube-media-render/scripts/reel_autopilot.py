@@ -53,10 +53,11 @@ HERE = Path(__file__).resolve().parent
 JOB = HERE / "render_reel_job.py"
 QA = HERE / "qa_reel_media.py"
 DOCTOR = HERE / "media_render_doctor.py"
+TOPIC_FROM_INTEL = HERE / "topic_from_intel.py"
 MASTER = HERE / "render_master_mix.py"
 
 # stages this driver may complete on its own (headless, deterministic, reversible)
-DETERMINISTIC = {"R1", "R3", "R5", "R6", "R8", "R9", "R11"}
+DETERMINISTIC = {"R0", "R1", "R3", "R5", "R6", "R8", "R9", "R11"}
 # stages that require a browser worker (interactive claude --chrome)
 BROWSER = {"R2", "R4"}
 # stages that require a GUI app we cannot drive headless
@@ -354,6 +355,38 @@ def autopilot(reel: Path, episode: str | None, allow_render: bool,
                             "barrotube-media-render skill on this reel "
                             "(or `bash tools/media-process.sh` for today.myo)",
                 stages=st.get("stages"), log=log)
+
+        # R0 topic discovery — pick from the barrotube competitor intel (deterministic).
+        # R0.5 fact-check stays manual: verifying claims needs a model, not this driver.
+        if stage == "R0":
+            code, out, _err = run([sys.executable, str(TOPIC_FROM_INTEL), str(reel)])
+            res = parse_json_output(out) or {}
+            if code == 3:
+                return outcome(
+                    "blocked", "R0", res.get("error", "no usable competitor intel"),
+                    blocked_kind="manual",
+                    next_action=res.get(
+                        "next_action",
+                        "run `bash lib/competitor-pipeline.sh` in the barrotube skill, "
+                        "or write 00_topic.json by hand"),
+                    stages=st.get("stages"), log=log)
+            if code != 0:
+                return outcome(
+                    "recoverable_failure", "R0",
+                    res.get("error", f"topic_from_intel exit {code}"),
+                    blocked_kind="manual", stages=st.get("stages"), log=log)
+
+            started = job_json(reel, "start", "R0")
+            problem = job_failure(started, "R0", "start topic discovery")
+            if problem:
+                return problem
+            ended = job_json(reel, "end", "R0")
+            problem = job_failure(ended, "R0", "complete topic discovery")
+            if problem:
+                return problem
+            note("R0", "topic_picked", topic=res.get("topic"), source=res.get("source"),
+                 intel_date=res.get("intel_date"), alternates=res.get("alternates"))
+            continue
 
         # R6 FFmpeg master — skip when a CapCut export already exists (today.myo route)
         if stage == "R6":

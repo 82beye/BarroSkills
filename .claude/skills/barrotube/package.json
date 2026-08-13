@@ -19,8 +19,8 @@
     "secrets:audit": "node scripts/automation/config-loader.js audit",
     "notify:test": "node scripts/automation/notify.js episode_complete '{\"episode_id\":\"EP-TEST\",\"channel_id\":\"econ-daily\"}'",
     "capcut-builder": "node tools/capcut-builder/bin/capcut-builder.js",
-    "sync:agents": "node scripts/automation/sync-agents.js",
-    "sync:agents:dry": "node scripts/automation/sync-agents.js --dry-run"
+    "competitor:fetch": "node scripts/automation/fetch-competitor-stats.js",
+    "competitor:resolve": "node scripts/automation/resolve-competitor-channels.js --resolve-handles"
   },
   "engines": {
     "node": ">=20.0.0"

@@ -131,3 +131,72 @@ test('market snapshot resolves weekends and exchange holidays without a calendar
     { symbol: 'KOSDAQ', traded_at: '2026-08-14T18:59:00+09:00' },
   ], ['KOSPI', 'KOSDAQ']).content_mode, 'closed_market_issue');
 });
+
+test('competitor intel runs before research and never blocks the pipeline', () => {
+  const source = readFileSync(AUTO, 'utf8');
+
+  // Phase 1 catch-up: 수집 → 분석 → (이후) 리서치 순서
+  const fetchIdx = source.indexOf('fetch-competitor-stats.js');
+  const analyzeIdx = source.indexOf('analyze-competitors.js');
+  const researchIdx = source.indexOf('research-brief.js');
+  assert.ok(fetchIdx >= 0, 'auto-pipeline must reference the competitor fetcher');
+  assert.ok(fetchIdx < analyzeIdx, 'fetch must precede analyze');
+  assert.ok(analyzeIdx < researchIdx, 'intel must land before research consumes it');
+
+  // fail-soft: 경쟁 블록 안에는 fail_with_alert 가 없어야 한다.
+  // 인텔은 EP 생산의 보조 입력이지 선행 조건이 아니다.
+  // (앞뒤 단계는 fail-closed 라 블록 경계를 정확히 잘라야 한다)
+  // COMPETITOR_SCAN 은 로그 줄에도 등장하므로 fetch 지점에서 역방향으로 if 문을 찾는다
+  const scanStart = source.lastIndexOf('if [ "$COMPETITOR_SCAN"', fetchIdx);
+  const scanEnd = source.indexOf('Phase 2', fetchIdx);
+  assert.ok(scanStart >= 0 && scanEnd > scanStart, 'competitor scan block must be locatable');
+  assert.doesNotMatch(source.slice(scanStart, scanEnd), /fail_with_alert/,
+    'intel failure must not halt the pipeline');
+
+  // 05:20 정기 스캔 산출물이 있으면 재사용해 쿼터를 이중 지출하지 않는다
+  assert.match(source, /analysis-\$\{TODAY\}\.json/);
+  assert.match(source, /경쟁 인텔 재사용/);
+});
+
+test('competitor-scan routine is installable and runs fail-soft', () => {
+  const install = readFileSync(INSTALL, 'utf8');
+  assert.match(install, /^\s*competitor-scan\)$/m, 'install-cron must know the routine');
+  assert.match(install, /competitor-pipeline\.sh/);
+  assert.match(install, /사용 가능:.*competitor-scan/, 'usage text must list it');
+
+  const pipeline = join(ROOT, 'lib', 'competitor-pipeline.sh');
+  const syntax = spawnSync('bash', ['-n', pipeline], { encoding: 'utf8' });
+  assert.equal(syntax.status, 0, syntax.stderr);
+
+  const src = readFileSync(pipeline, 'utf8');
+  assert.match(src, /exit 0\s*$/m, 'pipeline must end with a hard exit 0');
+  // 관측(수집·분석)은 autonomy-pause 와 무관하게 돈다 — 게이트는 핸드오프에만 있다
+  assert.doesNotMatch(src, /^\s*guard_master_switch \|\| exit 0/m,
+    'collection must not be gated by the publish pause; the gate belongs in intel-handoff.js');
+});
+
+test('intel handoff gates on autonomy-pause and stays off the Paperclip API', () => {
+  const handoff = join(ROOT, 'scripts', 'automation', 'intel-handoff.js');
+  const src = readFileSync(handoff, 'utf8');
+  assert.match(src, /autonomy-pause\.json/, 'handoff must read the pause switch');
+  assert.match(src, /queue\.jsonl/, 'handoff must record idempotency keys');
+  assert.match(src, /status:\s*'planned'|planned/, 'series must land as planned, never auto-produced');
+});
+
+test('new competitor scripts never leak the Paperclip control-plane URL', () => {
+  // doctor-cli.sh 가 격리 밖의 localhost:3100 을 YELLOW 로 판정한다.
+  for (const f of ['analyze-competitors.js', 'intel-handoff.js', 'fetch-competitor-stats.js',
+                   'resolve-competitor-channels.js', 'lib/competitor-analytics.js']) {
+    const src = readFileSync(join(ROOT, 'scripts', 'automation', f), 'utf8');
+    assert.doesNotMatch(src, /(localhost|127\.0\.0\.1):3100/, `${f} leaks the Paperclip API`);
+  }
+});
+
+test('research-brief consumes competitor intel and records what it used', () => {
+  const src = readFileSync(RESEARCH, 'utf8');
+  assert.match(src, /경쟁 인텔 분석/, 'analysis file must be a declared input');
+  assert.match(src, /content_gaps/, 'prompt must direct the model at the gaps');
+  assert.match(src, /competitor_gap_used/, 'topic json must record the gap it acted on');
+  assert.match(src, /avoided_duplicates/);
+  assert.match(src, /competitor_intel_at/);
+});

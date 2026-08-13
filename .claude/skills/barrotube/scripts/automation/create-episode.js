@@ -37,7 +37,7 @@ function generateEpisodeId() {
 }
 
 function loadSeriesConfig() {
-  const p = resolve(ROOT, 'paperclip/config/series.json');
+  const p = resolve(ROOT, 'config/series.json');
   if (!existsSync(p)) return null;
   return JSON.parse(readFileSync(p, 'utf-8'));
 }
@@ -224,7 +224,7 @@ function main() {
 
   if (!values.channel) {
     console.error('Usage:');
-    console.error('  단발: node create-episode.js --channel <id> --topic "<주제>" [--format shorts|long-3min] [--length <초>]');
+    console.error('  단발: node create-episode.js --channel <id> --topic "<주제>" [--format shorts|shorts-3min|long-3min] [--length <초>]');
     console.error('  시리즈: node create-episode.js --channel <id> --series <id> --episode-slot N --brief <path>');
     process.exit(1);
   }
@@ -243,7 +243,7 @@ function main() {
   } else {
     if (!values.topic) { console.error('❌ Single mode requires --topic'); process.exit(1); }
     const format = values.format || 'shorts';
-    const defaultLength = format === 'long-3min' ? 180 : 60;
+    const defaultLength = format.endsWith('3min') ? (format === 'shorts-3min' ? 172 : 180) : 60;
     singleEpisode({
       channel: values.channel,
       topic: values.topic,

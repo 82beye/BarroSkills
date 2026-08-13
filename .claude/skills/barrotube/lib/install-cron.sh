@@ -70,6 +70,13 @@ cmd_install() {
       script_path="${BARROSKILLS_HOME}/scripts/automation/marketing-fetch-local.js"
       extra_args="--source rss"
       ;;
+    competitor-scan)
+      # 경쟁 인텔 수집→분석→핸드오프. us-close(06:00) 40분 전에 돌려
+      # research-brief.js 가 당일 분석 파일을 확실히 읽게 한다.
+      # kr-close(16:00) 도 같은 파일을 재사용하므로 하루 1회면 충분하다.
+      script_path="${BARROTUBE_HOME}/lib/competitor-pipeline.sh"
+      extra_args=""
+      ;;
     doctor-daily)
       script_path="${BARROTUBE_HOME}/lib/doctor-cli.sh"
       extra_args=""
@@ -83,7 +90,7 @@ cmd_install() {
       ;;
     *)
       echo "❌ 알 수 없는 routine: $routine" >&2
-      echo "사용 가능: us-close | kr-close | weekly-marketing | doctor-daily | telegram-bot"
+      echo "사용 가능: us-close | kr-close | competitor-scan | weekly-marketing | doctor-daily | telegram-bot"
       exit 1
       ;;
   esac

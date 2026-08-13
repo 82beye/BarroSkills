@@ -89,7 +89,7 @@ tail -10 logs/audit/$(date +%Y-%m-%d).jsonl 2>/dev/null
 
 ```bash
 echo "PAPERCLIP_DISABLED=$PAPERCLIP_DISABLED"
-ls scripts/automation/_legacy_paperclip/ | wc -l   # 9이어야 함
+ls scripts/automation/_legacy_paperclip/ | wc -l   # 10이어야 함
 grep -r "localhost:3100\|127.0.0.1:3100" scripts/automation/*.js 2>/dev/null | grep -v "_legacy_paperclip" | grep -v "^Binary" | head -5
 ```
 

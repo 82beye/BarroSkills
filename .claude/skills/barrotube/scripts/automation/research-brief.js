@@ -84,7 +84,7 @@ ${slot.timing_caveat}
    - 시세 요약(스냅샷의 수치를 그대로. 임의로 지어내지 마라)
    - 오늘의 핵심 사건 3개와 각각의 근거 링크
    - 소셜 반응 요약 (검색 실패 시 "소셜 검색 불가"라고 명시)
-   - 경쟁 채널이 이미 다룬 주제 (입력에 경쟁 데이터가 있을 때만)
+   - 경쟁 채널이 이미 다룬 주제 (아래 "경쟁 인텔" 절 참조)
    - 60초 안에 다룰 수 있는 범위로 좁힌 결론
 
 2. ${join(outDir, `strategy-${slotName}.md`)}
@@ -100,8 +100,24 @@ ${slot.timing_caveat}
     "content_mode": "market_close|closed_market_issue|sunday_preopen",
      "key_numbers": ["<대본에 반드시 들어갈 수치>", "..."],
      "candidates": [{"topic":"...","why":"..."}, ...],
-     "social_searched": true|false
+     "social_searched": true|false,
+     "competitor_gap_used": "<반영한 content_gaps 의 term. 연결점이 없으면 null>",
+     "avoided_duplicates": ["<outliers 에 있어 피한 주제>", "..."],
+     "competitor_intel_at": "<사용한 분석 파일의 date. 없으면 null>"
    }
+
+## 경쟁 인텔 (분석 파일이 있을 때만 수행 — 없으면 이 절 전체를 건너뛰고 세 필드를 null/[] 로 둔다)
+입력의 "경쟁 인텔 분석" 파일을 읽고 아래 셋을 반드시 처리해라.
+
+1. content_gaps 상위 5개 중 오늘 시세·뉴스와 실제로 연결되는 것이 있으면
+   candidates 에 최소 1개 포함하고 competitor_gap_used 에 그 term 을 적어라.
+   억지로 갖다 붙이지 마라 — 연결이 없으면 null 이 정답이다.
+2. outliers 에 오른 주제는 오늘 다루지 마라. 이미 소진된 화제다.
+   피한 주제를 avoided_duplicates 에 적어라.
+3. patterns.title_features 에서 direction=positive 인 피처를 angle 에 반영해라.
+   (예: has_number 의 lift 가 1.3 이상이면 앵글에 구체 수치를 넣는다)
+
+경쟁 채널의 제목·문장을 그대로 베끼지 마라. 다루는 '주제'만 참고한다.
 
 ## 대본이 따를 구조 (참고 — 토픽을 이 5컷에 담을 수 있어야 한다)
 ${skeletonLines}
@@ -115,6 +131,24 @@ ${skeletonLines}
 
 function readJson(path, fallback) {
   try { return JSON.parse(readFileSync(path, 'utf-8')); } catch { return fallback; }
+}
+
+/** 경쟁 인텔 분석 파일은 며칠까지 유효한 것으로 볼 것인가 */
+const INTEL_MAX_AGE_DAYS = 3;
+
+/**
+ * date 를 포함해 과거로 maxAge 일까지 거슬러 가장 최근 analysis-*.json 을 찾는다.
+ * 당일 수집이 실패해도 며칠 전 인텔로 계속 굴러가게 하려는 것.
+ */
+function newestAnalysisPath(date, maxAge) {
+  const base = Date.parse(`${date}T00:00:00Z`);
+  if (!Number.isFinite(base)) return null;
+  for (let back = 0; back <= maxAge; back++) {
+    const d = new Date(base - back * 86400_000).toISOString().slice(0, 10);
+    const p = join(ROOT, 'workspace', 'intel', 'competitors', `analysis-${d}.json`);
+    if (existsSync(p)) return p;
+  }
+  return null;
 }
 
 function writeFallbackAnalysis({ slotName, slot, skeleton, date, inputs, outDir }) {
@@ -146,6 +180,11 @@ function writeFallbackAnalysis({ slotName, slot, skeleton, date, inputs, outDir 
       .map((q) => `${q.name || q.symbol} ${q.price_text ?? q.price}`).slice(0, 5),
     candidates: items.map((item) => ({ topic: item.title, why: '수집 뉴스 헤드라인' })),
     social_searched: false,
+    // 폴백은 LLM 없이 도는 경로라 경쟁 인텔을 해석할 주체가 없다.
+    // 필드는 유지해 스키마를 일관되게 두되 값은 비워 둔다 (소비 측이 분기 없이 읽는다).
+    competitor_gap_used: null,
+    avoided_duplicates: [],
+    competitor_intel_at: null,
     fallback: true,
   }, null, 2)}\n`);
   return true;
@@ -181,8 +220,9 @@ function main() {
     '시세 스냅샷': { path: join(outDir, `market-${values.slot}.json`) },
     '뉴스': { path: join(outDir, 'news.json') },
     '경쟁 채널': { path: join(ROOT, 'workspace', 'intel', 'competitors', `${date}.json`) },
+    '경쟁 인텔 분석': { path: newestAnalysisPath(date, INTEL_MAX_AGE_DAYS) },
   };
-  for (const v of Object.values(inputs)) v.exists = existsSync(v.path);
+  for (const v of Object.values(inputs)) v.exists = v.path ? existsSync(v.path) : false;
 
   const researchPath = join(outDir, `research-${values.slot}.md`);
   const strategyPath = join(outDir, `strategy-${values.slot}.md`);

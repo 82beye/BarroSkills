@@ -28,7 +28,7 @@ import { parseArgs } from 'node:util';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const WORKSPACE = resolve(ROOT, 'workspace');
-const SERIES_REGISTRY = join(ROOT, 'paperclip/config/series.json');
+const SERIES_REGISTRY = join(ROOT, 'config/series.json');
 
 const HELP = `
 link-to-series.js — 기존 EP를 시리즈에 사후 연결

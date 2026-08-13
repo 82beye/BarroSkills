@@ -10,7 +10,7 @@ import { resolve } from 'node:path';
 import { execSync } from 'node:child_process';
 import { getSecret } from './config-loader.js';
 
-const CONFIG_PATH = resolve(import.meta.dirname, '../../paperclip/config/notifications.json');
+const CONFIG_PATH = resolve(import.meta.dirname, '../../config/notifications.json');
 
 /**
  * 알림 설정 로드
@@ -95,6 +95,10 @@ function buildMessage(type, data) {
       title: `⏳ 승인 대기: ${data.episode_id}`,
       body: `채널: ${data.channel_id}\n에피소드가 게시 승인을 기다리고 있습니다.\nPaperclip 대시보드에서 확인해주세요.`,
     },
+    intel_ready: {
+      title: `📡 경쟁 인텔 ${data.date}`,
+      body: `갭 ${data.gaps} · 이상치 ${data.outliers} · 블루오션 ${data.blue_ocean}\n${data.top ? `주목: ${data.top}\n` : ''}승인: /intel approve ${data.date}`,
+    },
     budget_alert: {
       title: `💰 예산 경고: ${data.role}`,
       body: `사용량: $${data.used} / $${data.limit} (${data.pct}%)\n${data.action}`,
@@ -168,7 +172,7 @@ if (import.meta.url === scriptUrl) {
   const [, , type, ...rest] = process.argv;
   if (!type) {
     console.log('Usage: node notify.js <type> [JSON data]');
-    console.log('Types: episode_complete, episode_failed, board_approval_needed, budget_alert, daily_report');
+    console.log('Types: episode_complete, episode_failed, board_approval_needed, intel_ready, budget_alert, daily_report');
     console.log('');
     console.log('Setup:');
     console.log('  security add-generic-password -a "$USER" -s "TELEGRAM_BOT_TOKEN" -w "YOUR_BOT_TOKEN"');

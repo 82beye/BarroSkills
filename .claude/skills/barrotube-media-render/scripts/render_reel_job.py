@@ -40,7 +40,9 @@ RECOVERABLE = {
 }
 
 STAGES = [
-    {"id": "R0",   "name": "topic discovery",     "kind": "manual"},
+    # R0 은 경쟁 인텔에서 주제를 고르는 결정론 단계다 (topic_from_intel.py).
+    # R0.5 는 사실 검증이라 LLM 이 필요해 manual 로 남는다 — autopilot 은 여기서 멈춘다.
+    {"id": "R0",   "name": "topic discovery",     "kind": "auto"},
     {"id": "R0.5", "name": "topic fact-check",    "kind": "manual", "gate": True},
     {"id": "R1",   "name": "script/prompts",      "kind": "auto"},
     {"id": "R2",   "name": "ChatGPT images",      "kind": "per_cut"},
@@ -443,6 +445,10 @@ class RenderJob:
             outputs = [item for item in (self.clip_artifact(path) for path in paths) if item]
             return bool(paths) and len(outputs) == len(paths), outputs, []
 
+        if stage_id == "R0":
+            # R0 은 topic_from_intel.py 가 쓰는 00_topic.json 이 유일한 증거다.
+            # (kind="auto" 인 단계는 cmd_end 에서 증거를 강제하므로 여기 없으면 exit 2)
+            return found(reel / "00_topic.json")
         if stage_id == "R1":
             return found(reel / "script.md") if cuts else (False, [], [])
         if stage_id == "R2":

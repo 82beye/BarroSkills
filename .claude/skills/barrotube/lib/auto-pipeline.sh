@@ -196,8 +196,17 @@ if [ -z "$RESUME_EP" ] && [ -z "$FORCE_TOPIC" ] && [ -n "$SLOT" ]; then
     || fail_with_alert "Phase 1 news" "fetch-daily-news.js 실패"
 
   if [ "$COMPETITOR_SCAN" = "True" ]; then
-    run_or_echo node scripts/automation/fetch-competitor-stats.js --date "$TODAY" --window-days 1 \
-      || echo "⚠️  경쟁 채널 수집 실패 (OAuth 만료 가능) — 없이 진행"
+    # 정기 루틴은 competitor-scan(05:20) 이 담당한다. 여기서는 그 산출물이
+    # 없을 때만 만회 실행해 쿼터 이중 지출을 막는다.
+    ANALYSIS_FILE="${BARROTUBE_HOME}/workspace/intel/competitors/analysis-${TODAY}.json"
+    if [ -s "$ANALYSIS_FILE" ]; then
+      echo "  ⏭  경쟁 인텔 재사용: analysis-${TODAY}.json"
+    else
+      run_or_echo node scripts/automation/fetch-competitor-stats.js --date "$TODAY" \
+        || echo "⚠️  경쟁 채널 수집 실패 (OAuth 만료 가능) — 없이 진행"
+      run_or_echo node scripts/automation/analyze-competitors.js --date "$TODAY" \
+        || echo "⚠️  경쟁 인텔 분석 실패 — 없이 진행"
+    fi
   fi
 fi
 

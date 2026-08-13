@@ -8,10 +8,11 @@
  */
 
 import { parseArgs } from 'node:util';
-import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync, statSync, copyFileSync, mkdtempSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { execSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { renderDirect } from './render-direct.js';
 import { buildDistributionPackage } from './build-distribution.js';
 import {
@@ -25,6 +26,8 @@ import { updateIssueStatus } from './register-paperclip-issue.js';
 import { acquireLock, releaseLock, heartbeat as lockHeartbeat } from './in-flight-lock.js';
 import { assertPublishApproval } from './lib/publish-approval.js';
 import { createChannelRegistry } from './lib/channel-registry.js';
+
+const ROOT = resolve(import.meta.dirname, '../..');
 
 const WORKSPACE = resolve(import.meta.dirname, '../../workspace');
 const LOGS = resolve(import.meta.dirname, '../../logs');
@@ -430,38 +433,89 @@ async function runStage(episodeDir, episodeId, stage, dryRun, opts = {}) {
     }
   }
 
+  // S2(시장 조사) / S3(전략) 은 이미 작동하는 research-brief.js 에 위임한다.
+  // 새 에이전트 호출 경로를 만들지 않는 이유: research-brief.js 가 auto-pipeline 에서
+  // 매일 도는 검증된 경로이고, 경쟁 인텔 소비도 거기 배선돼 있다.
+  if ((stage.id === 'S2' || stage.id === 'S3') && !runResearchStage(stage, episodeDir, episodeId)) {
+    return false;
+  }
+
   // 에이전트 실행
   const agentFile = join(
     resolve(import.meta.dirname, '../../claude-code/.claude/agents'),
     `${stage.agent}.md`
   );
 
-  if (!existsSync(agentFile)) {
-    console.log(`  ⚠ Agent config not found: ${agentFile}`);
-    console.log(`  → Skipping (manual execution required)`);
-    return false;
+  if (stage.id !== 'S2' && stage.id !== 'S3') {
+    if (!existsSync(agentFile)) {
+      console.log(`  ⚠ Agent config not found: ${agentFile}`);
+      console.log(`  → Skipping (manual execution required)`);
+      return false;
+    }
+
+    console.log(`  🤖 Invoking agent: ${stage.agent}`);
+    console.log(`  📁 Episode: ${episodeDir}`);
+
+    const agentPrompt = buildAgentPrompt(stage, episodeDir, episodeId);
+    console.log(`  📝 Prompt prepared (${agentPrompt.length} chars)`);
   }
 
-  // 에이전트 실행 명령 생성
-  const briefPath = join(episodeDir, '00_brief.md');
-  const brief = existsSync(briefPath) ? readFileSync(briefPath, 'utf-8') : '';
-
-  console.log(`  🤖 Invoking agent: ${stage.agent}`);
-  console.log(`  📁 Episode: ${episodeDir}`);
-
-  // Claude Code CLI 호출 (Paperclip 통합 시 티켓 기반으로 전환)
-  const agentPrompt = buildAgentPrompt(stage, episodeDir, episodeId);
-  console.log(`  📝 Prompt prepared (${agentPrompt.length} chars)`);
-
-  // 산출물 검증
+  // 산출물 게이트 — 파일이 실제로 생겼을 때만 completed 로 넘긴다.
+  // 예전에는 무조건 completed 를 찍어 빈 단계가 통과했다 (ADR 이 지적한 게이트 우회).
   if (stage.file) {
     const outputPath = join(episodeDir, stage.file);
-    console.log(`  📄 Expected output: ${outputPath}`);
+    if (!existsSync(outputPath) || statSync(outputPath).size === 0) {
+      console.log(`  ⛔ 산출물 없음: ${outputPath}`);
+      updateStatus(episodeDir, episodeId, stage.id, 'blocked', { reason: 'missing_output' });
+      auditLog(episodeId, 'stage_blocked', { stage: stage.id, file: stage.file });
+      return false;
+    }
+    console.log(`  📄 Output: ${outputPath}`);
   }
 
   updateStatus(episodeDir, episodeId, stage.id, 'completed', { agent: stage.agent });
   auditLog(episodeId, 'stage_complete', { stage: stage.id, agent: stage.agent });
 
+  return true;
+}
+
+/** 00_brief.md frontmatter 에서 슬롯·날짜를 뽑는다. 없으면 null. */
+function briefMeta(episodeDir) {
+  const p = join(episodeDir, '00_brief.md');
+  if (!existsSync(p)) return { slot: null, date: null };
+  const src = readFileSync(p, 'utf-8');
+  return {
+    slot: /^slot:\s*(\S+)/m.exec(src)?.[1] ?? null,
+    date: /^date:\s*(\d{4}-\d{2}-\d{2})/m.exec(src)?.[1] ?? null,
+  };
+}
+
+/** research-brief.js 를 임시 디렉토리에 돌리고 해당 산출물만 에피소드로 복사한다. */
+function runResearchStage(stage, episodeDir, episodeId) {
+  const { slot, date } = briefMeta(episodeDir);
+  const useSlot = slot ?? 'us-close';
+  const useDate = date ?? new Date().toISOString().slice(0, 10);
+  const tmp = mkdtempSync(join(tmpdir(), `bt-${stage.id.toLowerCase()}-`));
+
+  console.log(`  🔎 ${stage.id} → research-brief.js (slot=${useSlot}, date=${useDate})`);
+  const r = spawnSync('node', [
+    join(ROOT, 'scripts', 'automation', 'research-brief.js'),
+    '--slot', useSlot, '--date', useDate, '--out-dir', tmp,
+  ], { cwd: ROOT, stdio: 'inherit', timeout: 900_000 });
+
+  if (r.status !== 0) {
+    console.log(`  ⛔ research-brief 실패 (exit ${r.status})`);
+    auditLog(episodeId, 'stage_blocked', { stage: stage.id, reason: `research-brief exit ${r.status}` });
+    return false;
+  }
+
+  const srcName = stage.id === 'S2' ? `research-${useSlot}.md` : `strategy-${useSlot}.md`;
+  const srcPath = join(tmp, srcName);
+  if (!existsSync(srcPath)) {
+    console.log(`  ⛔ research-brief 산출물 없음: ${srcName}`);
+    return false;
+  }
+  copyFileSync(srcPath, join(episodeDir, stage.file));
   return true;
 }
 

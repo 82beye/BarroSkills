@@ -17,7 +17,7 @@
  *   node seo-enhance.js --episode <dir> [--channel econ-daily]
  */
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { parse as parseYAML } from 'yaml';
@@ -63,9 +63,10 @@ const CHANNEL_LEXICON = {
  * shorts: common + brand_tags_shorts
  * long-3min (또는 그 외 long format): common + brand_tags_long_3min
  */
-function brandTagsForFormat(lex, format) {
+export function brandTagsForFormat(lex, format) {
   const common = lex.brand_tags_common || [];
-  if (format === 'shorts') return [...common, ...(lex.brand_tags_shorts || [])];
+  if (format === 'shorts-3min') return [...common, '3분경제', 'Shorts'];
+  if (format.startsWith('shorts')) return [...common, ...(lex.brand_tags_shorts || [])];
   // long-3min이 기본. 다른 long-* format이 추가돼도 같은 풀 사용.
   return [...common, ...(lex.brand_tags_long_3min || [])];
 }
@@ -122,6 +123,36 @@ function pickPrimaryKeyword(candidates, title) {
 /**
  * 연관어 확장 — 채널 lexicon 기반 (키워드가 포함된 주제 매치)
  */
+/**
+ * 경쟁 인텔이 미리 계산해 둔 공기어를 붙인다.
+ * 분석기가 related_terms 를 만들어 두므로 여기서는 조회만 한다 (로직 추가 0).
+ * 분석 파일이 없으면 조용히 빈 배열 — 정적 사전만으로 계속 동작한다.
+ */
+function competitorRelated(candidates, maxAdd = 5) {
+  const dir = resolve(import.meta.dirname, '../../workspace/intel/competitors');
+  if (!existsSync(dir)) return [];
+  const files = readdirSync(dir).filter((f) => /^analysis-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort();
+  const newest = files.at(-1);
+  if (!newest) return [];
+
+  // 14일 넘은 인텔은 시장이 바뀌었을 가능성이 커 쓰지 않는다
+  const date = newest.slice(9, 19);
+  if (Date.now() - Date.parse(`${date}T00:00:00Z`) > 14 * 86400_000) return [];
+
+  let analysis;
+  try { analysis = JSON.parse(readFileSync(join(dir, newest), 'utf-8')); } catch { return []; }
+  const related = analysis?.related_terms ?? {};
+
+  const out = new Set();
+  for (const cand of candidates) {
+    for (const [term, cos] of Object.entries(related)) {
+      if (!cand.includes(term) && !term.includes(cand)) continue;
+      for (const co of cos) out.add(co);
+    }
+  }
+  return Array.from(out).slice(0, maxAdd);
+}
+
 function expandRelated(candidates, channel) {
   const lex = CHANNEL_LEXICON[channel] || CHANNEL_LEXICON['econ-daily'];
   const out = new Set();
@@ -132,6 +163,7 @@ function expandRelated(candidates, channel) {
       }
     }
   }
+  for (const co of competitorRelated(candidates)) out.add(co);
   return Array.from(out);
 }
 
@@ -192,8 +224,8 @@ function rebuildDescription(script, seo, existingDesc, format) {
   if (existingDesc) {
     lines.push(existingDesc);
   } else {
-    const teaser = format === 'shorts'
-      ? `${seo.secondary_keywords.slice(0, 3).join(', ')} 관련 핵심을 1분에 정리합니다.`
+    const teaser = format.startsWith('shorts')
+      ? `${seo.secondary_keywords.slice(0, 3).join(', ')} 관련 핵심을 ${format === 'shorts-3min' ? '3분' : '1분'}에 정리합니다.`
       : `${seo.secondary_keywords.slice(0, 3).join(', ')} 관련 핵심을 3분에 정리합니다.`;
     lines.push(teaser);
   }
@@ -205,8 +237,8 @@ function rebuildDescription(script, seo, existingDesc, format) {
   lines.push('');
 
   // 해시태그 블록 — format-aware brand
-  const brandHashes = format === 'shorts'
-    ? ['BarroTube', '60초경제', 'Shorts']
+  const brandHashes = format.startsWith('shorts')
+    ? ['BarroTube', format === 'shorts-3min' ? '3분경제' : '60초경제', 'Shorts']
     : ['BarroTube', '3분경제', '경제수업'];
   const hashSet = [
     seo.primary_keyword,
@@ -304,4 +336,6 @@ async function main() {
   console.log(`   Tags: ${meta.tags.length}개 (총 ${meta.tags.join(',').length}자)`);
 }
 
-main().catch(e => { console.error('❌', e.message); process.exit(1); });
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch(e => { console.error('❌', e.message); process.exit(1); });
+}

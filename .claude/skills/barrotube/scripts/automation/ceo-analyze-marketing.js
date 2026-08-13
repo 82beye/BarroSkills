@@ -38,7 +38,7 @@ import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
 const ROOT = resolve(import.meta.dirname, '../..');
-const SERIES_CONFIG_PATH = resolve(ROOT, 'paperclip/config/series.json');
+const SERIES_CONFIG_PATH = resolve(ROOT, 'config/series.json');
 const PIPELINE_LOG = resolve(ROOT, 'logs/marketing-pipeline.log');
 
 // 학습 아크 5편 — 기존 sp500-basic / nasdaq100-basic 과 동일 컨벤션
@@ -149,11 +149,36 @@ function deriveCandidates(reportBody, comments, max) {
       const seed = rule.seedFn();
       if (seen.has(seed.slug)) continue;
       seen.add(seed.slug);
+      seed.blue_ocean_keywords = dataDerivedBlueOcean(seed.blue_ocean_keywords);
       candidates.push(seed);
       if (candidates.length >= max) break;
     }
   }
   return candidates;
+}
+
+/**
+ * 블루오션 키워드를 실측 인텔에서 가져온다.
+ *
+ * CANDIDATE_RULES 의 seed 는 상수인데 리포트에는 "경쟁 강도 낮음, SEO 공략 대상"으로
+ * 출력돼 왔다 — 데이터에서 도출된 적이 없는 값이 근거처럼 읽히는 문제다.
+ * 분석 파일이 충분한 신호를 주면 교체하고, 아니면 기존 상수를 그대로 둔다.
+ */
+function dataDerivedBlueOcean(fallback, maxAgeDays = 14, minCount = 3) {
+  const dir = resolve(ROOT, 'workspace/intel/competitors');
+  if (!existsSync(dir)) return fallback;
+  const files = readdirSync(dir).filter((f) => /^analysis-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort();
+  const newest = files.at(-1);
+  if (!newest) return fallback;
+  if (Date.now() - Date.parse(`${newest.slice(9, 19)}T00:00:00Z`) > maxAgeDays * 86400_000) return fallback;
+
+  let analysis;
+  try { analysis = JSON.parse(readFileSync(join(dir, newest), 'utf-8')); } catch { return fallback; }
+  const picked = (analysis?.blue_ocean_keywords ?? [])
+    .filter((k) => k.score >= 0.5)
+    .slice(0, 5)
+    .map((k) => k.keyword);
+  return picked.length >= minCount ? picked : fallback;
 }
 
 function uniqueSeriesId(baseSlug, channel, existing) {

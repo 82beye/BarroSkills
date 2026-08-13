@@ -12,7 +12,7 @@ import { resolve } from 'node:path';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-const CONFIG_PATH = resolve(import.meta.dirname, '../../paperclip/config/budget-policy.json');
+const CONFIG_PATH = resolve(import.meta.dirname, '../../config/budget-policy.json');
 const DATA_DIR = resolve(import.meta.dirname, '../../logs/budget');
 
 function main() {

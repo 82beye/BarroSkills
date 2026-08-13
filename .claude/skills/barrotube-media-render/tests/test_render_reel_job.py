@@ -73,6 +73,11 @@ class RenderJobV2Test(unittest.TestCase):
         ], check=True)
         return target
 
+    def seed_topic(self) -> None:
+        """R0 completion evidence (topic_from_intel.py writes this in production)."""
+        (self.reel / "00_topic.json").write_text(
+            '{"schema": "barrotube.reel_topic.v1", "topic": "test topic"}', encoding="utf-8")
+
     def raw_job(self) -> dict:
         return json.loads((self.reel / JOB.JOB_FILE).read_text(encoding="utf-8"))
 
@@ -125,6 +130,23 @@ class RenderJobV2Test(unittest.TestCase):
         self.assertEqual(4, code)
         self.assertEqual(original, (self.reel / JOB.BACKUP_FILE).read_bytes())
 
+    def test_r0_is_auto_and_requires_topic_evidence(self) -> None:
+        """R0 을 auto 로 올린 계약: 00_topic.json 없이는 완료되지 않는다.
+
+        이 증거가 없으면 주제를 못 정한 릴이 R0 completed 로 통과해
+        R1(script/prompts)이 빈 입력으로 돌아간다.
+        """
+        self.assertEqual(0, self.run_cli("init", self.reel)[0])
+        self.assertEqual(0, self.run_cli("start", self.reel, "R0")[0])
+
+        code, payload = self.run_cli("end", self.reel, "R0")
+        self.assertEqual(2, code, "missing 00_topic.json must be a config error")
+        self.assertIn("evidence", str(payload).lower())
+
+        self.seed_topic()
+        self.assertEqual(0, self.run_cli("end", self.reel, "R0")[0])
+        self.assertEqual("completed", self.raw_job()["stages"][0]["status"])
+
     def test_prerequisite_and_gate_approval_are_state_preserving_on_rejection(self) -> None:
         self.assertEqual(0, self.run_cli("init", self.reel)[0])
         before = self.raw_job()["revision"]
@@ -134,6 +156,7 @@ class RenderJobV2Test(unittest.TestCase):
         self.assertEqual(before, self.raw_job()["revision"])
 
         self.assertEqual(0, self.run_cli("start", self.reel, "R0")[0])
+        self.seed_topic()  # R0 is an auto stage: it needs 00_topic.json as evidence
         self.assertEqual(0, self.run_cli("end", self.reel, "R0")[0])
         self.assertEqual(0, self.run_cli("start", self.reel, "R0.5")[0])
         before = self.raw_job()["revision"]
@@ -392,6 +415,7 @@ class RenderJobV2Test(unittest.TestCase):
     def test_skip_requires_approval_and_r11_is_never_skippable(self) -> None:
         self.assertEqual(0, self.run_cli("init", self.reel)[0])
         self.assertEqual(0, self.run_cli("start", self.reel, "R0")[0])
+        self.seed_topic()  # R0 is an auto stage: it needs 00_topic.json as evidence
         self.assertEqual(0, self.run_cli("end", self.reel, "R0")[0])
         self.assertEqual(0, self.run_cli("start", self.reel, "R0.5")[0])
         code, payload = self.run_cli("skip", self.reel, "R0.5")
