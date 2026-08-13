@@ -86,11 +86,23 @@ test('the writer gets the contract in its prompt and one chance to fix violation
 test('EP-2026-0091 — the episode that motivated this gate still fails it', () => {
   // 이 EP 는 지수 세 개 등락률을 소리 내어 읽고 "과열을 놓칠 수 있습니다" 로 끝났다.
   // 게이트가 이걸 통과시키면 게이트가 없는 것과 같다.
-  const path = join(ROOT, 'workspace', 'episodes', 'EP-2026-0091', 'platforms', 'shorts', '30_script.md');
-  if (!existsSync(path)) return;   // EP 가 정리됐으면 건너뛴다
-  const fm = parseYAML(readFileSync(path, 'utf-8').match(/^---\n([\s\S]*?)\n---/)[1]);
+  //
+  // 처음엔 workspace 의 실제 대본을 읽었는데, 그 EP 를 계약대로 다시 뽑자 통과해 버려서
+  // 테스트가 깨졌다 — 고쳐야 할 대상을 픽스처로 삼은 게 잘못이었다. 원문을 여기에 박아 둔다.
+  const scenes = [
+    { scene_id: '001', role: 'hook', target_seconds: 11.4,
+      narration: '나스닥이 이만육천오백팔십팔로 마감했는데 다우는 웃지 못했습니다. 같은 물가 뉴스에 왜 반도체 인프라만 뜨거웠는지 놓치면 장 분위기를 잘못 읽습니다.' },
+    { scene_id: '002', role: 'context', target_seconds: 14.5,
+      narration: '지금 상황은 에스앤피오백이 영점이육 퍼센트, 나스닥이 영점오사 퍼센트 올랐지만 다우는 영점영사 퍼센트 내렸습니다. 미국장 전체가 오른 게 아니라 성장주 쪽으로 온기가 뚜렷하게 몰린 겁니다.' },
+    { scene_id: '003', role: 'insight', target_seconds: 13.2,
+      narration: '칠월 소비자물가는 전월보다 영점일 퍼센트, 일 년 전보다 삼점사 퍼센트 올라 예상과 같았습니다. 코어위브와 슈퍼마이크로가 실적 전망을 올리며 급등해 인공지능 인프라주가 강했습니다.' },
+    { scene_id: '004', role: 'implication', target_seconds: 13.5,
+      narration: '당신이 볼 건 환율과 쏠림입니다. 원달러 환율은 천사백이십오 원대로 올라 환전 부담이 커졌습니다. 국내 반도체엔 훈풍 기대가 생길 수 있지만, 지수 상승을 시장 전체 회복으로 해석하면 과열을 놓칠 수 있습니다.' },
+    { scene_id: '005', role: 'cta', target_seconds: 10.9,
+      narration: '십 년물 국채 경매와 반도체 랠리 지속 여부가 다음 신호입니다. 지수보다 누가 올랐는지 먼저 보세요. 매일 이런 시장 온도차를 놓치기 싫다면 팔로우하세요.' },
+  ];
 
-  const rules = errorsOf(fm.scenes);
+  const rules = errorsOf(scenes);
   assert.ok(rules.includes('spoken-number-budget'), '씬 2·3 의 수치 낭독이 잡혀야 한다');
   assert.ok(rules.includes('spoken-number-total'), '대본 전체 수치 과다가 잡혀야 한다');
 });

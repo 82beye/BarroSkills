@@ -40,8 +40,10 @@ function resolveTargets(values) {
   if (values.file) return [values.file];
   const root = values.ep ? join(EPISODES, values.ep) : EPISODES;
   if (!existsSync(root)) return [];
+  // 백업·아카이브 사본은 세지 않는다 — 고쳐 놓은 EP 가 옛 사본 때문에 계속 실패로 보인다.
   return execSync(`find ${JSON.stringify(root)} -name 30_script.md`, { encoding: 'utf-8' })
-    .trim().split('\n').filter(Boolean);
+    .trim().split('\n').filter(Boolean)
+    .filter((p) => !/(^|\/)(_backup|_archive)/.test(p));
 }
 
 function main() {
