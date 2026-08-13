@@ -23,12 +23,39 @@ test('credit exhaustion is recognised across the shapes Google returns', () => {
 test('the script step is not bound to a single provider', () => {
   const src = readFileSync(join(ROOT, 'scripts', 'automation', 'generate-script.js'), 'utf-8');
   assert.match(src, /callClaudeCode/, 'claude -p must be an available engine');
+  assert.match(src, /callCodex/, 'codex exec must be an available engine');
   assert.match(src, /engine:\s*\{\s*type:\s*'string'/, '--engine must be selectable');
   assert.match(src, /BT_SCRIPT_ENGINE/, 'env override for unattended runs');
 
+  // 메인 세션이 쓰는 구독 CLI 가 앞이고, 선불 크레딧이 필요한 Gemini 가 뒤다.
+  // 순서가 뒤집히면 2026-08-13 파이프라인을 세운 그 실패로 돌아간다.
+  assert.match(src, /BT_SCRIPT_ENGINE_CHAIN \|\| 'claude,codex,gemini'/,
+    'default chain order: subscription CLIs first, prepaid API last');
+
   // 명시 지정은 존중한다 — --engine gemini 로 부른 사람은 실패를 보고 싶은 것이다
-  assert.match(src, /engine !== 'auto' \|\| !isExhausted/,
-    'fallback must only happen in auto mode');
+  assert.match(src, /requested === 'auto' \? ENGINE_CHAIN : \[requested\]/,
+    'an explicit --engine must yield a one-element chain (no silent fallback)');
+});
+
+test('the chain records which engine actually wrote the script', () => {
+  // frontmatter 가 항상 (gemini) 라고 적혀 있으면 폴백이 일어난 EP 를 사후에 못 가린다.
+  const src = readFileSync(join(ROOT, 'scripts', 'automation', 'generate-script.js'), 'utf-8');
+  assert.match(src, /writer: `writer-agent \(\$\{engineUsed\}\)`/,
+    'the artifact must name the engine that produced it');
+  assert.match(src, /fallback from/, 'a fallback must be visible in the artifact');
+  assert.doesNotMatch(src, /writer-agent \(gemini\)/, 'no hardcoded provider name');
+});
+
+test('codex runs read-only and hands the reply back through a temp file', () => {
+  const src = readFileSync(join(ROOT, 'scripts', 'automation', 'generate-script.js'), 'utf-8');
+
+  // 대본 생성은 파일을 쓸 일이 없다. 쓰게 두면 image_prompt·TTS 계약 게이트를 우회한다.
+  assert.match(src, /'-s',\s*'read-only'/, 'codex must not be able to write files');
+  assert.match(src, /'-a',\s*'never'/, 'non-interactive — nobody is there to approve');
+
+  // stdout 에는 진행 로그가 섞여 나온다 — -o 로 마지막 응답만 받아야 파싱이 성립한다
+  assert.match(src, /'-o',\s*outFile/, 'the reply comes from --output-last-message');
+  assert.match(src, /finally \{\s*try \{ unlinkSync\(outFile\)/, 'the temp file must not leak');
 });
 
 test('claude -p runs without tools and never writes files', () => {
