@@ -32,10 +32,13 @@ const BUDGET_DIR = join(ROOT, 'logs', 'budget');
 const CRON_DIR = join(ROOT, 'logs', 'cron');
 
 // PRD §2.2 목표치
+// min_n: 이만큼 표본이 없으면 판정하지 않는다.
+// 1일치로 "수집 성공률 3.3% FAIL" 을 내면 시스템이 고장난 것처럼 읽히지만
+// 실제로는 "이제 막 시작했다"는 뜻이다. 표본 부족은 실패가 아니다.
 const TARGETS = {
-  collection_rate: { min: 0.95, label: '수집 성공률', fmt: (v) => `${(v * 100).toFixed(1)}%` },
-  topic_adoption: { min: 0.60, label: '주제 반영률', fmt: (v) => `${(v * 100).toFixed(1)}%` },
-  quota_per_day: { max: 30, label: 'API 쿼터/일', fmt: (v) => `${v.toFixed(1)} units` },
+  collection_rate: { min: 0.95, min_n: 7, label: '수집 성공률', fmt: (v) => `${(v * 100).toFixed(1)}%` },
+  topic_adoption: { min: 0.60, min_n: 3, label: '주제 반영률', fmt: (v) => `${(v * 100).toFixed(1)}%` },
+  quota_per_day: { max: 30, min_n: 3, label: 'API 쿼터/일', fmt: (v) => `${v.toFixed(1)} units` },
   pipeline_blocks: { max: 0, label: '파이프라인 차단', fmt: (v) => `${v}건` },
   determinism: { min: 1, label: '분석 결정성', fmt: (v) => (v === 1 ? '일치' : v === null ? '미측정' : '불일치') },
   llm_cost_month: { max: 0.10, label: 'LLM 비용/월', fmt: (v) => `$${v.toFixed(4)}` },
@@ -53,14 +56,28 @@ function dateRange(days, now) {
 
 /** 수집 성공률 — 스냅샷이 있고 채널을 하나라도 담았는가. */
 function collectionRate(dates) {
+  // 첫 성공일 이후만 모수로 잡는다. 도입 전 과거를 실패로 세면
+  // 지표가 영원히 "며칠 전에 시작했나"를 재게 된다.
+  const asc = [...dates].sort();
+  const firstOk = asc.findIndex((d) => {
+    const snap = loadJSON(join(INTEL_DIR, `${d}.json`));
+    return snap && (snap.channel_count ?? 0) > 0;
+  });
+  if (firstOk < 0) return { value: null, ok: 0, total: 0, missing: [], note: '아직 성공한 수집이 없다' };
+
+  const window = asc.slice(firstOk);
   let ok = 0;
   const missing = [];
-  for (const d of dates) {
+  for (const d of window) {
     const snap = loadJSON(join(INTEL_DIR, `${d}.json`));
     if (snap && (snap.channel_count ?? 0) > 0) ok++;
     else missing.push(d);
   }
-  return { value: dates.length ? ok / dates.length : 0, ok, total: dates.length, missing: missing.slice(0, 5) };
+  return {
+    value: window.length ? ok / window.length : null,
+    ok, total: window.length, since: window[0],
+    missing: missing.slice(0, 5),
+  };
 }
 
 /** 주제 반영률 — 리서치가 실제로 갭을 집어 썼는가. */
@@ -74,6 +91,9 @@ function topicAdoption(dates) {
     for (const f of readdirSync(dir).filter((f) => /^topic-.+\.json$/.test(f))) {
       const t = loadJSON(join(dir, f));
       if (!t) continue;
+      // 키가 없으면 S3 배선 이전에 만들어진 파일이다 — 모수에서 뺀다.
+      // 넣으면 배선 전 이력이 영구히 분모를 부풀린다.
+      if (!('competitor_gap_used' in t)) continue;
       total++;
       if (t.competitor_gap_used) {
         adopted++;
@@ -140,9 +160,10 @@ function determinism(date) {
   return { value: same ? 1 : 0, note: same ? null : 'generated_at 외 필드가 달라졌다' };
 }
 
-function verdict(key, value) {
+function verdict(key, value, n = null) {
   const t = TARGETS[key];
   if (value === null || value === undefined) return 'SKIP';
+  if (t.min_n !== undefined && n !== null && n < t.min_n) return 'INSUFFICIENT';
   if (t.min !== undefined) return value >= t.min ? 'PASS' : 'FAIL';
   if (t.max !== undefined) return value <= t.max ? 'PASS' : 'FAIL';
   return 'SKIP';
@@ -174,9 +195,9 @@ function main() {
   const metrics = {
     measured_at: now.toISOString(),
     window_days: days,
-    collection_rate: { ...collection, verdict: verdict('collection_rate', collection.value) },
-    topic_adoption: { ...adoption, verdict: verdict('topic_adoption', adoption.value) },
-    quota_per_day: { ...quota, verdict: verdict('quota_per_day', quota.value) },
+    collection_rate: { ...collection, verdict: verdict('collection_rate', collection.value, collection.total) },
+    topic_adoption: { ...adoption, verdict: verdict('topic_adoption', adoption.value, adoption.total) },
+    quota_per_day: { ...quota, verdict: verdict('quota_per_day', quota.value, quota.days) },
     pipeline_blocks: { ...blocks, verdict: verdict('pipeline_blocks', blocks.value) },
     determinism: { ...det, verdict: verdict('determinism', det.value) },
     llm_cost_month: { ...cost, verdict: verdict('llm_cost_month', cost.value) },
@@ -187,17 +208,20 @@ function main() {
     return;
   }
 
-  const icon = { PASS: '✅', FAIL: '❌', SKIP: '⏭️ ' };
+  const icon = { PASS: '✅', FAIL: '❌', SKIP: '⏭️ ', INSUFFICIENT: '📉' };
   console.log(`\n📏 경쟁 인텔 성공 지표 — 최근 ${days}일 (PRD §2.2)\n`);
   for (const key of Object.keys(TARGETS)) {
     const t = TARGETS[key];
     const m = metrics[key];
     const target = t.min !== undefined ? `≥ ${t.fmt(t.min)}` : `≤ ${t.fmt(t.max)}`;
     const actual = m.value === null || m.value === undefined ? '—' : t.fmt(m.value);
-    console.log(`  ${icon[m.verdict]} ${t.label.padEnd(14)} ${actual.padStart(12)}   목표 ${target}`);
+    const suffix = m.verdict === 'INSUFFICIENT' ? `  (표본 ${m.total ?? m.days ?? 0}/${t.min_n} — 판정 보류)` : '';
+    console.log(`  ${icon[m.verdict]} ${t.label.padEnd(14)} ${actual.padStart(12)}   목표 ${target}${suffix}`);
   }
 
   console.log('');
+  if (collection.since) console.log(`  · 수집 측정 시작일: ${collection.since} (${collection.ok}/${collection.total}일 성공)`);
+  if (collection.note) console.log(`  · ${collection.note}`);
   if (collection.missing.length) console.log(`  · 수집 누락일: ${collection.missing.join(', ')}${collection.total - collection.ok > 5 ? ' …' : ''}`);
   if (adoption.total) console.log(`  · 주제 ${adoption.adopted}/${adoption.total} 건이 갭을 반영`);
   if (adoption.samples.length) console.log(`  · 반영 예: ${adoption.samples.map((s) => `${s.date} "${s.gap}"`).join(', ')}`);
