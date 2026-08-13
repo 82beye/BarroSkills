@@ -16,6 +16,46 @@ if [ -z "${BARROTUBE_HOME:-}" ]; then
   GUARDS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   export BARROTUBE_HOME="$(dirname "$GUARDS_DIR")"
 fi
+
+# ─────────────────────────────────────────────────
+# 런타임 해석 — node 를 실행 시점에 찾는다
+#
+# launchd 는 로그인 셸을 거치지 않아 PATH 가 사실상 비어 있다.
+# install-cron.sh 가 설치 시점의 경로를 plist 에 박아 넣지만, 그 값은
+# nvm 버전이 올라가는 순간 죽은 경로가 된다 (v24.11.1 → v26 이면 끝).
+# 여기서 한 번 더 찾아 두면 plist 가 낡아도 스크립트는 계속 돈다.
+# ─────────────────────────────────────────────────
+ensure_node_on_path() {
+  command -v node >/dev/null 2>&1 && return 0
+
+  local candidates=() nvm_default
+  # nvm default alias 를 먼저 따라간다 (lts/* 같은 별칭은 한 단계 더 푼다)
+  if [ -f "$HOME/.nvm/alias/default" ]; then
+    nvm_default="$(cat "$HOME/.nvm/alias/default" 2>/dev/null)"
+    if [ -n "$nvm_default" ] && [ -f "$HOME/.nvm/alias/$nvm_default" ]; then
+      nvm_default="$(cat "$HOME/.nvm/alias/$nvm_default" 2>/dev/null)"
+    fi
+    [ -n "$nvm_default" ] && candidates+=("$HOME/.nvm/versions/node/${nvm_default}/bin")
+  fi
+  # 설치된 최신 nvm 버전 → homebrew → 시스템 순
+  if [ -d "$HOME/.nvm/versions/node" ]; then
+    candidates+=("$HOME/.nvm/versions/node/$(ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | sort -V | tail -1)/bin")
+  fi
+  candidates+=(/opt/homebrew/bin /usr/local/bin /usr/bin)
+
+  local dir
+  for dir in "${candidates[@]}"; do
+    if [ -x "${dir}/node" ]; then
+      export PATH="${dir}:${PATH}"
+      return 0
+    fi
+  done
+
+  echo "❌ node 를 찾을 수 없습니다. nvm/homebrew 설치를 확인하세요." >&2
+  return 1
+}
+
+ensure_node_on_path || true
 AUTONOMY_FILE="${BARROTUBE_HOME}/config/autonomy-pause.json"
 BUDGET_FILE="${BARROTUBE_HOME}/config/budget-policy.json"
 USAGE_FILE="${BARROTUBE_HOME}/logs/budget/usage-$(date +%Y-%m).json"

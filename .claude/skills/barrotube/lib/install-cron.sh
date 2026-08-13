@@ -119,7 +119,10 @@ cmd_install() {
     prog_args_xml="    <string>/bin/bash</string>
     <string>${script_path}</string>"
   else
-    prog_args_xml="    <string>${NODE_BIN}</string>
+    # node 스크립트는 run-node.sh 로 감싼다 — node 경로 해석을 실행 시점으로 미뤄
+    # nvm 버전이 올라가도 plist 재설치 없이 계속 돌게 한다.
+    prog_args_xml="    <string>/bin/bash</string>
+    <string>${BARROTUBE_HOME}/lib/run-node.sh</string>
     <string>${script_path}</string>"
   fi
   for arg in $extra_args; do

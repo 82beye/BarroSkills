@@ -279,3 +279,28 @@ test('a weekday-ranged install produces one calendar entry per day', () => {
     rmSync(out, { recursive: true, force: true });
   }
 });
+
+test('cron scripts resolve node at runtime, not from a baked-in nvm path', () => {
+  // launchd 는 PATH 가 비어 있고, install-cron.sh 가 박아 넣은 절대경로는
+  // nvm 버전이 올라가는 순간 죽는다 (v24.11.1 → v26 이면 끝).
+  const guards = readFileSync(join(ROOT, 'lib', 'guards.sh'), 'utf8');
+  assert.match(guards, /ensure_node_on_path/, 'guards must resolve node itself');
+  assert.match(guards, /nvm\/alias\/default/, 'must follow the nvm default alias');
+  assert.match(guards, /opt\/homebrew\/bin/, 'must fall back beyond nvm');
+
+  // node 스크립트는 래퍼를 거쳐야 같은 보정을 받는다
+  const install = readFileSync(INSTALL, 'utf8');
+  assert.match(install, /run-node\.sh/, 'node scripts must go through the wrapper');
+  assert.doesNotMatch(install, /<string>\$\{NODE_BIN\}<\/string>\s*\n\s*<string>\$\{script_path\}/,
+    'a baked node path must not be the direct executable');
+});
+
+test('the pipeline survives a bare launchd PATH', () => {
+  const r = spawnSync('bash', [join(ROOT, 'lib', 'competitor-pipeline.sh')], {
+    encoding: 'utf8', timeout: 120_000,
+    env: { HOME: process.env.HOME, PATH: '/usr/bin:/bin', DRY_RUN: '1' },
+  });
+  assert.equal(r.status, 0, `must exit 0 under a bare PATH: ${r.stderr}`);
+  assert.match(r.stdout, /경쟁 인텔 루틴/);
+  assert.doesNotMatch(r.stdout + r.stderr, /node: command not found|node 를 찾을 수 없습니다/);
+});
