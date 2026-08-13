@@ -33,6 +33,7 @@ const FORMAT_TO_PLATFORM = {
   'long': 'long',
   'shorts': 'shorts',
   'shorts-60s': 'shorts',
+  'shorts-3min': 'shorts',
   'tiktok': 'tiktok',
   'reels': 'reels',
 };

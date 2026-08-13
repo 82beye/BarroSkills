@@ -87,6 +87,7 @@ const TRADEMARK_HIGH_SENSITIVITY_PATTERNS = [
 
 const FORMAT_SCENE_CAPS = {
   shorts: 2,
+  'shorts-3min': 3,
   'long-3min': 3,
 };
 

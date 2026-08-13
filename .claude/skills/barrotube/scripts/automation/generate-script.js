@@ -34,6 +34,7 @@ import {
   resolveFiguresForBrief,
   buildAllowlistContextBlock,
 } from './lib/public-figures.js';
+import { formatToPlatform } from './paths.js';
 import { TEMPLATE, BOUNDS, KNOWN_PALETTES, CANONICAL_TAIL, MASCOT_CLAUSE } from './lib/image-prompt-contract.js';
 
 const DEFAULT_MODEL = process.env.GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
@@ -49,6 +50,16 @@ const FORMAT_SPECS = {
     mid_hook: false,
     style_guide_filename: 'style-guide-shorts.md',
     voice_tone_note: '긴장·경고 톤 허용 (사실 기반 내에서). "놓치면 손해" 류 Hook OK.',
+  },
+  'shorts-3min': {
+    scene_count: 7,
+    target_total_seconds: 172,
+    scene_chars_range: '90~180 Korean chars per scene (scene별 15~30s, 전체 약 1000자)',
+    aspect: 'vertical 9:16',
+    scene_roles: '001=hook(15s), 002=Korea day-one(25s), 003=Korea day-two(27s), 004=mid-hook/global bridge(24s), 005=global cause chain(28s), 006=US watchlist(30s), 007=scenario wrap+CTA(23s)',
+    mid_hook: true,
+    style_guide_filename: 'style-guide-shorts.md',
+    voice_tone_note: '분석적·신뢰 톤. 하루 수치를 나열하지 말고 이틀 수급과 국제 변수의 인과를 설명한다. 공포·확정 예측 금지.',
   },
   'long-3min': {
     scene_count: 7,
@@ -319,13 +330,15 @@ async function main() {
   const platformOverride = values.platform === 'shorts' ? 'shorts'
                          : values.platform === 'long' ? 'long-3min'
                          : null;
-  const format = platformOverride || fm.format || 'shorts';
+  const format = platformOverride && fm.format && formatToPlatform(fm.format) === values.platform
+    ? fm.format
+    : (platformOverride || fm.format || 'shorts');
   if (!FORMAT_SPECS[format]) {
     console.error(`❌ Unknown format: ${format}. Supported: ${Object.keys(FORMAT_SPECS).join(', ')}`);
     process.exit(1);
   }
   // brief.format과 --platform이 충돌하면 경고 (브리프를 신뢰할 수 없는 경우 방어선)
-  if (platformOverride && fm.format && fm.format !== platformOverride) {
+  if (platformOverride && fm.format && formatToPlatform(fm.format) !== values.platform) {
     console.warn(`⚠️  --platform=${values.platform} (format=${platformOverride}) overrides brief.format=${fm.format}`);
   }
   const spec = FORMAT_SPECS[format];
@@ -412,7 +425,7 @@ async function main() {
   // Long-form is ~3x content of shorts — needs much larger token budget.
   // Shorts 5000 → 8000 (2026-05-14): 시사·해설 EP에서 길어진 brief+refs로 응답이 잘리는 사례
   // (EP-2026-0050) 대응. 일반 shorts는 보통 1.5~2k token 출력이라 비용 영향 없음.
-  const maxTokens = format === 'long-3min' ? 12000 : 8000;
+  const maxTokens = format.endsWith('3min') ? 12000 : 8000;
   const rawJson = await callGemini(systemPrompt, userPrompt, values.model, maxTokens);
 
   let parsed;
