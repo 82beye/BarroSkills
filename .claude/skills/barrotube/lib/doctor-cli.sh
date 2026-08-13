@@ -22,6 +22,10 @@ mkdir -p "${BARROSKILLS_HOME}/logs/audit"
 
 # 결과 누적
 RESULTS=()
+# guards.sh — notify_telegram 과 ensure_node_on_path 를 쓴다
+# shellcheck source=./guards.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/guards.sh"
+
 add_result() {
   local key="$1"; local status="$2"; local detail="$3"
   RESULTS+=("\"${key}\": {\"status\": \"${status}\", \"detail\": \"${detail}\"}")
@@ -128,8 +132,19 @@ done
 echo ""
 echo "Audit logged: $AUDIT_LOG"
 
-# RED가 하나라도 있으면 exit 1 (cron에서 알람 트리거 가능)
+# RED 는 조용히 지나가면 안 된다.
+# doctor 의 존재 이유가 "silent failure 탐지" 인데, 결과가 로그 파일에만 남으면
+# 아무도 안 본다 — 2026-08-13 까지 알림 경로가 아예 없었다.
 if echo "$RESULT_JSON" | grep -q '"status": "RED"'; then
+  RED_LIST=$(printf '%s' "$RESULT_JSON" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)['checks']
+print('\n'.join(f'• {k}: {v[\"detail\"]}' for k,v in d.items() if v['status']=='RED'))
+" 2>/dev/null)
+  notify_telegram "🩺 <b>doctor RED</b>
+${RED_LIST}
+
+<code>bash ${BARROTUBE_HOME}/lib/doctor-cli.sh</code>"
   exit 1
 fi
 exit 0
