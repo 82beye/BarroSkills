@@ -131,3 +131,176 @@ test('market snapshot resolves weekends and exchange holidays without a calendar
     { symbol: 'KOSDAQ', traded_at: '2026-08-14T18:59:00+09:00' },
   ], ['KOSPI', 'KOSDAQ']).content_mode, 'closed_market_issue');
 });
+
+test('competitor intel runs before research and never blocks the pipeline', () => {
+  const source = readFileSync(AUTO, 'utf8');
+
+  // Phase 1 catch-up: 수집 → 분석 → (이후) 리서치 순서
+  const fetchIdx = source.indexOf('fetch-competitor-stats.js');
+  const analyzeIdx = source.indexOf('analyze-competitors.js');
+  const researchIdx = source.indexOf('research-brief.js');
+  assert.ok(fetchIdx >= 0, 'auto-pipeline must reference the competitor fetcher');
+  assert.ok(fetchIdx < analyzeIdx, 'fetch must precede analyze');
+  assert.ok(analyzeIdx < researchIdx, 'intel must land before research consumes it');
+
+  // fail-soft: 경쟁 블록 안에는 fail_with_alert 가 없어야 한다.
+  // 인텔은 EP 생산의 보조 입력이지 선행 조건이 아니다.
+  // (앞뒤 단계는 fail-closed 라 블록 경계를 정확히 잘라야 한다)
+  // COMPETITOR_SCAN 은 로그 줄에도 등장하므로 fetch 지점에서 역방향으로 if 문을 찾는다
+  const scanStart = source.lastIndexOf('if [ "$COMPETITOR_SCAN"', fetchIdx);
+  const scanEnd = source.indexOf('Phase 2', fetchIdx);
+  assert.ok(scanStart >= 0 && scanEnd > scanStart, 'competitor scan block must be locatable');
+  assert.doesNotMatch(source.slice(scanStart, scanEnd), /fail_with_alert/,
+    'intel failure must not halt the pipeline');
+
+  // 05:20 정기 스캔 산출물이 있으면 재사용해 쿼터를 이중 지출하지 않는다
+  assert.match(source, /analysis-\$\{TODAY\}\.json/);
+  assert.match(source, /경쟁 인텔 재사용/);
+});
+
+test('competitor-scan routine is installable and runs fail-soft', () => {
+  const install = readFileSync(INSTALL, 'utf8');
+  assert.match(install, /^\s*competitor-scan\)$/m, 'install-cron must know the routine');
+  assert.match(install, /competitor-pipeline\.sh/);
+  assert.match(install, /사용 가능:.*competitor-scan/, 'usage text must list it');
+
+  const pipeline = join(ROOT, 'lib', 'competitor-pipeline.sh');
+  const syntax = spawnSync('bash', ['-n', pipeline], { encoding: 'utf8' });
+  assert.equal(syntax.status, 0, syntax.stderr);
+
+  const src = readFileSync(pipeline, 'utf8');
+  assert.match(src, /exit 0\s*$/m, 'pipeline must end with a hard exit 0');
+  // 관측(수집·분석)은 autonomy-pause 와 무관하게 돈다 — 게이트는 핸드오프에만 있다
+  assert.doesNotMatch(src, /^\s*guard_master_switch \|\| exit 0/m,
+    'collection must not be gated by the publish pause; the gate belongs in intel-handoff.js');
+});
+
+test('intel handoff gates on autonomy-pause and stays off the Paperclip API', () => {
+  const handoff = join(ROOT, 'scripts', 'automation', 'intel-handoff.js');
+  const src = readFileSync(handoff, 'utf8');
+  assert.match(src, /autonomy-pause\.json/, 'handoff must read the pause switch');
+  assert.match(src, /queue\.jsonl/, 'handoff must record idempotency keys');
+  assert.match(src, /status:\s*'planned'|planned/, 'series must land as planned, never auto-produced');
+});
+
+test('new competitor scripts never leak the Paperclip control-plane URL', () => {
+  // doctor-cli.sh 가 격리 밖의 localhost:3100 을 YELLOW 로 판정한다.
+  for (const f of ['analyze-competitors.js', 'intel-handoff.js', 'fetch-competitor-stats.js',
+                   'resolve-competitor-channels.js', 'lib/competitor-analytics.js']) {
+    const src = readFileSync(join(ROOT, 'scripts', 'automation', f), 'utf8');
+    assert.doesNotMatch(src, /(localhost|127\.0\.0\.1):3100/, `${f} leaks the Paperclip API`);
+  }
+});
+
+test('research-brief consumes competitor intel and records what it used', () => {
+  const src = readFileSync(RESEARCH, 'utf8');
+  assert.match(src, /경쟁 인텔 분석/, 'analysis file must be a declared input');
+  assert.match(src, /content_gaps/, 'prompt must direct the model at the gaps');
+  assert.match(src, /competitor_gap_used/, 'topic json must record the gap it acted on');
+  assert.match(src, /avoided_duplicates/);
+  assert.match(src, /competitor_intel_at/);
+});
+
+test('install-cron supports multiple daily times via a StartCalendarInterval array', () => {
+  // launchd 는 dict 배열도 받는다. 인자가 같은 루틴은 라벨을 나눌 필요가 없다.
+  const src = readFileSync(INSTALL, 'utf8');
+  assert.match(src, /StartCalendarInterval<\/key>\s*\n\s*<array>/,
+    'array form must be generated for comma-separated times');
+  assert.match(src, /time_display/, 'the original spec must survive for output');
+  assert.doesNotMatch(src, /schedule: \$time_spec/,
+    'the __multi__ sentinel must never reach the operator');
+});
+
+test('competitor-scan runs twice daily, ahead of both briefing slots', () => {
+  const policy = JSON.parse(readFileSync(join(ROOT, 'config', 'competitor-channels.json'), 'utf8'));
+  const times = policy.tracking?.scan_times_kst ?? [];
+  assert.deepEqual(times, ['05:20', '15:20'], 'one scan before each slot');
+
+  const routines = JSON.parse(readFileSync(ROUTINES, 'utf8'));
+  const slots = routines.routines ?? routines.slots ?? {};
+  for (const [slot, cfg] of Object.entries(slots)) {
+    const publishHour = parseInt(String(cfg.publish_at ?? '').slice(0, 2), 10);
+    if (!Number.isFinite(publishHour)) continue;
+    // 각 슬롯보다 앞선 스캔이 하나는 있어야 인텔이 그날 리서치에 닿는다
+    const cronHour = slot === 'us-close' ? 6 : 16;
+    assert.ok(times.some((t) => parseInt(t.slice(0, 2), 10) < cronHour),
+      `no scan precedes ${slot} (cron ${cronHour}:00)`);
+  }
+});
+
+test('quota target accounts for the twice-daily cadence', () => {
+  const metrics = readFileSync(join(ROOT, 'scripts', 'automation', 'intel-metrics.js'), 'utf8');
+  const m = /quota_per_day:\s*\{\s*max:\s*(\d+)/.exec(metrics);
+  assert.ok(m, 'quota target must be declared');
+  const target = Number(m[1]);
+  const policy = JSON.parse(readFileSync(join(ROOT, 'config', 'competitor-channels.json'), 'utf8'));
+  const channels = (policy.channels ?? []).filter((c) => c.active !== false).length;
+  const perDay = channels * 3 * (policy.tracking?.scan_times_kst?.length ?? 1);
+  assert.ok(target >= perDay,
+    `target ${target} must cover the routine cost ${perDay} (${channels}ch × 3u × ${policy.tracking.scan_times_kst.length} scans)`);
+  assert.ok(perDay < policy.quota.daily_cap_units, 'routine cost must stay under the self-imposed cap');
+});
+
+test('publishing cadence is 2 on weekdays and 1 on weekends', () => {
+  const routines = JSON.parse(readFileSync(ROUTINES, 'utf8'));
+  assert.deepEqual(
+    { weekday: routines.publishing_cadence?.weekday, weekend: routines.publishing_cadence?.weekend },
+    { weekday: 2, weekend: 1 });
+
+  // us-close 는 매일 (토=금요일 미국장, 일=sunday_preopen)
+  assert.equal(routines.slots['us-close'].cron, '06:00');
+  // kr-close 는 평일만 — 토요일 16:00 은 이미 하루 지난 금요일 종가라 새 정보가 없다
+  assert.equal(routines.slots['kr-close'].cron, 'Mon-Fri 16:00');
+});
+
+test('install-cron expands a weekday range without bash 4 associative arrays', () => {
+  // macOS 기본 bash 는 3.2 다. declare -A 를 쓰면 조용히 분기를 건너뛴다 (실측).
+  const src = readFileSync(INSTALL, 'utf8');
+  assert.match(src, /weekday_index\(\)/, 'range mapping must use a case-based helper');
+  assert.doesNotMatch(src, /local -A |declare -A /, 'bash 3.2 has no associative arrays');
+  assert.match(src, /Mon\|Tue\|Wed\|Thu\|Fri\|Sat\|Sun\)-\(/, 'range form must be parsed');
+});
+
+test('a weekday-ranged install produces one calendar entry per day', () => {
+  const out = mkdtempSync(join(tmpdir(), 'bt-cron-'));
+  try {
+    const r = spawnSync('bash', [INSTALL, 'install', 'kr-close', 'Mon-Fri 16:00'], {
+      cwd: ROOT, encoding: 'utf8', timeout: 60_000,
+      env: { ...process.env, DRY_RUN: '1', HOME: out },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    const plist = readFileSync(
+      join(out, 'Library', 'LaunchAgents', 'com.barroskills.barrotube.kr-close.plist'), 'utf8');
+    assert.match(plist, /<array>/, 'must emit an array, not a single dict');
+    const weekdays = [...plist.matchAll(/<key>Weekday<\/key>\s*<integer>(\d)<\/integer>/g)].map((m) => m[1]);
+    assert.deepEqual(weekdays, ['1', '2', '3', '4', '5'], 'Mon..Fri');
+    assert.doesNotMatch(plist, /__multi__/, 'the sentinel must not leak into the plist');
+  } finally {
+    rmSync(out, { recursive: true, force: true });
+  }
+});
+
+test('cron scripts resolve node at runtime, not from a baked-in nvm path', () => {
+  // launchd 는 PATH 가 비어 있고, install-cron.sh 가 박아 넣은 절대경로는
+  // nvm 버전이 올라가는 순간 죽는다 (v24.11.1 → v26 이면 끝).
+  const guards = readFileSync(join(ROOT, 'lib', 'guards.sh'), 'utf8');
+  assert.match(guards, /ensure_node_on_path/, 'guards must resolve node itself');
+  assert.match(guards, /nvm\/alias\/default/, 'must follow the nvm default alias');
+  assert.match(guards, /opt\/homebrew\/bin/, 'must fall back beyond nvm');
+
+  // node 스크립트는 래퍼를 거쳐야 같은 보정을 받는다
+  const install = readFileSync(INSTALL, 'utf8');
+  assert.match(install, /run-node\.sh/, 'node scripts must go through the wrapper');
+  assert.doesNotMatch(install, /<string>\$\{NODE_BIN\}<\/string>\s*\n\s*<string>\$\{script_path\}/,
+    'a baked node path must not be the direct executable');
+});
+
+test('the pipeline survives a bare launchd PATH', () => {
+  const r = spawnSync('bash', [join(ROOT, 'lib', 'competitor-pipeline.sh')], {
+    encoding: 'utf8', timeout: 120_000,
+    env: { HOME: process.env.HOME, PATH: '/usr/bin:/bin', DRY_RUN: '1' },
+  });
+  assert.equal(r.status, 0, `must exit 0 under a bare PATH: ${r.stderr}`);
+  assert.match(r.stdout, /경쟁 인텔 루틴/);
+  assert.doesNotMatch(r.stdout + r.stderr, /node: command not found|node 를 찾을 수 없습니다/);
+});

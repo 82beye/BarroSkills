@@ -21,6 +21,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   statSync,
@@ -29,6 +30,7 @@ import {
 } from 'node:fs';
 import { createServer } from 'node:http';
 import { basename, dirname, extname, join, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
@@ -51,8 +53,8 @@ const REPO_ROOT = resolve(SKILL_ROOT, '../../..');
 const AUTOMATION_ROOT = join(SKILL_ROOT, 'scripts', 'automation');
 const MEDIA_RENDER_ROOT = resolve(SKILL_ROOT, '../barrotube-media-render');
 const MEDIA_RENDER_SCRIPTS = join(MEDIA_RENDER_ROOT, 'scripts');
-const DEFAULT_DATA_ROOT = resolve(process.env.BARROTUBE_DATA || '/Users/beye/BarroTubeData');
-const DEFAULT_FACTORY_ROOT = resolve(process.env.BARRO_AI_FACTORY || '/Users/beye/BarroAiFactory');
+const DEFAULT_DATA_ROOT = resolve(process.env.BARROTUBE_DATA || join(homedir(), 'BarroTubeData'));
+const DEFAULT_FACTORY_ROOT = resolve(process.env.BARRO_AI_FACTORY || join(homedir(), 'BarroAiFactory'));
 const DEFAULT_CHANNELS_ROOT = join(DEFAULT_DATA_ROOT, 'workspace', 'channels');
 const BODY_LIMIT = 1024 * 1024;
 const OUTPUT_LIMIT = 2 * 1024 * 1024;
@@ -932,10 +934,74 @@ function decodeSegments(pathname) {
   catch { throw new HttpError(400, 'URL 인코딩이 올바르지 않습니다.', 'INVALID_URL'); }
 }
 
+/**
+ * 경쟁 인텔 분석 요약. 파일이 없으면 404 가 아니라 200 {available:false} 를 준다
+ * — 아직 수집 전인 상태는 오류가 아니고, 보드 패널이 죽으면 안 되기 때문.
+ *
+ * date 는 반드시 정규식으로 검증한 뒤에만 경로 조립에 넣는다 (경로 주입 차단).
+ */
+export function readIntelSummary(intelRoot, date) {
+  if (date != null && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new HttpError(400, '날짜 형식이 올바르지 않습니다 (YYYY-MM-DD).', 'INVALID_DATE');
+  }
+
+  let file;
+  if (date) {
+    file = join(intelRoot, `analysis-${date}.json`);
+  } else {
+    let names = [];
+    try {
+      names = readdirSync(intelRoot).filter((f) => /^analysis-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort();
+    } catch { names = []; }
+    const newest = names.at(-1);
+    if (!newest) return { available: false, reason: 'no analysis files yet' };
+    file = join(intelRoot, newest);
+  }
+
+  if (!existsSync(file)) return { available: false, reason: `no analysis for ${date}` };
+
+  let a;
+  try { a = JSON.parse(readFileSync(file, 'utf-8')); }
+  catch (e) { return { available: false, reason: `unreadable analysis: ${e.message}` }; }
+
+  return {
+    available: true,
+    date: a.date,
+    generated_at: a.generated_at,
+    degraded: a.degraded ?? null,
+    channel_count: a.channel_count ?? 0,
+    channels: (a.channel_summary ?? []).map((c) => ({
+      name: c.name,
+      subscribers: c.subscribers,
+      subscriber_delta_7d: c.subscriber_delta_7d,
+      uploads_7d: c.uploads_7d,
+      median_vpd_30d: c.median_vpd_30d,
+    })),
+    content_gaps: (a.content_gaps ?? []).slice(0, 12).map((g) => ({
+      term: g.term, gap_score: g.gap_score, comp_df: g.comp_df,
+      comp_views: g.comp_views, evidence: g.evidence,
+    })),
+    outliers: (a.outliers ?? []).slice(0, 8).map((o) => ({
+      videoId: o.videoId, title: o.title, channel: o.channel,
+      multiple: o.multiple, views: o.views, thumbnail: o.thumbnail,
+      length_bucket: o.length_bucket,
+    })),
+    blue_ocean: (a.blue_ocean_keywords ?? []).slice(0, 10).map((b) => ({
+      keyword: b.keyword, score: b.score, competition: b.competition,
+    })),
+    title_features: a.patterns?.title_features ?? [],
+    length_recommendation: a.patterns?.length?.recommendation ?? null,
+    best_hours: a.patterns?.upload_hour_kst?.best_hours ?? [],
+    slot_alignment: a.patterns?.slot_alignment ?? {},
+  };
+}
+
 export function createBoardServer(options = {}) {
   const port = Number(options.port ?? 8933);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`Invalid port: ${options.port}`);
   const token = options.token || randomBytes(32).toString('base64url');
+  const intelRoot = options.intelRoot
+    || join(BOARD_DIR, '..', '..', 'workspace', 'intel', 'competitors');
   const registry = options.registry || createChannelRegistry(registryOptions(options.registryOptions));
   const executeAction = typeof options.executeAction === 'function' ? options.executeAction : executeActionSpec;
 
@@ -958,6 +1024,13 @@ export function createBoardServer(options = {}) {
       }
 
       if (segments[0] !== 'api') throw new HttpError(404, 'not found', 'NOT_FOUND');
+
+      // 경쟁 인텔 요약. GET 이라 mutation token 이 필요 없고,
+      // loopback bind + Host/Origin 검사는 위에서 이미 적용됐다.
+      if (req.method === 'GET' && segments.length === 3
+          && segments[1] === 'intel' && segments[2] === 'competitors') {
+        return json(res, 200, readIntelSummary(intelRoot, url.searchParams.get('date')));
+      }
 
       if (req.method === 'GET' && segments.length === 2 && segments[1] === 'channels') {
         const records = await registry.listChannels();

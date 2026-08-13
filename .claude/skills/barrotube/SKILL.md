@@ -368,7 +368,7 @@ $BARROTUBE_HOME/scripts/automation/channel-migrate.js          # federated regis
 $BARROTUBE_HOME/scripts/automation/render-channel-document.js  # read-only HTML snapshot
 
 # 격리 (사용 안 함, 참고용)
-$BARROTUBE_HOME/scripts/automation/_legacy_paperclip/         # 9개 Paperclip 의존
+$BARROTUBE_HOME/scripts/automation/_legacy_paperclip/         # 10개 Paperclip 의존
 
 # 17 에이전트 (전역)
 ~/.claude/agents/barrotube-ceo.md ~ barrotube-producer-shorts.md

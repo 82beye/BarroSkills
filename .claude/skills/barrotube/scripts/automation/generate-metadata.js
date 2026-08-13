@@ -23,11 +23,16 @@ import {
 } from './lib/public-figures.js';
 import { recordCost } from './lib/cost-tracker.js';
 
+// 스킬 루트 기준 경로. resolve('config/…') 는 CWD 의존이라
+// launchd 처럼 CWD 가 다른 실행 환경에서 조용히 깨진다.
+const SKILL_ROOT = resolve(import.meta.dirname, '../..');
+const SERIES_CONFIG = join(SKILL_ROOT, 'config', 'series.json');
+
 const DEFAULT_MODEL = process.env.GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
 
 function buildSystemPrompt(format, seriesInfo, publicFiguresInfo = null) {
-  const isShorts = format === 'shorts';
-  const formatLabel = isShorts ? 'YouTube Shorts (60초)' : 'YouTube 롱폼 (3분 시리즈)';
+  const isShorts = format.startsWith('shorts');
+  const formatLabel = isShorts ? `YouTube Shorts (${format === 'shorts-3min' ? '3분' : '60초'})` : 'YouTube 롱폼 (3분 시리즈)';
   // 시리즈 표시명: seriesInfo.series_name (series.json에서 동적 로드) 또는 series_id 자체.
   // 이전 코드는 sp500을 hardcode해서 다른 시리즈에도 sp500 라벨이 박혔음 — 이를 동적으로 교체.
   const seriesName = seriesInfo?.series_name || seriesInfo?.series_id || '';
@@ -198,7 +203,7 @@ async function main() {
   let seriesName = null, thumbnailSpec = null;
   if (fm.series_id) {
     try {
-      const cfg = JSON.parse(readFileSync(resolve('paperclip/config/series.json'), 'utf-8'));
+      const cfg = JSON.parse(readFileSync(SERIES_CONFIG, 'utf-8'));
       const s = (cfg.series || []).find(x => x.id === fm.series_id);
       seriesName = s?.name || null;
       thumbnailSpec = s?.thumbnail_specs?.find(t => t.episode === fm.series_episode) || null;
@@ -255,11 +260,11 @@ async function main() {
     '',
     refs ? `[NEWS REFERENCES]\n${refs}\n` : '',
     `[TASK]`,
-    `위 에피소드의 YouTube${format === 'shorts' ? '/TikTok/Reels' : ''} 배포 메타데이터를 JSON으로 작성하라.`,
+    `위 에피소드의 YouTube${format.startsWith('shorts') ? '/TikTok/Reels' : ''} 배포 메타데이터를 JSON으로 작성하라.`,
   ].filter(Boolean).join('\n');
 
   // Long-form needs more tokens (description is longer + series context)
-  const maxTokens = format === 'long-3min' ? 8000 : 4000;
+  const maxTokens = format.endsWith('3min') ? 8000 : 4000;
   const raw = await callGemini(systemPrompt, userPrompt, DEFAULT_MODEL, maxTokens, {
     episode: fm.episode_id,
     stage: 'S9',
@@ -324,7 +329,7 @@ async function main() {
   }
 
   // Enforce format-aligned shortsTag (Gemini sometimes ignores)
-  if (format === 'long-3min') meta.shortsTag = false;
+  meta.shortsTag = format.startsWith('shorts');
 
   // 회귀 가드 (2026-04-27): long-3min EP에 Shorts/60초경제 태그·해시태그가 새어들어가는 사고 방지.
   // EP-2026-0028 사례: Gemini가 description 해시태그 블록에, seo-enhance.js가 tags 풀에 'Shorts'/'60초경제'를 추가해

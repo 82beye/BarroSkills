@@ -9,6 +9,7 @@
 
 import { existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { execSync } from 'node:child_process';
 import { getSecret, validateSecrets } from './config-loader.js';
 
@@ -50,10 +51,7 @@ function main() {
   // 2. 디렉터리 구조
   check('Directory structure', () => {
     const required = [
-      'paperclip/config',
-      'paperclip/seeds',
-      'paperclip/extensions',
-      'claude-code/.claude/agents',
+      'config',
       'workspace/channels',
       'workspace/episodes',
       'tools/capcut-builder',
@@ -74,22 +72,28 @@ function main() {
   });
 
   // 3. 에이전트 프롬프트 파일
-  check('Agent prompts (13 files)', () => {
-    const agentsDir = join(ROOT, 'claude-code/.claude/agents');
-    const files = readdirSync(agentsDir).filter(f => f.endsWith('.md'));
-    console.log(`   Found: ${files.length} agent prompts`);
+  // 에이전트는 스킬 트리가 아니라 사용자 레벨 ~/.claude/agents/ 에 산다.
+  // (구 검사는 존재하지 않는 claude-code/.claude/agents 를 보고 항상 실패했다)
+  check('Agent prompts (barrotube-*)', () => {
+    const agentsDir = join(homedir(), '.claude', 'agents');
+    if (!existsSync(agentsDir)) {
+      console.log(`   ❌ Missing: ${agentsDir}`);
+      return false;
+    }
+    const files = readdirSync(agentsDir).filter((f) => f.startsWith('barrotube-') && f.endsWith('.md'));
+    console.log(`   Found: ${files.length} barrotube agent prompts`);
     return files.length >= 13;
   });
 
   // 4. 설정 파일
   check('Configuration files', () => {
     const configs = [
-      'paperclip/config/company.json',
-      'paperclip/config/budget-policy.json',
-      'paperclip/config/governance.json',
-      'paperclip/config/domain-whitelist.json',
-      'paperclip/config/llm-fallback.json',
-      'paperclip/config/notifications.json',
+      'config/company.json',       // governance 절이 여기 통합돼 있다 (별도 governance.json 없음)
+      'config/budget-policy.json',
+      'config/domain-whitelist.json',
+      'config/llm-fallback.json',
+      'config/notifications.json',
+      'config/competitor-channels.json',
     ];
 
     let allExist = true;

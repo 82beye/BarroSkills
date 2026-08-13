@@ -15,11 +15,14 @@
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { homedir } from 'node:os';
 import { parse as parseYAML } from 'yaml';
 import { getSecret } from './config-loader.js';
 
 const MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image-preview';
-const DEFAULT_SHEET = '/Users/beye/BarroTubeData/workspace/docs/바로경제_캐릭터시트.png';
+const DEFAULT_SHEET = process.env.BARROTUBE_CHARACTER_SHEET
+  || join(process.env.BARROTUBE_DATA || join(homedir(), 'BarroTubeData'),
+          'workspace', 'docs', '바로경제_캐릭터시트.png');
 
 // ChatGPT 경로에서 검증된 헤더. 캐릭터는 시트가 정의하고, 프롬프트는 씬만 기술한다.
 const HEADER =

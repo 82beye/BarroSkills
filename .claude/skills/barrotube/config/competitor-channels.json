@@ -1,35 +1,154 @@
 {
-  "version": "2.0",
-  "description": "경쟁사 채널 동적 추출 정책 (v2.0, 2026-05-01). 정적 채널 목록을 두지 않고 Marketing Analyst가 PaperClip에 작성한 마케팅 리포트(workspace/intel/marketing/*.json)에서 자동 추출. 채널명 → YouTube UC ID는 search.list로 자동 해석 후 cache. v1.0 정적 channels[] 목록은 제거됨.",
-  "extraction": {
-    "source_dir": "workspace/intel/marketing",
-    "max_reports": 3,
-    "max_age_days": 30,
-    "channel_name_patterns": [
-      { "type": "h3_section", "regex": "^###\\s*채널\\s*\\d+\\s*:\\s*([^\\n(]+?)\\s*(?:\\(|$)", "comment": "예: ### 채널 1: 슈카월드 (대표 벤치마크)" },
-      { "type": "h2_section", "regex": "^##\\s*채널\\s*\\d+\\s*:\\s*([^\\n(]+?)\\s*(?:\\(|$)" },
-      { "type": "table_row", "regex": "^\\|\\s*\\d+\\s*\\|\\s*([^|]+?)\\s*\\|", "comment": "예: | 1 | 슈카월드 | 360만 |" }
-    ],
-    "exclude_names": ["채널명", "구독자", "비고", "BarroTube"],
-    "min_name_length": 2,
-    "max_name_length": 30
-  },
+  "version": "3.0",
+  "description": "경쟁 채널 정본 목록 (v3.0, 2026-08-13). v2.0의 마케팅 리포트 동적 추출을 주 경로에서 제거 — 리포트가 max_age_days(30일)를 넘겨 만료되면 채널 목록이 빈 배열이 되어 2026-05-24 이후 80일간 무음 실패했다. 이제 운영자가 아래 channels[] 를 직접 편집한다. v2.0 추출기는 discovery 블록으로 강등되어 신규 채널 '제안'에만 쓰인다.",
+  "channels": [
+    {
+      "id": "futuresnow",
+      "name": "오선의 미국증시 라이브",
+      "handle": "@futuresnow",
+      "channelId": "UC_JJ_NhRqPKcIOj5Ko3W_3w",
+      "tier": "core",
+      "active": true,
+      "competes_with": [
+        "us-close"
+      ],
+      "note": "us-close 직접 경쟁 — 평일 22:00~06:00 KST 라이브, 3개월 후 비공개 전환 운영"
+    },
+    {
+      "id": "3protv",
+      "name": "삼프로TV 3PROTV",
+      "handle": "@3protv",
+      "channelId": "UChlv4GSd7OQl3js-jkLOnFA",
+      "tier": "core",
+      "active": true,
+      "competes_with": [
+        "us-close",
+        "kr-close"
+      ],
+      "note": "종합 벤치마크"
+    },
+    {
+      "id": "syukaworld",
+      "name": "슈카월드",
+      "handle": "@syukaworld",
+      "channelId": "UCsJ6RuBiTVWRX156FVbeaGg",
+      "tier": "core",
+      "active": true,
+      "competes_with": [
+        "kr-close"
+      ],
+      "note": "제목 후킹 레퍼런스"
+    },
+    {
+      "id": "sosumonkey",
+      "name": "소수몽키",
+      "handle": "@sosumonkey",
+      "channelId": "UCC3yfxS5qC6PCwDzetUuEWg",
+      "tier": "core",
+      "active": true,
+      "competes_with": [
+        "us-close"
+      ],
+      "note": "미국주식 개인투자자 앵글"
+    },
+    {
+      "id": "taver",
+      "name": "설명왕_테이버",
+      "handle": "@테이버",
+      "channelId": "UCOio3vyYLWiKlHSYRKW-9UA",
+      "tier": "core",
+      "active": true,
+      "competes_with": [
+        "us-close",
+        "kr-close"
+      ],
+      "note": "설명형 포맷 레퍼런스"
+    },
+    {
+      "id": "simple-watch",
+      "name": "심플한 관심종목TV",
+      "handle": "@심플관심종목TV",
+      "channelId": "UChQIBrXk5QMyJjF3Hl_5-kQ",
+      "tier": "watch",
+      "active": true,
+      "competes_with": [
+        "kr-close"
+      ],
+      "note": "2026-08-13 --resolve-handles 로 확보. API 표기는 '심플 관심종목 TV'"
+    }
+  ],
   "channel_id_resolution": {
     "cache_file": "workspace/intel/competitors/channel-id-cache.json",
-    "manual_overrides_file": "paperclip/config/competitor-channel-overrides.json",
-    "youtube_search_when_miss": true,
+    "manual_overrides_file": "config/competitor-channel-overrides.json",
+    "youtube_search_when_miss": false,
     "search_max_results": 3,
     "search_region_code": "KR",
     "search_relevance_language": "ko"
   },
   "tracking": {
-    "fields": ["subscriberCount", "videoCount", "viewCount"],
-    "recent_videos_per_channel": 10,
-    "recent_videos_window_days": 7
+    "fields": [
+      "subscriberCount",
+      "videoCount",
+      "viewCount"
+    ],
+    "uploads_page_size": 50,
+    "recent_videos_window_days": 7,
+    "recent_videos_per_channel": 50,
+    "refresh_window_days": 14,
+    "baseline_window_days": 90,
+    "stats_history_max": 30,
+    "deep_scan_pages": 4,
+    "scan_times_kst": [
+      "05:20",
+      "15:20"
+    ],
+    "scan_times_note": "두 브리핑 슬롯(us-close 06:00 / kr-close 16:00) 40분 전에 각각 돈다. 설치: bash lib/install-cron.sh install competitor-scan \"05:20,15:20\""
+  },
+  "quota": {
+    "daily_cap_units": 2000,
+    "units": {
+      "channels.list": 1,
+      "playlistItems.list": 1,
+      "videos.list": 1
+    },
+    "note": "무료 10,000/day 중 발행 경로(videos.insert 1600 + thumbnails.set 50 + playlistItems.insert 50 ≈ 1700/편)를 보호하기 위해 인텔 수집은 2000으로 자체 제한한다. 정상 운영은 채널당 3 units × 6채널 × 하루 2회 = 36, 주 1회 deep scan 54 를 더해도 일 평균 44 수준이라 이 상한에 닿지 않는다."
+  },
+  "discovery": {
+    "enabled": false,
+    "source_dir": "workspace/intel/marketing",
+    "max_reports": 3,
+    "max_age_days": 30,
+    "output": "workspace/intel/competitors/suggested-channels.json",
+    "note": "v2.0 정규식 추출기를 제안 전용으로 보존. 여기서 나온 결과는 수집 대상이 되지 않으며, 운영자가 channels[] 에 직접 옮겨야 반영된다.",
+    "channel_name_patterns": [
+      {
+        "type": "h3_section",
+        "regex": "^###\\s*채널\\s*\\d+\\s*:\\s*([^\\n(]+?)\\s*(?:\\(|$)",
+        "comment": "예: ### 채널 1: 슈카월드 (대표 벤치마크)"
+      },
+      {
+        "type": "h2_section",
+        "regex": "^##\\s*채널\\s*\\d+\\s*:\\s*([^\\n(]+?)\\s*(?:\\(|$)"
+      },
+      {
+        "type": "table_row",
+        "regex": "^\\|\\s*\\d+\\s*\\|\\s*([^|]+?)\\s*\\|",
+        "comment": "예: | 1 | 슈카월드 | 360만 |"
+      }
+    ],
+    "exclude_names": [
+      "채널명",
+      "구독자",
+      "비고",
+      "BarroTube"
+    ],
+    "min_name_length": 2,
+    "max_name_length": 30
   },
   "operator_notes": {
-    "manual_overrides": "YouTube search 결과가 잘못된 채널을 가리킬 경우(동명이인·공식 채널 vs 클립 채널 등), paperclip/config/competitor-channel-overrides.json에 {\"<채널명>\": \"UC...\"}를 추가하면 search 결과 무시하고 강제 매핑.",
-    "cache_invalidation": "채널이 이름을 바꿨거나 매핑이 잘못된 경우 channel-id-cache.json에서 해당 entry 삭제 → 다음 fetch 시 재해석.",
-    "report_format_change": "Marketing Analyst가 새로운 마크다운 형식을 사용할 경우 위 channel_name_patterns 배열에 정규식 추가."
+    "add_channel": "channels[] 에 항목 추가. channelId 를 모르면 null 로 두고 handle 만 적은 뒤 resolve-competitor-channels.js --resolve-handles 실행(1 unit).",
+    "remove_channel": "배열에서 삭제하지 말고 active:false 로 둘 것. 제거하면 과거 분석의 baseline 모집단이 깨진다.",
+    "manual_overrides": "config/competitor-channel-overrides.json 에 {\"<채널명>\": \"UC...\"} 를 넣으면 channels[].channelId 보다 우선 적용된다. 채널명이 바뀌었거나 매핑이 틀렸을 때 사용.",
+    "cache_invalidation": "channel-id-cache.json 에서 해당 entry 삭제 → 다음 실행 시 재해석."
   }
 }

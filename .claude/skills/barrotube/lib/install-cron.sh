@@ -9,13 +9,15 @@
 #
 # Routines:
 #   us-close              — 매일 06:00 KST 미국 증시 마감 브리핑 전체 파이프라인
-#   kr-close              — 매일 16:00 KST 국내 증시 마감 브리핑 전체 파이프라인
+#   kr-close              — 평일 16:00 KST 국내 증시 마감 브리핑 (주말 미실행)
+#   competitor-scan       — 매일 05:20,15:20 경쟁 인텔 수집→분석→핸드오프
 #   weekly-marketing      — 매주 월요일 09:00 마케팅 인텔리전스 fetch
 #   doctor-daily          — 매일 07:00 자동 진단 (silent failure 탐지)
 #
 # Examples:
 #   bash install-cron.sh install us-close "06:00"
-#   bash install-cron.sh install kr-close "16:00"
+#   bash install-cron.sh install kr-close "Mon-Fri 16:00"
+#   bash install-cron.sh install competitor-scan "05:20,15:20"
 #   bash install-cron.sh install weekly-marketing "Mon 09:00"
 #   bash install-cron.sh install doctor-daily "07:00"
 #   bash install-cron.sh list
@@ -30,7 +32,13 @@ BARROTUBE_HOME="${BARROTUBE_HOME:-$(dirname "$SCRIPT_DIR")}"
 BARROSKILLS_HOME="$BARROTUBE_HOME"   # 하위 호환 alias
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 LABEL_PREFIX="com.barroskills.barrotube"   # collection.skill 형식 — 다른 스킬과 충돌 회피
-NODE_BIN="$(which node || echo /Users/beye/.nvm/versions/node/v24.11.1/bin/node)"
+# node 는 런타임에도 guards.sh 의 ensure_node_on_path 가 다시 찾는다.
+# 여기 값은 plist PATH 구성용 힌트일 뿐이라 특정 버전을 박지 않는다.
+NODE_BIN="$(command -v node || true)"
+if [ -z "$NODE_BIN" ] && [ -d "$HOME/.nvm/versions/node" ]; then
+  NODE_BIN="$HOME/.nvm/versions/node/$(ls -1 "$HOME/.nvm/versions/node" | sort -V | tail -1)/bin/node"
+fi
+[ -n "$NODE_BIN" ] || NODE_BIN="/usr/bin/env node"
 
 # launchd 는 로그인 셸을 거치지 않아 PATH 가 거의 비어 있다. 설치 시점에 실제 경로를
 # 찾아 박아 넣는다 — 기존 고정 PATH 로는 claude(~/.local/bin)를 못 찾고, node 도
@@ -42,9 +50,19 @@ CODEX_BIN="$(which codex 2>/dev/null || true)"
 [ -n "$CODEX_BIN" ] && CRON_PATH="${CRON_PATH}:$(dirname "$CODEX_BIN")"
 CRON_PATH="${CRON_PATH}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
+# 요일 이름 → launchd Weekday 정수 (0=일). bash 3.2 호환을 위해 case 를 쓴다.
+weekday_index() {
+  case "$1" in
+    Sun) echo 0 ;; Mon) echo 1 ;; Tue) echo 2 ;; Wed) echo 3 ;;
+    Thu) echo 4 ;; Fri) echo 5 ;; Sat) echo 6 ;;
+    *) echo "" ;;
+  esac
+}
+
 cmd_install() {
   local routine="$1"
   local time_spec="${2:-}"
+  local time_display="${2:-}"   # __multi__ 센티널로 덮이기 전 원본 (출력용)
   local label="${LABEL_PREFIX}.${routine}"
   local plist="${LAUNCH_AGENTS_DIR}/${label}.plist"
 
@@ -55,7 +73,12 @@ cmd_install() {
   case "$routine" in
     us-close|kr-close)
       # 정기 증시 브리핑. 슬롯 정의는 config/routines.json.
-      # launchd StartCalendarInterval 이 단일 dict 라 하루 2회는 라벨을 나눠야 한다.
+      # 두 슬롯은 --slot 인자가 달라 라벨을 나눠야 한다 (배열로 합칠 수 없다).
+      #
+      # 발행 빈도 — 평일 2편 / 주말 1편:
+      #   us-close  매일 06:00   토=금요일 미국장 마감, 일=sunday_preopen
+      #   kr-close  Mon-Fri 16:00  토·일은 한국장이 없어 돌리지 않는다
+      #     bash install-cron.sh install kr-close "Mon-Fri 16:00"
       script_path="${BARROTUBE_HOME}/lib/auto-pipeline.sh"
       extra_args="--slot ${routine}"
       ;;
@@ -70,6 +93,14 @@ cmd_install() {
       script_path="${BARROSKILLS_HOME}/scripts/automation/marketing-fetch-local.js"
       extra_args="--source rss"
       ;;
+    competitor-scan)
+      # 경쟁 인텔 수집→분석→핸드오프.
+      # 두 브리핑 슬롯 40분 전에 각각 돈다 — 05:20(us-close 06:00) / 15:20(kr-close 16:00).
+      # 인자가 같은 루틴이라 StartCalendarInterval 배열 하나로 처리한다:
+      #   bash install-cron.sh install competitor-scan "05:20,15:20"
+      script_path="${BARROTUBE_HOME}/lib/competitor-pipeline.sh"
+      extra_args=""
+      ;;
     doctor-daily)
       script_path="${BARROTUBE_HOME}/lib/doctor-cli.sh"
       extra_args=""
@@ -83,7 +114,7 @@ cmd_install() {
       ;;
     *)
       echo "❌ 알 수 없는 routine: $routine" >&2
-      echo "사용 가능: us-close | kr-close | weekly-marketing | doctor-daily | telegram-bot"
+      echo "사용 가능: us-close | kr-close | competitor-scan | weekly-marketing | doctor-daily | telegram-bot"
       exit 1
       ;;
   esac
@@ -94,7 +125,10 @@ cmd_install() {
     prog_args_xml="    <string>/bin/bash</string>
     <string>${script_path}</string>"
   else
-    prog_args_xml="    <string>${NODE_BIN}</string>
+    # node 스크립트는 run-node.sh 로 감싼다 — node 경로 해석을 실행 시점으로 미뤄
+    # nvm 버전이 올라가도 plist 재설치 없이 계속 돌게 한다.
+    prog_args_xml="    <string>/bin/bash</string>
+    <string>${BARROTUBE_HOME}/lib/run-node.sh</string>
     <string>${script_path}</string>"
   fi
   for arg in $extra_args; do
@@ -111,9 +145,75 @@ cmd_install() {
     keep_alive="<key>KeepAlive</key>
   <dict><key>Crashed</key><true/></dict>"
   else
-    # Cron 형식: "HH:MM" 또는 "Mon HH:MM"
+    # Cron 형식: "HH:MM" · "Mon HH:MM" · "HH:MM,HH:MM" (하루 여러 번)
+    #
+    # launchd 의 StartCalendarInterval 은 dict 뿐 아니라 dict 배열도 받는다.
+    # 인자가 같은 루틴(competitor-scan 등)은 배열로 하루 N회를 돌릴 수 있어
+    # 라벨을 나눌 필요가 없다. 인자가 다른 us-close/kr-close 는 여전히 분리해야 한다.
     local hour minute weekday_xml=""
-    if [[ "$time_spec" =~ ^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\ ([0-9]{1,2}):([0-9]{2})$ ]]; then
+
+    # "Mon-Fri HH:MM" → 요일별 dict 배열로 펼친다.
+    # 주말에 돌 이유가 없는 루틴(kr-close 등)을 평일로 제한할 때 쓴다.
+    if [[ "$time_spec" =~ ^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)-(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\ ([0-9]{1,2}):([0-9]{2})$ ]]; then
+      local from="${BASH_REMATCH[1]}" to="${BASH_REMATCH[2]}"
+      local rh="${BASH_REMATCH[3]}" rm="${BASH_REMATCH[4]}"
+      # macOS 기본 bash 는 3.2 라 연관 배열(declare -A)을 못 쓴다 — case 로 매핑한다.
+      local fi ti
+      fi="$(weekday_index "$from")"
+      ti="$(weekday_index "$to")"
+      if (( fi > ti )); then
+        echo "❌ 요일 범위 오류: $from-$to (예: 'Mon-Fri 16:00')" >&2
+        exit 1
+      fi
+      local entries="" d
+      for (( d = fi; d <= ti; d++ )); do
+        entries="${entries}
+    <dict>
+      <key>Weekday</key>
+      <integer>${d}</integer>
+      <key>Hour</key>
+      <integer>${rh}</integer>
+      <key>Minute</key>
+      <integer>${rm}</integer>
+    </dict>"
+      done
+      schedule_xml="<key>StartCalendarInterval</key>
+  <array>${entries}
+  </array>"
+      run_at_load="false"
+      keep_alive=""
+      time_spec="__multi__"
+    fi
+
+    if [[ "$time_spec" == *,* ]]; then
+      local entries="" spec
+      IFS=',' read -ra _times <<< "$time_spec"
+      for spec in "${_times[@]}"; do
+        spec="$(echo "$spec" | tr -d '[:space:]')"
+        if [[ ! "$spec" =~ ^([0-9]{1,2}):([0-9]{2})$ ]]; then
+          echo "❌ 시간 형식 오류: '$spec' (다중 시각은 'HH:MM,HH:MM' 형식만 지원)" >&2
+          exit 1
+        fi
+        entries="${entries}
+    <dict>
+      <key>Hour</key>
+      <integer>${BASH_REMATCH[1]}</integer>
+      <key>Minute</key>
+      <integer>${BASH_REMATCH[2]}</integer>
+    </dict>"
+      done
+      schedule_xml="<key>StartCalendarInterval</key>
+  <array>${entries}
+  </array>"
+      run_at_load="false"
+      keep_alive=""
+      # 아래 단일 시각 분기를 건너뛴다
+      time_spec="__multi__"
+    fi
+
+    if [[ "$time_spec" == "__multi__" ]]; then
+      : # 배열로 이미 생성됨
+    elif [[ "$time_spec" =~ ^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\ ([0-9]{1,2}):([0-9]{2})$ ]]; then
       local day_name="${BASH_REMATCH[1]}"
       hour="${BASH_REMATCH[2]}"
       minute="${BASH_REMATCH[3]}"
@@ -133,7 +233,8 @@ cmd_install() {
       echo "❌ 시간 형식 오류: $time_spec (예: '06:00' 또는 'Mon 09:00')" >&2
       exit 1
     fi
-    schedule_xml="<key>StartCalendarInterval</key>
+    if [[ "$time_spec" != "__multi__" ]]; then
+      schedule_xml="<key>StartCalendarInterval</key>
   <dict>
     <key>Hour</key>
     <integer>${hour}</integer>
@@ -141,8 +242,9 @@ cmd_install() {
     <integer>${minute}</integer>
     ${weekday_xml}
   </dict>"
-    run_at_load="false"
-    keep_alive=""
+      run_at_load="false"
+      keep_alive=""
+    fi
   fi
 
   # plist 생성
@@ -198,7 +300,7 @@ EOF
   launchctl load -w "$plist"
 
   echo "✅ Installed: $label"
-  echo "   schedule: $time_spec"
+  echo "   schedule: $time_display"
   echo "   script: $script_path"
   echo "   plist: $plist"
   echo "   logs: ${BARROSKILLS_HOME}/logs/cron/${routine}.{log,err}"

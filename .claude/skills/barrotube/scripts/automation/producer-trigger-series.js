@@ -38,7 +38,7 @@ import { spawnSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 
 const ROOT = resolve(import.meta.dirname, '../..');
-const SERIES_CONFIG_PATH = resolve(ROOT, 'paperclip/config/series.json');
+const SERIES_CONFIG_PATH = resolve(ROOT, 'config/series.json');
 const PIPELINE_LOG = resolve(ROOT, 'logs/marketing-pipeline.log');
 const IN_FLIGHT_PATH = resolve(ROOT, 'workspace/.in-flight.json');
 

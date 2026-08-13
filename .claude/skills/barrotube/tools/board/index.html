@@ -850,6 +850,22 @@
       <div id="msg" class="notice" aria-live="polite"></div>
     </div>
   </section>
+
+  <section class="panel" aria-labelledby="intelTitle">
+    <div class="workspace-head">
+      <div class="workspace-title">
+        <h2 id="intelTitle">경쟁 인텔</h2>
+        <p id="intelSubtitle">매일 05:20 수집·분석. 갭은 다룰 주제, 이상치는 피할 주제입니다.</p>
+      </div>
+      <span class="spacer"></span>
+      <div class="workspace-actions">
+        <button class="btn" type="button" id="intelReload">새로고침</button>
+      </div>
+    </div>
+    <div class="workspace-body">
+      <div id="intelBody" class="notice">불러오는 중…</div>
+    </div>
+  </section>
 </main>
 
 <dialog id="newDialog" aria-labelledby="newDialogTitle">
@@ -1152,7 +1168,98 @@ function setWorkspaceEnabled(enabled) {
   document.getElementById('workspaceBody').classList.toggle('hidden', !enabled);
 }
 
+// ── 경쟁 인텔 패널 ─────────────────────────────────────────
+function intelTable(caption, head, rows) {
+  if (!rows.length) return '';
+  return '<h3 style="margin:18px 0 8px;font-size:14px">' + esc(caption) + '</h3>'
+    + '<div class="table-wrap"><table><thead><tr>'
+    + head.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join('')
+    + '</tr></thead><tbody>' + rows.join('') + '</tbody></table></div>';
+}
+
+function renderIntel(data) {
+  var box = document.getElementById('intelBody');
+  if (!data || !data.available) {
+    box.className = 'notice';
+    box.textContent = '분석 없음' + (data && data.reason ? ' — ' + data.reason : '')
+      + '. `bash lib/competitor-pipeline.sh` 로 수집하세요.';
+    return;
+  }
+
+  var head = '<p style="margin:0 0 4px"><strong>' + esc(data.date) + '</strong> · 채널 ' + data.channel_count
+    + ' · 갭 ' + data.content_gaps.length
+    + ' · 이상치 ' + data.outliers.length
+    + ' · 블루오션 ' + data.blue_ocean.length
+    + (data.degraded ? ' · <span style="color:#b45309">degraded=' + esc(data.degraded) + '</span>' : '')
+    + '</p>';
+
+  var chans = data.channels.map(function (c) {
+    var d = c.subscriber_delta_7d;
+    return '<tr><td>' + esc(c.name) + '</td>'
+      + '<td>' + (c.subscribers == null ? '—' : c.subscribers.toLocaleString()) + '</td>'
+      + '<td>' + (d == null ? '—' : (d >= 0 ? '+' : '') + d.toLocaleString()) + '</td>'
+      + '<td>' + c.uploads_7d + '</td>'
+      + '<td>' + (c.median_vpd_30d == null ? '—' : c.median_vpd_30d.toLocaleString()) + '</td></tr>';
+  });
+
+  var gaps = data.content_gaps.map(function (g) {
+    var ev = (g.evidence || []).map(function (e) {
+      return '<a href="https://youtu.be/' + esc(e.videoId) + '" target="_blank" rel="noreferrer">'
+        + esc(e.channel) + '</a>';
+    }).join(' ');
+    return '<tr><td><strong>' + esc(g.term) + '</strong></td>'
+      + '<td>' + g.gap_score + '</td><td>' + g.comp_df + '</td>'
+      + '<td>' + g.comp_views.toLocaleString() + '</td><td>' + ev + '</td></tr>';
+  });
+
+  var outs = data.outliers.map(function (o) {
+    var thumb = o.thumbnail
+      ? '<img src="' + esc(o.thumbnail) + '" alt="" width="96" loading="lazy" style="border-radius:4px">'
+      : '';
+    return '<tr><td>' + thumb + '</td>'
+      + '<td><a href="https://youtu.be/' + esc(o.videoId) + '" target="_blank" rel="noreferrer">'
+      + esc(o.title) + '</a></td>'
+      + '<td>' + esc(o.channel) + '</td>'
+      + '<td><strong>' + o.multiple + '×</strong></td>'
+      + '<td>' + o.views.toLocaleString() + '</td></tr>';
+  });
+
+  var bos = data.blue_ocean.map(function (b) {
+    return '<tr><td><strong>' + esc(b.keyword) + '</strong></td>'
+      + '<td>' + b.score + '</td><td>' + b.competition + '</td></tr>';
+  });
+
+  var feats = data.title_features.map(function (f) {
+    return '<tr><td>' + esc(f.feature) + '</td><td>' + f.lift + '×</td>'
+      + '<td>' + esc(f.direction) + '</td><td>' + f.n_with + '/' + f.n_without + '</td></tr>';
+  });
+
+  var notes = '<p style="margin:14px 0 0;font-size:13px;color:#64748b">권장 길이 <strong>'
+    + esc(String(data.length_recommendation || '판단 불가')) + '</strong>'
+    + ' · 경쟁사 최적 업로드(KST) ' + (data.best_hours.join(', ') || '—') + '시</p>';
+
+  box.className = '';
+  box.innerHTML = head
+    + intelTable('채널 현황', ['채널', '구독자', 'Δ7d', '7일 업로드', '30일 median vpd'], chans)
+    + intelTable('콘텐츠 갭 — 다룰 주제', ['주제', '점수', '다룬 채널', '조회수 합', '근거'], gaps)
+    + intelTable('성과 이상치 — 피할 주제', ['', '제목', '채널', '배수', '조회수'], outs)
+    + intelTable('블루오션', ['키워드', '점수', '경쟁도'], bos)
+    + intelTable('제목 후킹 피처', ['피처', 'lift', '방향', '표본'], feats)
+    + notes;
+}
+
+async function loadIntel() {
+  try {
+    renderIntel(await api('/api/intel/competitors'));
+  } catch (error) {
+    var box = document.getElementById('intelBody');
+    box.className = 'notice';
+    box.textContent = '경쟁 인텔 로드 실패: ' + (error && error.message ? error.message : error);
+  }
+}
+
 async function loadAll() {
+  loadIntel();
   try {
     var response = await api('/api/channels');
     DATA = response.channels || response || [];
@@ -2138,6 +2245,9 @@ function restoreEpisodeControlFocus(surfaceId, groupIndex, role) {
 }
 
 function bindEvents() {
+  var intelBtn = document.getElementById('intelReload');
+  if (intelBtn) intelBtn.addEventListener('click', loadIntel);
+
   document.getElementById('channelSelect').addEventListener('change', function (event) {
     selectChannel(event.target.value);
   });

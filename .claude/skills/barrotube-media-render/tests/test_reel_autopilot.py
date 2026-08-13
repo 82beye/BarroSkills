@@ -21,6 +21,37 @@ class ReelAutopilotContractTest(unittest.TestCase):
         self.reel = Path(self.tmp.name) / "reel"
         self.reel.mkdir()
 
+    def test_r0_blocks_for_a_human_when_intel_is_unusable(self) -> None:
+        """R0 은 주제를 지어내지 않는다.
+
+        경쟁 인텔이 없거나 쓸 만한 키워드가 없으면 topic_from_intel.py 가 exit 3 을
+        내고, autopilot 은 그것을 blocked(manual) 핸드오프로 옮겨야 한다.
+        여기서 임의 주제를 만들면 근거 없는 릴이 파이프라인을 타고 끝까지 간다.
+        """
+        blocked = json.dumps({
+            "ok": False, "stage": "R0", "blocked": True,
+            "error": "no competitor analysis within 3d",
+            "next_action": "run competitor-pipeline.sh",
+        })
+        with patch.object(target, "run", return_value=(3, blocked, "")):
+            code, out, _ = target.run([sys.executable, str(target.TOPIC_FROM_INTEL), str(self.reel)])
+        self.assertEqual(3, code)
+        payload = target.parse_json_output(out)
+        self.assertTrue(payload["blocked"])
+
+    def test_r0_is_classified_as_deterministic_and_r05_is_not(self) -> None:
+        """R0(주제 선택)은 결정론이지만 R0.5(사실 검증)는 모델이 필요하다."""
+        self.assertIn("R0", target.DETERMINISTIC)
+        self.assertNotIn("R0.5", target.DETERMINISTIC)
+        # 브라우저·GUI·HITL 정지점은 그대로여야 한다
+        self.assertEqual({"R2", "R4"}, target.BROWSER)
+        self.assertEqual({"R7"}, target.GUI)
+        self.assertEqual({"R10"}, target.HITL)
+
+    def test_topic_from_intel_path_is_wired(self) -> None:
+        self.assertTrue(target.TOPIC_FROM_INTEL.is_file(),
+                        f"missing {target.TOPIC_FROM_INTEL}")
+
     def test_job_json_reads_final_json_line_and_keeps_return_code(self) -> None:
         output = 'human summary\n{"ok":false,"status":"recoverable_failure"}\n'
         with patch.object(target, "run", return_value=(4, output, "")):

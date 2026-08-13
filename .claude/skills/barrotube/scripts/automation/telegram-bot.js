@@ -125,6 +125,10 @@ async function cmdHelp(chatId) {
     '/budget             — 월 비용 사용량',
     '/cron               — cron 데몬 목록',
     '',
+    '<b>경쟁 인텔</b>',
+    '/intel [YYYY-MM-DD] — 갭·이상치·블루오션 요약',
+    '/intel approve &lt;날짜&gt; — 시리즈 기획 등록 (planned)',
+    '',
     '<b>EP 생성</b>',
     '/produce &lt;토픽&gt;     — 신규 EP brief (무비용)',
     '/run EP-XXXX        — 풀 체인 dry-run',
@@ -297,9 +301,76 @@ async function cmdResume(chatId, args) {
 // Dispatcher
 // ─────────────────────────────────────────────────
 
+/**
+ * /intel [YYYY-MM-DD]          — 경쟁 인텔 분석 요약
+ * /intel approve YYYY-MM-DD    — 승인 마커 생성 → Rule I2 (시리즈 planned 등록)
+ */
+async function cmdIntel(chatId, args) {
+  const INTEL_DIR = join(ROOT, 'workspace', 'intel', 'competitors');
+
+  if (args[0] === 'approve') {
+    const date = args[1];
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) {
+      return reply(chatId, '⚠️ 사용법: <code>/intel approve YYYY-MM-DD</code>');
+    }
+    const r = spawnSync('node', [
+      join(ROOT, 'scripts', 'automation', 'intel-handoff.js'), '--date', date, '--approve',
+    ], { cwd: ROOT, encoding: 'utf-8', timeout: 60_000 });
+    if (r.status !== 0) return reply(chatId, `❌ 승인 마커 생성 실패\n<pre>${escapeHtml(r.stderr || '')}</pre>`);
+
+    const run = spawnSync('node', [
+      join(ROOT, 'scripts', 'automation', 'intel-handoff.js'), '--date', date,
+    ], { cwd: ROOT, encoding: 'utf-8', timeout: 300_000 });
+    return reply(chatId, `✅ 승인 처리 ${escapeHtml(date)}\n<pre>${escapeHtml((run.stdout || '').slice(-1200))}</pre>`);
+  }
+
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(args[0] || '')
+    ? args[0]
+    : new Date().toISOString().slice(0, 10);
+
+  const path = join(INTEL_DIR, `analysis-${date}.json`);
+  if (!existsSync(path)) {
+    return reply(chatId, `ℹ️ 분석 없음: <code>analysis-${escapeHtml(date)}.json</code>\n먼저 <code>bash lib/competitor-pipeline.sh</code> 를 돌리세요.`);
+  }
+
+  let a;
+  try { a = JSON.parse(readFileSync(path, 'utf-8')); }
+  catch (e) { return reply(chatId, `❌ 분석 파일 파싱 실패: ${escapeHtml(e.message)}`); }
+
+  const lines = [`📡 <b>경쟁 인텔 ${escapeHtml(date)}</b>`, ''];
+  lines.push(`채널 ${a.channel_count} · 갭 ${a.content_gaps.length} · 이상치 ${a.outliers.length} · 블루오션 ${a.blue_ocean_keywords.length}`);
+  if (a.degraded) lines.push(`⚠️ degraded=${escapeHtml(a.degraded)}`);
+  lines.push('');
+
+  if (a.content_gaps.length) {
+    lines.push('<b>콘텐츠 갭</b>');
+    for (const g of a.content_gaps.slice(0, 5)) {
+      lines.push(`• ${escapeHtml(g.term)} — ${g.comp_df}채널 / ${g.comp_views.toLocaleString()}회`);
+    }
+    lines.push('');
+  }
+  if (a.outliers.length) {
+    lines.push('<b>이상치 (오늘 피할 주제)</b>');
+    for (const o of a.outliers.slice(0, 3)) {
+      lines.push(`• ${o.multiple}× ${escapeHtml(o.channel)} — ${escapeHtml(o.title.slice(0, 40))}`);
+    }
+    lines.push('');
+  }
+  if (a.blue_ocean_keywords.length) {
+    lines.push('<b>블루오션</b>');
+    for (const b of a.blue_ocean_keywords.slice(0, 5)) {
+      lines.push(`• ${escapeHtml(b.keyword)} — score ${b.score} / 경쟁 ${b.competition}`);
+    }
+    lines.push('');
+  }
+  lines.push(`승인: <code>/intel approve ${escapeHtml(date)}</code>`);
+  return reply(chatId, lines.join('\n'));
+}
+
 const COMMANDS = {
   '/start': cmdHelp,
   '/help': cmdHelp,
+  '/intel': cmdIntel,
   '/doctor': cmdDoctor,
   '/list': cmdList,
   '/status': cmdStatus,

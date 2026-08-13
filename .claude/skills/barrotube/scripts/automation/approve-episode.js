@@ -18,7 +18,7 @@
 import { parseArgs } from 'node:util';
 import { writeFileSync, existsSync, readFileSync, renameSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { userInfo } from 'node:os';
+import { userInfo, homedir } from 'node:os';
 import { parse as parseYAML } from 'yaml';
 import { resolvePaths } from './paths.js';
 import { createChannelRegistry } from './lib/channel-registry.js';
@@ -31,8 +31,8 @@ import {
 
 const WORKSPACE = resolve(import.meta.dirname, '../../workspace');
 const SKILL_ROOT = resolve(import.meta.dirname, '../..');
-const DATA_ROOT = resolve(process.env.BARROTUBE_DATA || '/Users/beye/BarroTubeData');
-const FACTORY_ROOT = resolve(process.env.BARRO_AI_FACTORY || '/Users/beye/BarroAiFactory');
+const DATA_ROOT = resolve(process.env.BARROTUBE_DATA || join(homedir(), 'BarroTubeData'));
+const FACTORY_ROOT = resolve(process.env.BARRO_AI_FACTORY || join(homedir(), 'BarroAiFactory'));
 
 const { values } = parseArgs({
   options: {

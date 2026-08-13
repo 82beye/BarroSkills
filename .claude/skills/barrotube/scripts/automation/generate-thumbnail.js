@@ -45,6 +45,11 @@ import { detectSentimentPalette } from './lib/sentiment.js';
 import { resolveImageEngine } from './lib/image-engine-config.js';
 import { getSecret } from './config-loader.js';
 
+// 스킬 루트 기준 경로. resolve('config/…') 는 CWD 의존이라
+// launchd 처럼 CWD 가 다른 실행 환경에서 조용히 깨진다.
+const SKILL_ROOT = resolve(import.meta.dirname, '../..');
+const SERIES_CONFIG = join(SKILL_ROOT, 'config', 'series.json');
+
 // OpenAI 키를 .env/keychain → process.env 로 hydrate. resolver·openai-gpt-image·enrich·verify
 // 가 모두 process.env.OPENAI_API_KEY 를 직접 읽으므로, keychain에만 있어도 전역으로 인식되게 한다.
 function hydrateOpenAIKey() {
@@ -71,7 +76,7 @@ function locateBase(epDir, platformHint) {
 function loadSeriesDisplayName(seriesId) {
   if (!seriesId) return '';
   try {
-    const cfg = JSON.parse(readFileSync(resolve('paperclip/config/series.json'), 'utf-8'));
+    const cfg = JSON.parse(readFileSync(SERIES_CONFIG, 'utf-8'));
     const s = (cfg.series || []).find(x => x.id === seriesId);
     if (!s) return seriesId;
     // 1순위: 명시적 display_name_short ("S&P500 입문" 같은 짧은 배지용)
@@ -318,7 +323,7 @@ async function main() {
   let specKeyword = null, specPalette = null, specSeriesEntry = null;
   if (seriesId && seriesN) {
     try {
-      const seriesCfg = JSON.parse(readFileSync(resolve('paperclip/config/series.json'), 'utf-8'));
+      const seriesCfg = JSON.parse(readFileSync(SERIES_CONFIG, 'utf-8'));
       const series = (seriesCfg.series || []).find(s => s.id === seriesId);
       specSeriesEntry = series?.thumbnail_specs?.find(t => t.episode === seriesN) || null;
       if (specSeriesEntry) {

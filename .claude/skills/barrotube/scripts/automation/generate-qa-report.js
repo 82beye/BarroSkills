@@ -70,6 +70,16 @@ const FORMAT_QA_SPECS = {
     max_size_mb: 100,
     scene_count: 5,
   },
+  'shorts-3min': {
+    duration_target: 172,
+    duration_tolerance: 3,
+    max_duration_seconds: 180,
+    aspect_w: 1080,
+    aspect_h: 1920,
+    aspect_label: '9:16 세로',
+    max_size_mb: 200,
+    scene_count: 7,
+  },
   'long-3min': {
     duration_target: 180,
     duration_tolerance: 10,
@@ -226,6 +236,13 @@ async function main() {
     mark: dDiff < spec.duration_tolerance ? OK : (dDiff < spec.duration_tolerance * 1.5 ? WARN : FAIL),
     val: `${actualDur.toFixed(2)}s (target ${target.toFixed(2)}s${durNote}, diff ${dDiff.toFixed(2)}s, tolerance ±${spec.duration_tolerance}s)`,
   });
+  if (spec.max_duration_seconds) {
+    checks.push({
+      item: 'Shorts duration cap',
+      mark: actualDur <= spec.max_duration_seconds ? OK : FAIL,
+      val: `${actualDur.toFixed(2)}s (max ${spec.max_duration_seconds}s)`,
+    });
+  }
 
   // Resolution (format별)
   const w = vStream?.width, h = vStream?.height;

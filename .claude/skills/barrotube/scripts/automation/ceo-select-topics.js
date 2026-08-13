@@ -20,9 +20,11 @@
  *   node ceo-select-topics.js [--date 2026-04-27] [--marketing-report workspace/intel/marketing/YOU-99.json]
  */
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
+
+const ROOT = resolve(import.meta.dirname, '../..');
 
 const CHANNEL_KEYWORDS = {
   'econ-daily': [
@@ -43,9 +45,33 @@ const NEG_PATTERNS = [
 ];
 
 /**
- * 마케팅 리포트 JSON에서 블루오션 키워드를 추출.
+ * 경쟁 인텔 분석에서 블루오션·갭 키워드를 가져온다 (1순위 소스).
+ * 마케팅 리포트 파싱보다 앞선다 — 실측 데이터이고 매일 갱신되기 때문.
+ */
+function loadIntelKeywords(maxAgeDays = 14) {
+  const dir = resolve(ROOT, 'workspace/intel/competitors');
+  if (!existsSync(dir)) return { blueOcean: [], gaps: [] };
+  const files = readdirSync(dir).filter((f) => /^analysis-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort();
+  const newest = files.at(-1);
+  if (!newest) return { blueOcean: [], gaps: [] };
+  if (Date.now() - Date.parse(`${newest.slice(9, 19)}T00:00:00Z`) > maxAgeDays * 86400_000) {
+    return { blueOcean: [], gaps: [] };
+  }
+  try {
+    const a = JSON.parse(readFileSync(join(dir, newest), 'utf-8'));
+    return {
+      blueOcean: (a?.blue_ocean_keywords ?? []).map((k) => k.keyword),
+      gaps: (a?.content_gaps ?? []).map((g) => g.term),
+    };
+  } catch {
+    return { blueOcean: [], gaps: [] };
+  }
+}
+
+/**
+ * 마케팅 리포트 JSON에서 블루오션 키워드를 추출 (폴백 소스).
  * - workspace/intel/marketing/<issue>.json (fetch-paperclip-report 산출 형식)
- * - 또는 paperclip/config/series.json 의 source.blue_ocean_keywords (시리즈 시드)
+ * - 또는 config/series.json 의 source.blue_ocean_keywords (시리즈 시드)
  * 무엇도 매치 안 되면 빈 배열 반환 (안전).
  */
 function loadMarketingKeywords(reportPath) {
@@ -82,7 +108,7 @@ function loadMarketingKeywords(reportPath) {
   }
 }
 
-function scoreItem(item, keywords, marketingKeywords = []) {
+function scoreItem(item, keywords, marketingKeywords = [], gapKeywords = []) {
   let score = 0;
   const text = `${item.title} ${item.description || ''}`;
 
@@ -117,7 +143,7 @@ function scoreItem(item, keywords, marketingKeywords = []) {
   if (/[?왜어떻게얼마나]/.test(item.title)) score += 1;
   if (/전망|분석|시나리오|포인트|핵심|이유|원인|배경/.test(item.title)) score += 1;
 
-  // 7. 마케팅 리포트 블루오션 키워드 매칭 (+5 per match, 최대 1회만 부여 — 폭주 방지)
+  // 7. 블루오션 키워드 매칭 (최대 1회만 부여 — 폭주 방지)
   let marketing_matched = [];
   if (marketingKeywords.length > 0) {
     for (const k of marketingKeywords) {
@@ -126,7 +152,18 @@ function scoreItem(item, keywords, marketingKeywords = []) {
     if (marketing_matched.length > 0) score += 5;
   }
 
-  return { score, matched, numbers: numbers.length, marketing_matched };
+  // 8. 경쟁 콘텐츠 갭 매칭 (+3, 1회만)
+  //    블루오션(+5)보다 낮게 둔다 — 갭은 "경쟁사가 다뤘다"는 뜻이라
+  //    선점 가치가 블루오션보다 약하다.
+  let gap_matched = [];
+  if (gapKeywords.length > 0) {
+    for (const k of gapKeywords) {
+      if (text.includes(k)) gap_matched.push(k);
+    }
+    if (gap_matched.length > 0) score += 3;
+  }
+
+  return { score, matched, numbers: numbers.length, marketing_matched, gap_matched };
 }
 
 function dedup(items) {
@@ -203,14 +240,24 @@ async function main() {
       console.warn(`  ⚠ marketing-report auto-discover error: ${e.message}`);
     }
   }
-  const marketingKeywords = loadMarketingKeywords(marketingReportPath);
+  // 1순위: 경쟁 인텔 실측 (매일 갱신) → 2순위: 마케팅 리포트 파싱 (폴백)
+  const intel = loadIntelKeywords();
+  const marketingKeywords = intel.blueOcean.length > 0
+    ? intel.blueOcean
+    : loadMarketingKeywords(marketingReportPath);
+  const gapKeywords = intel.gaps;
+
   if (marketingKeywords.length > 0) {
-    console.log(`📊 Marketing keywords (+5 boost): ${marketingKeywords.slice(0, 8).join(', ')}${marketingKeywords.length > 8 ? '...' : ''}`);
+    const src = intel.blueOcean.length > 0 ? '경쟁 인텔' : '마케팅 리포트';
+    console.log(`📊 블루오션 키워드 (+5, ${src}): ${marketingKeywords.slice(0, 8).join(', ')}${marketingKeywords.length > 8 ? '...' : ''}`);
+  }
+  if (gapKeywords.length > 0) {
+    console.log(`📊 콘텐츠 갭 (+3, 경쟁 인텔): ${gapKeywords.slice(0, 8).join(', ')}${gapKeywords.length > 8 ? '...' : ''}`);
   }
 
   // 점수화
   const scored = all
-    .map(it => ({ ...it, ...scoreItem(it, keywords, marketingKeywords) }))
+    .map(it => ({ ...it, ...scoreItem(it, keywords, marketingKeywords, gapKeywords) }))
     .filter(it => it.score > 0);
 
   // 중복 제거
@@ -231,6 +278,7 @@ async function main() {
     score: it.score,
     matched_keywords: it.matched,
     marketing_matched: it.marketing_matched || [],
+    gap_matched: it.gap_matched || [],
     summary: it.description?.slice(0, 200) || '',
   }));
 

@@ -14,6 +14,7 @@
 
 import { readFileSync, existsSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { parse as parseYAML } from 'yaml';
 import { createChannelRegistry } from './lib/channel-registry.js';
 import { assertOAuthChannel, getAccessToken } from './publish-youtube.js';
@@ -110,8 +111,8 @@ async function main() {
   if (!opts.channel) { console.error('--channel required'); process.exit(1); }
 
   const skillRoot = resolve(import.meta.dirname, '../..');
-  const dataRoot = resolve(process.env.BARROTUBE_DATA || '/Users/beye/BarroTubeData');
-  const factoryRoot = resolve(process.env.BARRO_AI_FACTORY || '/Users/beye/BarroAiFactory');
+  const dataRoot = resolve(process.env.BARROTUBE_DATA || join(homedir(), 'BarroTubeData'));
+  const factoryRoot = resolve(process.env.BARRO_AI_FACTORY || join(homedir(), 'BarroAiFactory'));
   const registry = createChannelRegistry({
     skillRoot,
     dataRoot,

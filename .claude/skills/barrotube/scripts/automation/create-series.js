@@ -27,7 +27,7 @@ import { parse as parseYAML, stringify as stringifyYAML } from 'yaml';
 
 const PROJECT_ROOT = resolve(import.meta.dirname, '../..');
 const WORKSPACE = resolve(PROJECT_ROOT, 'workspace');
-const PAPERCLIP_CONFIG = resolve(PROJECT_ROOT, 'paperclip/config');
+const PAPERCLIP_CONFIG = resolve(PROJECT_ROOT, 'config');
 
 function readJSON(path) {
   return JSON.parse(readFileSync(path, 'utf-8'));

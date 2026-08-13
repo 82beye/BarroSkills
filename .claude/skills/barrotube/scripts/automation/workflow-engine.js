@@ -1,12 +1,20 @@
 /**
  * BarroTube Episode Workflow Engine
  *
- * PRD §5.1 표준 흐름(S0~S11) 구현
- * 에피소드의 전체 라이프사이클을 관리하며,
- * 체크포인트 기반 재시작(FR-S-003)을 지원한다.
+ * ⚠️ DEAD CODE — 이 파일을 import 하는 곳은 레포 전체에 0곳이다 (2026-08-13 확인).
+ *
+ * 실제로 도는 S0~S12 상태 머신은 run-episode.js:72 의 STAGES 다.
+ * 두 정의는 이미 어긋나 있다 — 여기 S7 은 capcut_draft(50_capcut_draft.json)이지만
+ * run-episode.js 의 S7 은 render(55_render/video.mp4)다.
+ * 아래 AGENTS 경로(claude-code/.claude/agents)도 존재하지 않는다.
+ *
+ * 참고용으로 남겨두되 새 코드가 여기 의존하게 하지 말 것.
+ * 정본을 고칠 때 이 파일을 같이 고칠 필요는 없다.
+ *
+ * 원본 설명: PRD §5.1 표준 흐름(S0~S11) 구현. 체크포인트 기반 재시작(FR-S-003) 지원.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, appendFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { execSync } from 'node:child_process';
 
@@ -100,7 +108,6 @@ export function generateEpisodeId() {
 
 function readdirSyncSafe(dir) {
   try {
-    const { readdirSync } = await import('node:fs');
     return readdirSync(dir);
   } catch {
     return [];
@@ -185,7 +192,6 @@ export function auditLog(episodeId, action, details) {
     ...details,
   };
 
-  const { appendFileSync } = await import('node:fs');
   appendFileSync(logFile, JSON.stringify(entry) + '\n', 'utf-8');
 }
 

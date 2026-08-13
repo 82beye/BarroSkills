@@ -37,7 +37,8 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, extname, resolve } from 'node:path';
+import { dirname, extname, resolve, join } from 'node:path';
+import { homedir } from 'node:os';
 import { getSecret } from './config-loader.js';
 import { assertPublishApproval, effectiveYoutubeUpload } from './lib/publish-approval.js';
 import { createChannelRegistry } from './lib/channel-registry.js';
@@ -354,8 +355,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       if (!['long', 'shorts'].includes(opts.platform)) throw new Error('--platform must be long or shorts');
       if (!['v1', 'v2'].includes(opts.layout)) throw new Error('--layout must be v1 or v2');
       const skillRoot = resolve(import.meta.dirname, '../..');
-      const dataRoot = resolve(process.env.BARROTUBE_DATA || '/Users/beye/BarroTubeData');
-      const factoryRoot = resolve(process.env.BARRO_AI_FACTORY || '/Users/beye/BarroAiFactory');
+      const dataRoot = resolve(process.env.BARROTUBE_DATA || join(homedir(), 'BarroTubeData'));
+      const factoryRoot = resolve(process.env.BARRO_AI_FACTORY || join(homedir(), 'BarroAiFactory'));
       const registry = createChannelRegistry({
         skillRoot,
         dataRoot,

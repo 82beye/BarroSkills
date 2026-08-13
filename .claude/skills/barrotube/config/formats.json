@@ -1,6 +1,6 @@
 {
-  "version": "1.0",
-  "description": "영상 포맷 정의. channel=econ-daily는 shorts + long-3min 듀얼 라인 운영.",
+  "version": "1.1",
+  "description": "영상 포맷 정의. channel=econ-daily는 shorts + shorts-3min + long-3min 라인 운영.",
   "formats": [
     {
       "id": "shorts",
@@ -10,10 +10,16 @@
       "duration": {
         "target_seconds": 60,
         "tolerance_seconds": 2,
-        "qa_accept_range": [58, 62]
+        "qa_accept_range": [
+          58,
+          62
+        ]
       },
       "scene_count": 5,
-      "scene_length_seconds": { "min": 10, "max": 14 },
+      "scene_length_seconds": {
+        "min": 10,
+        "max": 14
+      },
       "canvas": {
         "width": 1080,
         "height": 1920,
@@ -23,15 +29,68 @@
       "metadata": {
         "shorts_tag": true,
         "description_suffix": "#Shorts",
-        "auto_hashtags": ["#Shorts", "#경제", "#경제기초", "#3분경제", "#투자", "#BarroTube", "#경제공부"],
+        "auto_hashtags": [
+          "#Shorts",
+          "#경제",
+          "#경제기초",
+          "#3분경제",
+          "#투자",
+          "#BarroTube",
+          "#경제공부"
+        ],
         "auto_hashtags_note": "S9 Metadata 단계에서 자동 적용. 에피소드별 시리즈 키워드는 series.json source.blue_ocean_keywords에서 추가 병합."
       },
       "pipeline": {
-        "skip_stages": ["S2_market_research", "S3_strategy"],
+        "skip_stages": [],
         "script_prompt_variant": "shorts_5scene_60s",
-        "asset_generation_count": 5
+        "asset_generation_count": 5,
+        "skip_stages_note": "S2/S3 는 건너뛰지 않는다. auto-pipeline.sh 가 research-brief.js 산출물을 모든 슬롯에 대해 10_market_research.md / 20_strategy.md 로 설치하며(실패 시 중단), 그 문서가 경쟁 인텔이 대본까지 전파되는 통로다. 구 설정 ['S2_market_research', 'S3_strategy'] 은 실제 동작과 어긋나 제거했다 (2026-08-13)."
       },
       "budget_profile_ref": "shorts"
+    },
+    {
+      "id": "shorts-3min",
+      "display_name": "Shorts 3min",
+      "description": "국내외 시장을 연결해 설명하는 3분 세로 쇼츠. 최종 180초 상한을 위해 본편은 172초를 목표로 한다.",
+      "default_persona": "barro-alert",
+      "duration": {
+        "target_seconds": 172,
+        "tolerance_seconds": 3,
+        "qa_accept_range": [
+          174,
+          180
+        ]
+      },
+      "scene_count": 7,
+      "scene_length_seconds": {
+        "min": 15,
+        "max": 30
+      },
+      "canvas": {
+        "width": 1080,
+        "height": 1920,
+        "ratio": "9:16"
+      },
+      "style_guide_path": "workspace/channels/{channel}/style-guide-shorts.md",
+      "metadata": {
+        "shorts_tag": true,
+        "description_suffix": "#Shorts",
+        "auto_hashtags": [
+          "#Shorts",
+          "#경제",
+          "#증시",
+          "#3분경제",
+          "#투자",
+          "#BarroTube"
+        ]
+      },
+      "pipeline": {
+        "skip_stages": [],
+        "script_prompt_variant": "shorts_7scene_172s",
+        "asset_generation_count": 7,
+        "mid_hook_required_at_seconds": 75
+      },
+      "budget_profile_ref": "long-3min"
     },
     {
       "id": "long-3min",
@@ -41,10 +100,16 @@
       "duration": {
         "target_seconds": 180,
         "tolerance_seconds": 10,
-        "qa_accept_range": [170, 190]
+        "qa_accept_range": [
+          170,
+          190
+        ]
       },
       "scene_count": 7,
-      "scene_length_seconds": { "min": 10, "max": 40 },
+      "scene_length_seconds": {
+        "min": 10,
+        "max": 40
+      },
       "canvas": {
         "width": 1920,
         "height": 1080,
@@ -79,7 +144,11 @@
   },
   "channel_format_mapping": {
     "econ-daily": {
-      "enabled_formats": ["shorts", "long-3min"],
+      "enabled_formats": [
+        "shorts",
+        "shorts-3min",
+        "long-3min"
+      ],
       "weekly_schedule": {
         "shorts": {
           "cadence": "daily",
