@@ -38,7 +38,8 @@ const CRON_DIR = join(ROOT, 'logs', 'cron');
 const TARGETS = {
   collection_rate: { min: 0.95, min_n: 7, label: '수집 성공률', fmt: (v) => `${(v * 100).toFixed(1)}%` },
   topic_adoption: { min: 0.60, min_n: 3, label: '주제 반영률', fmt: (v) => `${(v * 100).toFixed(1)}%` },
-  quota_per_day: { max: 30, min_n: 3, label: 'API 쿼터/일', fmt: (v) => `${v.toFixed(1)} units` },
+  // 하루 2회(36) + 주 1회 deep scan(54/7≈7.7) = 약 44. 여유를 둬 50.
+  quota_per_day: { max: 50, min_n: 3, label: 'API 쿼터/일', fmt: (v) => `${v.toFixed(1)} units` },
   pipeline_blocks: { max: 0, label: '파이프라인 차단', fmt: (v) => `${v}건` },
   determinism: { min: 1, label: '분석 결정성', fmt: (v) => (v === 1 ? '일치' : v === null ? '미측정' : '불일치') },
   llm_cost_month: { max: 0.10, label: 'LLM 비용/월', fmt: (v) => `$${v.toFixed(4)}` },

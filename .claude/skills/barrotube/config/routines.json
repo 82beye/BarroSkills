@@ -8,45 +8,105 @@
     "platform": "shorts",
     "scene_count": 5,
     "target_seconds": 60,
-    "accept_seconds": [58, 62]
+    "accept_seconds": [
+      58,
+      62
+    ]
   },
   "slots": {
     "us-close": {
       "label": "미국 증시 마감 브리핑",
       "cron": "06:00",
       "publish_at": "08:00",
-      "news_sources": ["cnbc_economy", "yahoo_finance", "ft_markets", "investing_econ"],
+      "news_sources": [
+        "cnbc_economy",
+        "yahoo_finance",
+        "ft_markets",
+        "investing_econ"
+      ],
       "market": {
-        "symbols": [".INX", ".IXIC", ".DJI", "FX_USDKRW", ".DXY"],
-        "require_closed": [".INX", ".IXIC", ".DJI"]
+        "symbols": [
+          ".INX",
+          ".IXIC",
+          ".DJI",
+          "FX_USDKRW",
+          ".DXY"
+        ],
+        "require_closed": [
+          ".INX",
+          ".IXIC",
+          ".DJI"
+        ]
       },
       "competitor_scan": true,
       "angle": "전날 미국 증시 마감 해설 — 무엇이 얼마나 움직였고, 왜 움직였는가",
       "closed_market_policy": "KST 토요일 또는 미국 증시 휴장으로 신규 종가가 없으면 최신 주식·경제 이슈 1개로 대체한다. 일요일에는 다음 미국장 개장 전 확인할 정책·경제지표·실적·채권·환율 이슈 정리로 전환한다. 직전 종가는 거래일을 밝혀 참고값으로만 쓴다.",
       "audience_context": "출근 전 8시에 보는 시청자. 밤사이 미국에서 벌어진 일을 60초로 따라잡게 한다.",
-      "timing_caveat": "서머타임 종료 기간(11~3월)에는 미 증시 마감이 06:00 KST라 시작 시각과 겹친다. 시세 스냅샷이 stale 이면 대본에서 '현지시간 기준 마감 직후' 표현을 쓰고 확정 종가 단정을 피한다."
+      "timing_caveat": "서머타임 종료 기간(11~3월)에는 미 증시 마감이 06:00 KST라 시작 시각과 겹친다. 시세 스냅샷이 stale 이면 대본에서 '현지시간 기준 마감 직후' 표현을 쓰고 확정 종가 단정을 피한다.",
+      "schedule_note": "매일 06:00 KST. 토요일은 금요일 미국장 마감(closed_market_issue), 일요일은 다음 주 개장 전 관전 포인트(sunday_preopen)를 다룬다."
     },
     "kr-close": {
       "label": "국내 증시 마감 + 오늘 밤 미장 관전 포인트",
-      "cron": "16:00",
+      "cron": "Mon-Fri 16:00",
       "publish_at": "18:00",
-      "news_sources": ["naver", "yna_market", "yna_economy", "bok", "mk_economy"],
+      "news_sources": [
+        "naver",
+        "yna_market",
+        "yna_economy",
+        "bok",
+        "mk_economy"
+      ],
       "market": {
-        "symbols": ["KOSPI", "KOSDAQ", "FX_USDKRW", ".INX", ".IXIC"],
-        "require_closed": ["KOSPI", "KOSDAQ"]
+        "symbols": [
+          "KOSPI",
+          "KOSDAQ",
+          "FX_USDKRW",
+          ".INX",
+          ".IXIC"
+        ],
+        "require_closed": [
+          "KOSPI",
+          "KOSDAQ"
+        ]
       },
       "competitor_scan": false,
       "angle": "국내 마감 요약 + 오늘 밤 미장 관전 포인트",
       "closed_market_policy": "KST 토요일 또는 한국 증시 휴장으로 신규 종가가 없으면 최신 주식·경제 이슈 1개로 대체한다. 일요일에는 다음 한국장 개장 전 확인할 정책·경제지표·실적·해외시장·환율 이슈 정리로 전환한다. 직전 종가는 거래일을 밝혀 참고값으로만 쓴다.",
       "audience_context": "퇴근길 6시에 보는 시청자. 오늘 국내장을 정리하고, 밤에 열릴 미장에서 무엇을 볼지 알려준다.",
-      "timing_caveat": "16:00 KST 는 미국 프리마켓(04:00 ET = 17:00 KST) 시작 전이다. '미국 장전 이슈'를 실시간 프리마켓 시세로 쓰면 안 되고, 야간 선물·유럽장·오늘 밤 예정된 지표/실적 일정과 전일 미국 종가를 근거로 써야 한다. 미국 지수는 '전일 종가'로 명시할 것."
+      "timing_caveat": "16:00 KST 는 미국 프리마켓(04:00 ET = 17:00 KST) 시작 전이다. '미국 장전 이슈'를 실시간 프리마켓 시세로 쓰면 안 되고, 야간 선물·유럽장·오늘 밤 예정된 지표/실적 일정과 전일 미국 종가를 근거로 써야 한다. 미국 지수는 '전일 종가'로 명시할 것.",
+      "schedule_note": "평일 16:00 KST 만. 토·일은 한국장이 없어 돌리지 않는다 — 토요일 16:00 은 이미 하루 지난 금요일 종가라 새 정보가 없다. 설치: bash lib/install-cron.sh install kr-close \"Mon-Fri 16:00\""
     }
   },
   "scene_skeleton": [
-    { "n": 1, "role": "hook", "intent": "가장 큰 숫자 하나로 시작. 질문형 훅." },
-    { "n": 2, "role": "numbers", "intent": "지수·환율 핵심 수치를 정확히. 시세 스냅샷의 값만 사용." },
-    { "n": 3, "role": "cause", "intent": "왜 그렇게 됐는지 원인 1~2개. 뉴스 근거." },
-    { "n": 4, "role": "impact", "intent": "한국 투자자에게 무슨 의미인지." },
-    { "n": 5, "role": "closing", "intent": "다음 관전 포인트 + 투자조언 아님 고지." }
-  ]
+    {
+      "n": 1,
+      "role": "hook",
+      "intent": "가장 큰 숫자 하나로 시작. 질문형 훅."
+    },
+    {
+      "n": 2,
+      "role": "numbers",
+      "intent": "지수·환율 핵심 수치를 정확히. 시세 스냅샷의 값만 사용."
+    },
+    {
+      "n": 3,
+      "role": "cause",
+      "intent": "왜 그렇게 됐는지 원인 1~2개. 뉴스 근거."
+    },
+    {
+      "n": 4,
+      "role": "impact",
+      "intent": "한국 투자자에게 무슨 의미인지."
+    },
+    {
+      "n": 5,
+      "role": "closing",
+      "intent": "다음 관전 포인트 + 투자조언 아님 고지."
+    }
+  ],
+  "publishing_cadence": {
+    "weekday": 2,
+    "weekend": 1,
+    "note": "평일은 us-close(08:00 발행) + kr-close(18:00 발행) 2편, 주말은 us-close 1편. 발행 시각은 각 슬롯의 publish_at 을 따른다."
+  }
 }

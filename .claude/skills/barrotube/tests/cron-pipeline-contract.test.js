@@ -200,3 +200,82 @@ test('research-brief consumes competitor intel and records what it used', () => 
   assert.match(src, /avoided_duplicates/);
   assert.match(src, /competitor_intel_at/);
 });
+
+test('install-cron supports multiple daily times via a StartCalendarInterval array', () => {
+  // launchd 는 dict 배열도 받는다. 인자가 같은 루틴은 라벨을 나눌 필요가 없다.
+  const src = readFileSync(INSTALL, 'utf8');
+  assert.match(src, /StartCalendarInterval<\/key>\s*\n\s*<array>/,
+    'array form must be generated for comma-separated times');
+  assert.match(src, /time_display/, 'the original spec must survive for output');
+  assert.doesNotMatch(src, /schedule: \$time_spec/,
+    'the __multi__ sentinel must never reach the operator');
+});
+
+test('competitor-scan runs twice daily, ahead of both briefing slots', () => {
+  const policy = JSON.parse(readFileSync(join(ROOT, 'config', 'competitor-channels.json'), 'utf8'));
+  const times = policy.tracking?.scan_times_kst ?? [];
+  assert.deepEqual(times, ['05:20', '15:20'], 'one scan before each slot');
+
+  const routines = JSON.parse(readFileSync(ROUTINES, 'utf8'));
+  const slots = routines.routines ?? routines.slots ?? {};
+  for (const [slot, cfg] of Object.entries(slots)) {
+    const publishHour = parseInt(String(cfg.publish_at ?? '').slice(0, 2), 10);
+    if (!Number.isFinite(publishHour)) continue;
+    // 각 슬롯보다 앞선 스캔이 하나는 있어야 인텔이 그날 리서치에 닿는다
+    const cronHour = slot === 'us-close' ? 6 : 16;
+    assert.ok(times.some((t) => parseInt(t.slice(0, 2), 10) < cronHour),
+      `no scan precedes ${slot} (cron ${cronHour}:00)`);
+  }
+});
+
+test('quota target accounts for the twice-daily cadence', () => {
+  const metrics = readFileSync(join(ROOT, 'scripts', 'automation', 'intel-metrics.js'), 'utf8');
+  const m = /quota_per_day:\s*\{\s*max:\s*(\d+)/.exec(metrics);
+  assert.ok(m, 'quota target must be declared');
+  const target = Number(m[1]);
+  const policy = JSON.parse(readFileSync(join(ROOT, 'config', 'competitor-channels.json'), 'utf8'));
+  const channels = (policy.channels ?? []).filter((c) => c.active !== false).length;
+  const perDay = channels * 3 * (policy.tracking?.scan_times_kst?.length ?? 1);
+  assert.ok(target >= perDay,
+    `target ${target} must cover the routine cost ${perDay} (${channels}ch × 3u × ${policy.tracking.scan_times_kst.length} scans)`);
+  assert.ok(perDay < policy.quota.daily_cap_units, 'routine cost must stay under the self-imposed cap');
+});
+
+test('publishing cadence is 2 on weekdays and 1 on weekends', () => {
+  const routines = JSON.parse(readFileSync(ROUTINES, 'utf8'));
+  assert.deepEqual(
+    { weekday: routines.publishing_cadence?.weekday, weekend: routines.publishing_cadence?.weekend },
+    { weekday: 2, weekend: 1 });
+
+  // us-close 는 매일 (토=금요일 미국장, 일=sunday_preopen)
+  assert.equal(routines.slots['us-close'].cron, '06:00');
+  // kr-close 는 평일만 — 토요일 16:00 은 이미 하루 지난 금요일 종가라 새 정보가 없다
+  assert.equal(routines.slots['kr-close'].cron, 'Mon-Fri 16:00');
+});
+
+test('install-cron expands a weekday range without bash 4 associative arrays', () => {
+  // macOS 기본 bash 는 3.2 다. declare -A 를 쓰면 조용히 분기를 건너뛴다 (실측).
+  const src = readFileSync(INSTALL, 'utf8');
+  assert.match(src, /weekday_index\(\)/, 'range mapping must use a case-based helper');
+  assert.doesNotMatch(src, /local -A |declare -A /, 'bash 3.2 has no associative arrays');
+  assert.match(src, /Mon\|Tue\|Wed\|Thu\|Fri\|Sat\|Sun\)-\(/, 'range form must be parsed');
+});
+
+test('a weekday-ranged install produces one calendar entry per day', () => {
+  const out = mkdtempSync(join(tmpdir(), 'bt-cron-'));
+  try {
+    const r = spawnSync('bash', [INSTALL, 'install', 'kr-close', 'Mon-Fri 16:00'], {
+      cwd: ROOT, encoding: 'utf8', timeout: 60_000,
+      env: { ...process.env, DRY_RUN: '1', HOME: out },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    const plist = readFileSync(
+      join(out, 'Library', 'LaunchAgents', 'com.barroskills.barrotube.kr-close.plist'), 'utf8');
+    assert.match(plist, /<array>/, 'must emit an array, not a single dict');
+    const weekdays = [...plist.matchAll(/<key>Weekday<\/key>\s*<integer>(\d)<\/integer>/g)].map((m) => m[1]);
+    assert.deepEqual(weekdays, ['1', '2', '3', '4', '5'], 'Mon..Fri');
+    assert.doesNotMatch(plist, /__multi__/, 'the sentinel must not leak into the plist');
+  } finally {
+    rmSync(out, { recursive: true, force: true });
+  }
+});
