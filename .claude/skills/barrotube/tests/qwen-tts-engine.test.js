@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadCloneRef, QWEN_INSTRUCT } from '../scripts/automation/generate-tts.js';
+import { loadCloneRef, QWEN_INSTRUCT, resolveTtsChain } from '../scripts/automation/generate-tts.js';
 
 const ROOT = join(import.meta.dirname, '..');
 const SRC = readFileSync(join(ROOT, 'scripts', 'automation', 'generate-tts.js'), 'utf-8');
@@ -69,7 +69,29 @@ test('persona tone survives the engine swap', () => {
   assert.ok(QWEN_INSTRUCT['barro-teacher'], 'long-form persona needs one too');
 });
 
-test('elevenlabs stays the default — the pilot must not hijack the pipeline', () => {
-  assert.match(SRC, /\|\| 'elevenlabs'\)\.toLowerCase\(\)/,
-    'omitting --engine must keep the existing ElevenLabs path');
+test('the default chain runs local first and keeps the paid API as a fallback', () => {
+  // 로컬은 $0 이지만 확률적으로 폭주한다. 무인 cron 이 그 한 씬 때문에 서면 안 되므로
+  // 유료 API 를 뒤에 남긴다. 순서가 뒤집히면 매일 돈이 나간다.
+  assert.deepEqual(resolveTtsChain(undefined), ['qwen', 'elevenlabs']);
+  assert.deepEqual(resolveTtsChain('elevenlabs'), ['elevenlabs']);
+  assert.deepEqual(resolveTtsChain('qwen, elevenlabs '), ['qwen', 'elevenlabs']);
+});
+
+test('an explicit --engine gets no fallback', () => {
+  // generate-script.js 와 같은 규약 — 지정해서 부른 사람은 실패를 보고 싶은 것이다.
+  assert.match(SRC, /engine === 'auto' \? resolveTtsChain\(\) : \[engine\]/,
+    'explicit engine must yield a one-element chain');
+});
+
+test('a scene that fails on the local engine falls through instead of killing the run', () => {
+  assert.match(SRC, /for \(const \[i, name\] of chain\.entries\(\)\)/, 'each scene walks the chain');
+  assert.match(SRC, /로 폴백/, 'a fallback must be visible in the log');
+  assert.match(SRC, /유료 폴백으로 나갔다/, '유료로 샌 씬 수는 조용히 넘어가면 안 된다');
+});
+
+test('a channel without a voice reference keeps its existing voice', () => {
+  // 참조도 없이 sohee 같은 기성 화자로 조용히 갈아타면 채널 목소리가 바뀐다.
+  // 그럴 바엔 로컬을 건너뛰고 기존 ElevenLabs 목소리를 그대로 쓰는 게 맞다.
+  assert.match(SRC, /chain = chain\.filter\(\(e\) => e !== 'qwen'\)/,
+    'no reference → drop the local engine, do not swap speakers');
 });
