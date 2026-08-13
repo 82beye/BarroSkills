@@ -58,7 +58,7 @@ cat logs/budget/usage-$(date +%Y-%m).json 2>/dev/null
 - 월 한도 80%+ 도달 시 → YELLOW (운영자 주의)
 - 100% 도달 시 → RED (해당 role 자동 정지 상태)
 
-### Step 5 — 17 에이전트 등록
+### Step 5 — 필수 에이전트 등록
 
 ```bash
 ls ~/.claude/agents/*.md | wc -l   # 17이어야 함
@@ -109,7 +109,7 @@ grep -r "localhost:3100\|127.0.0.1:3100" scripts/automation/*.js 2>/dev/null | g
 ✅ In-flight lock: clear
 ✅ Active EP: 0 (idle)
 ✅ Budget 2026-MM: $X.XX / $770 (X%)
-✅ Agents: 17/17
+✅ Agents: 18 installed, all required present
 ✅ Paperclip 격리: PAPERCLIP_DISABLED=1, _legacy 9개
 🟡 Cron: 미설치 (on-demand 모드, 의도된 경우 정상)
 ✅ Audit 24h: N건 활동
@@ -132,4 +132,4 @@ grep -r "localhost:3100\|127.0.0.1:3100" scripts/automation/*.js 2>/dev/null | g
 
 - `.env` 누락 → 운영자에게 `cp .env.example .env && vi .env` 안내
 - API key 무효 → 어떤 key가 어떤 호출에서 실패했는지 명시 (스코프 좁히기)
-- 17 에이전트 파일 누락 → `cp ~/youtube-co/claude-code/.claude/agents/*.md ~/.claude/agents/` 안내
+- 필수 에이전트 누락 → doctor 가 빠진 이름을 짚어 준다 (개수가 아니라 이름으로 검사)

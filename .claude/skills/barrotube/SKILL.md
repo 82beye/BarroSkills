@@ -1,6 +1,6 @@
 ---
 name: barrotube
-description: BarroTube YouTube 자동 회사 — 마케팅 분석부터 에피소드 산출·YouTube 업로드까지 corework 자동화. 17 에이전트 hub-and-spoke 위임. Paperclip 의존 없음.
+description: BarroTube YouTube 자동 회사 — 마케팅 분석부터 에피소드 산출·YouTube 업로드까지 corework 자동화. 에이전트 hub-and-spoke 위임. Paperclip 의존 없음.
 ---
 
 # /barrotube — BarroTube Standalone Skill
@@ -344,7 +344,7 @@ npm run channel:document -- --channel today.myo # 읽기 전용 HTML snapshot �
 - `references/IMAGE-PROMPT.md` — image_prompt 계약 (EP-0069 vs 0070 A/B 근거·규칙 6가지)
 - `references/MARKETING.md` — 마케팅 → 시리즈 부트스트랩 흐름
 - `references/SECRETS.md` — ElevenLabs·Gemini·YouTube OAuth 셋업 가이드
-- `references/ARCHITECTURE.md` — 17 에이전트 위임 라인 + monolith vs sub-issue 모드
+- `references/ARCHITECTURE.md` — 에이전트 위임 라인 + monolith vs sub-issue 모드
 
 ## Critical File Paths (Quick Reference)
 
@@ -370,7 +370,7 @@ $BARROTUBE_HOME/scripts/automation/render-channel-document.js  # read-only HTML 
 # 격리 (사용 안 함, 참고용)
 $BARROTUBE_HOME/scripts/automation/_legacy_paperclip/         # 10개 Paperclip 의존
 
-# 17 에이전트 (전역)
+# 에이전트 (전역)
 ~/.claude/agents/barrotube-ceo.md ~ barrotube-producer-shorts.md
 
 # 거버넌스

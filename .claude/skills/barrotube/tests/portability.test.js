@@ -69,3 +69,33 @@ test('the workspace symlink stays out of git', () => {
   assert.match(ignore, /^workspace$/m, 'workspace must be gitignored');
   assert.match(ignore, /^\.env$/m, 'secrets must be gitignored');
 });
+
+test('doctor checks required agents by name, not by exact count', () => {
+  // 개수 검사는 두 방향으로 틀린다: 에이전트가 늘면 멀쩡한데 RED 가 되고
+  // (2026-08-13 실측 18/17), 엉뚱한 17개여도 통과한다.
+  const src = readFileSync(join(ROOT, 'lib', 'doctor-cli.sh'), 'utf-8');
+  assert.match(src, /REQUIRED_AGENTS/, 'must declare the required set');
+  assert.match(src, /MISSING_AGENTS/, 'must report which one is missing');
+  assert.doesNotMatch(src, /"\$AGENT_COUNT" = "1[0-9]"/,
+    'an exact-count comparison breaks whenever an agent is added');
+
+  // 필수 목록이 파이프라인 단계를 실제로 덮는지
+  const required = /REQUIRED_AGENTS="([^"]+)"/s.exec(src);
+  assert.ok(required, 'required list must be readable');
+  const names = required[1].split(/\s+/).filter(Boolean);
+  for (const core of ['ceo', 'writer', 'fact-checker', 'qa-reviewer', 'publisher']) {
+    assert.ok(names.includes(core), `pipeline-critical agent missing from the list: ${core}`);
+  }
+});
+
+test('docs no longer pin an agent count', () => {
+  // 에이전트 문맥만 본다. SKILL.md 의 "12/12 게이트" 는 미디어 자산
+  // (이미지 5 + 영상 5 + 인트로 + 썸네일) 이지 에이전트 수가 아니다.
+  for (const f of ['README.md', 'SKILL.md', 'references/ARCHITECTURE.md', 'references/DOCTOR.md']) {
+    const src = readFileSync(join(ROOT, f), 'utf-8');
+    assert.doesNotMatch(src, /\d+ ?(에이전트|agents)\b/i,
+      `${f} pins an agent count that will drift`);
+    assert.doesNotMatch(src, /Agents:\s*\d+\/\d+/i,
+      `${f} shows a fixed agent ratio`);
+  }
+});

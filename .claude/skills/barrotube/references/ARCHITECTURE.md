@@ -1,6 +1,6 @@
-# ARCHITECTURE.md — 17 에이전트 + 위임 라인
+# ARCHITECTURE.md — 에이전트 + 위임 라인
 
-> BarroSkills의 17 에이전트 조직도와 Task 위임 라인 정본.
+> BarroSkills의 에이전트 조직도와 Task 위임 라인 정본.
 
 ## 시스템 구성 (3-Layer)
 
@@ -11,7 +11,7 @@
 └──────────────────────────────────────────────────────────────┘
                           ↓
 ┌──────────────────────────────────────────────────────────────┐
-│ Layer 2 — 17 Agents (~/.claude/agents/barrotube-ceo.md ~ 17-*.md)   │
+│ Layer 2 — Agents (~/.claude/agents/barrotube-*.md)                  │
 │  Task(subagent_type="<NN-name>", prompt="...") 형식 호출     │
 └──────────────────────────────────────────────────────────────┘
                           ↓
@@ -26,12 +26,12 @@
 └──────────────────────────────────────────────────────────────┘
 ```
 
-## 17 에이전트 명세
+## 에이전트 명세
 
 | # | subagent_type | 부서 | 모델 | 월 한도 | reports To |
 |---|---|---|---|---|---|
 | 01 | `barrotube-ceo` | Executive | Opus | $20 | Board |
-| 02 | `02-producer` | Editorial Lead | Opus | $60 | CEO |
+| 02 | `barrotube-producer` | Editorial Lead | Opus | $60 | CEO |
 | 03 | `barrotube-researcher` | Editorial | Sonnet | $40 | Producer |
 | 04 | `barrotube-strategist` | Editorial | Opus | $40 | Producer |
 | 05 | `barrotube-writer` | Editorial | Opus | $120 | Producer |
@@ -47,8 +47,12 @@
 | 15 | `barrotube-content-manager` | Operations | Sonnet | $20 | CEO |
 | 16 | `barrotube-marketing-analyst` | Marketing | Sonnet | $0 | CMO |
 | 17 | `barrotube-producer-shorts` | Editorial Lead (Shorts) | Opus | $60 | CEO |
+| 18 | `barrotube-reel-director` | Reel Ops (media-render) | Opus | Producer 예산 내 | CEO |
 
-**월 총합: $770**
+**월 총합: $770** (reel-director 는 별도 배정 없이 Producer 예산을 쓴다)
+
+> 개수를 본문에 박지 않는다. doctor 는 이름으로 필수 에이전트를 확인하고
+> 개수는 참고로만 보고한다 — 에이전트가 늘 때마다 문서·검사가 깨지던 문제 때문이다.
 
 ## 위임 라인 (S0~S12)
 
@@ -92,7 +96,7 @@ Producer 진입 (Mode A)
 
 | 페르소나 | 적용 포맷 | Producer | 톤 |
 |---|---|---|---|
-| `barro-teacher` | long-3min (180s, 7씬, 16:9) | `02-producer` | 친근·신뢰·교육적 |
+| `barro-teacher` | long-3min (180s, 7씬, 16:9) | `barrotube-producer` | 친근·신뢰·교육적 |
 | `barro-alert` | shorts (60s, 5씬, 9:16) | `barrotube-producer-shorts` | 경고·긴장·행동 유발 |
 
 라우팅 키:
