@@ -8,8 +8,10 @@
  *   node generate-tts.js --script <episode_dir>/30_script.md --out-dir <assets>/tts/
  */
 
-import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
+import { writeFileSync, readFileSync, mkdirSync, existsSync, unlinkSync, renameSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
+import { homedir } from 'node:os';
+import { spawnSync, execFileSync } from 'node:child_process';
 import { parse as parseYAML } from 'yaml';
 import { getSecret } from './config-loader.js';
 import { recordCost } from './lib/cost-tracker.js';
@@ -17,6 +19,92 @@ import { recordCost } from './lib/cost-tracker.js';
 const API_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
 const DEFAULT_VOICE_ID = '4JJwo477JUAx3HV0T7n7'; // Yohan Koo — Encouraging, Clear and Airy
 const DEFAULT_MODEL = 'eleven_multilingual_v2';
+
+/**
+ * Qwen3-TTS(로컬 MLX) 파일럿 — 2026-08-14.
+ *
+ * ElevenLabs 는 문자당 과금이고 이쪽은 로컬이라 $0 다. 다만 그냥 꽂으면 Shorts 60초
+ * 규격을 못 맞춘다. EP-2026-0091 씬1(72자)로 실측한 값:
+ *   원본 14.2초(5.1자/초) → instruct 지정 11.6초 → 문장 사이 무음 압축 8.9초(8.1자/초)
+ * ElevenLabs 가 7.9자/초라 무음만 정리하면 같은 자리에 들어온다. 느린 게 아니라
+ * 문장 사이를 길게 쉬는 것이었다 — 그래서 배속(atempo)보다 무음 압축을 먼저 쓴다.
+ */
+const QWEN_DIR = process.env.BT_QWEN_TTS_DIR || join(homedir(), 'qwen3-tts');
+const QWEN_SPEAKER = process.env.BT_QWEN_SPEAKER || 'sohee';
+const QWEN_MAX_PAUSE = 0.25;   // 문장 사이에 남길 무음(초)
+const QWEN_MAX_TEMPO = 1.35;   // 이보다 빠르게 밀면 알아듣기 어려워진다
+const QWEN_MIN_RATE = 2.5;     // 이보다 느리면 정상 발화가 아니라 반복 루프다 (자/초)
+const QWEN_MAX_ATTEMPTS = 3;   // 폭주 시 재생성 횟수
+
+/**
+ * 끝음 잘림 대책.
+ *
+ * 이 모델은 마지막 음절의 여운(릴리스)을 만들지 않고 발화가 살아 있는 상태에서 파일을 끝낸다.
+ * 실측(2026-08-14): 마지막 유성 프레임 10.46초 → 파일 끝 10.48초, 마지막 50ms 피크 -23dBFS.
+ * ElevenLabs 는 같은 지점이 -73dBFS 로, 0.4초에 걸쳐 -85dBFS 까지 감쇠한다.
+ *
+ * 뒤에 짧은 어구를 붙여 생성하면 본문이 정상 종료되고 그 뒤에 공백이 생긴다. 그 공백에서
+ * 잘라내면 본문의 여운이 살아 있는 상태로 끝난다 — 실측 결과 -73.4dBFS 로 ElevenLabs 와 같아졌다.
+ * clone·custom 양쪽 모두 같은 증상이라 두 경로에 모두 적용한다.
+ */
+const QWEN_TAIL_FILLER = ' 네.';
+const QWEN_TAIL_KEEP = 0.15;   // 공백에서 남길 여운(초) 상한
+const QWEN_TAIL_FADE = 0.06;   // 컷 지점 직전 페이드로 클릭음 방지
+
+/** ffmpeg silencedetect 로 무음 구간 [start, end] 목록을 얻는다. */
+function detectSilences(path, thresholdDb = -50, minDuration = 0.10) {
+  const r = spawnSync('ffmpeg', ['-i', path, '-af',
+    `silencedetect=n=${thresholdDb}dB:d=${minDuration}`, '-f', 'null', '-'],
+  { encoding: 'utf-8' });
+  const log = r.stderr || '';
+  const out = [];
+  let start = null;
+  for (const line of log.split('\n')) {
+    const s = /silence_start:\s*([0-9.]+)/.exec(line);
+    if (s) { start = Number(s[1]); continue; }
+    const e = /silence_end:\s*([0-9.]+)/.exec(line);
+    if (e && start !== null) { out.push({ start, end: Number(e[1]) }); start = null; }
+  }
+  return out;
+}
+
+/**
+ * 필러 앞 공백에서 자를 지점을 찾는다.
+ * 못 찾으면 null — 그때는 자르지 않고 원본을 그대로 쓴다(내용을 잃는 것보다 낫다).
+ */
+function findTailCut(rawPath, duration) {
+  const silences = detectSilences(rawPath);
+  const last = silences[silences.length - 1];
+  if (!last) return null;
+  const tailAfter = duration - last.end;      // 공백 뒤에 남은 소리 = 필러여야 한다
+  if (tailAfter > 0.8 || last.start < duration * 0.5) return null;
+  return last.start + Math.min(QWEN_TAIL_KEEP, (last.end - last.start) * 0.85);
+}
+
+/**
+ * 채널 고정 화자를 zero-shot 복제로 쓰는 경로.
+ *
+ * 학습이 아니라 참조 음성 한 개를 그때그때 조건으로 넣는 방식이라, 채널 디렉토리에
+ * ref.wav + ref.txt 만 두면 된다. 둘의 내용이 어긋나면 복제 품질이 떨어지므로
+ * 대사 텍스트를 파일로 함께 보관한다.
+ */
+export function loadCloneRef(channelId) {
+  if (!channelId) return null;
+  const ROOT = resolve(import.meta.dirname, '../..');
+  const dir = join(ROOT, 'workspace', 'channels', channelId, 'voice-ref');
+  const audio = join(dir, 'ref.wav');
+  const textPath = join(dir, 'ref.txt');
+  if (!existsSync(audio) || !existsSync(textPath)) return null;
+  const text = readFileSync(textPath, 'utf-8').trim();
+  if (!text) throw new Error(`${textPath} 가 비었다 — ref.wav 의 대사를 그대로 적어야 한다`);
+  return { audio, text };
+}
+
+/** 페르소나 톤을 Qwen 의 instruct 문구로 옮긴 것. ElevenLabs 의 stability/style 에 대응. */
+export const QWEN_INSTRUCT = {
+  'barro-alert': '빠르고 간결한 속보 브리핑 톤. 문장 사이를 끌지 말고 바로 이어서 읽어라.',
+  'barro-teacher': '차분하고 신뢰감 있는 설명 톤. 또박또박 읽되 문장 사이를 길게 끌지 마라.',
+};
 
 // 이모지·픽토그램(🚨📚✅ 등) 제거 — TTS 오발음·자막 표시 오류 방지 (2026-06-07)
 // 자막(render-direct.js)과 동일 규칙. narration 표기 원본은 보존하고 TTS 입력만 정제한다.
@@ -102,6 +190,115 @@ export async function generateTTS({ text, outPath, voiceId = DEFAULT_VOICE_ID, m
   return { path: outPath, bytes: mp3.length };
 }
 
+function probeDuration(path) {
+  const out = execFileSync('ffprobe', [
+    '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', path,
+  ], { encoding: 'utf-8' });
+  const seconds = Number(String(out).trim());
+  if (!Number.isFinite(seconds)) throw new Error(`ffprobe 가 길이를 못 읽었다: ${path}`);
+  return seconds;
+}
+
+/**
+ * Qwen3-TTS 로컬 CLI 로 같은 wav 를 만든다.
+ *
+ * 산출물 규격은 ElevenLabs 경로와 같게 맞춘다(44.1kHz mono s16) — sync-durations·
+ * render-direct 가 두 엔진을 구분하지 않아야 한다.
+ *
+ * targetSeconds 를 주면 무음 압축 후에도 넘칠 때만 배속을 건다. Shorts 는 60초가
+ * 규격이라 TTS 가 길이를 결정하게 두면 규격을 못 지킨다.
+ */
+export async function generateTTSQwen({
+  text, outPath, speaker = QWEN_SPEAKER, instruct = null, targetSeconds = null,
+  cloneRef = null, costContext = {},
+}) {
+  assertTtsNarration(text);
+  const py = join(QWEN_DIR, 'v', 'bin', 'python');
+  const cli = join(QWEN_DIR, 'tts.py');
+  if (!existsSync(py) || !existsSync(cli)) {
+    throw new Error(`Qwen3-TTS 로컬 설치를 찾을 수 없다: ${QWEN_DIR} — BT_QWEN_TTS_DIR 로 경로를 지정하라`);
+  }
+
+  mkdirSync(dirname(outPath), { recursive: true });
+  const rawPath = outPath.replace(/\.wav$/, '.raw.wav');
+  const trimPath = outPath.replace(/\.wav$/, '.trim.wav');
+  const pausePath = outPath.replace(/\.wav$/, '.pause.wav');
+
+  // 끝음 여운을 얻으려고 필러를 붙여 생성한 뒤, 아래에서 필러 앞 공백을 찾아 잘라낸다.
+  const spoken = `${text}${QWEN_TAIL_FILLER}`;
+
+  // clone 은 참조 음성이 화자를 정하므로 -s/-i 를 받지 않는다 (tts.py 의 clone 분기).
+  const args = cloneRef
+    ? [cli, spoken, '-m', 'clone', '--ref-audio', cloneRef.audio, '--ref-text', cloneRef.text, '-o', rawPath]
+    : [cli, spoken, '-s', speaker, '-l', 'korean', '-o', rawPath];
+  if (instruct && !cloneRef) args.push('-i', instruct);
+
+  // 샘플링이 반복 루프에 빠지면 같은 구절을 계속 읽는다 — 실측: ryan 화자가 123자를
+  // 63.8초로 뱉었다(정상 ~16초). 조용히 넘기면 배속으로 뭉개거나 규격을 깨므로,
+  // 글자수 대비 말이 안 되는 길이면 버리고 다시 뽑는다. temperature 0.9 라 재시도가 통한다.
+  const maxPlausible = Math.max(8, text.length / QWEN_MIN_RATE);
+  let rawDuration = 0;
+  for (let attempt = 1; attempt <= QWEN_MAX_ATTEMPTS; attempt++) {
+    const r = spawnSync(py, args, {
+      cwd: QWEN_DIR, encoding: 'utf-8', timeout: 900_000, maxBuffer: 10 * 1024 * 1024,
+    });
+    if (r.error?.code === 'ENOENT') throw new Error(`Qwen3-TTS python 을 실행할 수 없다: ${py}`);
+    if (r.status !== 0) throw new Error(`Qwen3-TTS 종료코드 ${r.status}: ${(r.stderr || '').slice(-300)}`);
+    if (!existsSync(rawPath)) throw new Error('Qwen3-TTS 가 wav 를 내놓지 않았다');
+
+    rawDuration = probeDuration(rawPath);
+    if (rawDuration <= maxPlausible) break;
+
+    if (attempt === QWEN_MAX_ATTEMPTS) {
+      throw new Error(`Qwen3-TTS 가 ${QWEN_MAX_ATTEMPTS}회 모두 폭주했다 `
+        + `(${text.length}자 → ${rawDuration.toFixed(1)}초, 상한 ${maxPlausible.toFixed(1)}초). `
+        + '문장을 짧게 끊거나 --speaker 를 바꿔라.');
+    }
+    console.warn(`  ⚠ 생성 폭주 (${text.length}자 → ${rawDuration.toFixed(1)}초) — 재생성 ${attempt}/${QWEN_MAX_ATTEMPTS - 1}`);
+  }
+
+  try {
+    // 1) 필러를 잘라낸다. 뒤쪽은 여기서만 건드린다 — 무음 제거로 뒤를 깎으면
+    //    애써 얻은 여운이 다시 사라진다(-45dB 기준이 릴리스를 무음으로 본다).
+    const cutAt = findTailCut(rawPath, rawDuration);
+    const cutArgs = cutAt
+      ? ['-t', cutAt.toFixed(3), '-af', `afade=t=out:st=${(cutAt - QWEN_TAIL_FADE).toFixed(3)}:d=${QWEN_TAIL_FADE}`]
+      : ['-af', 'anull'];
+    if (!cutAt) console.warn('  ⚠ 필러 경계를 못 찾았다 — 자르지 않고 그대로 쓴다');
+    execFileSync('ffmpeg', ['-y', '-v', 'error', '-i', rawPath, ...cutArgs, trimPath]);
+
+    // 2) 앞쪽 여백과 문장 사이 공백만 정리한다. 끝의 여운(< QWEN_MAX_PAUSE)은 살아남는다.
+    execFileSync('ffmpeg', ['-y', '-v', 'error', '-i', trimPath, '-af',
+      'silenceremove=start_periods=1:start_duration=0:start_threshold=-45dB'
+      + `:stop_periods=-1:stop_duration=${QWEN_MAX_PAUSE}:stop_threshold=-45dB`,
+      pausePath]);
+    renameSync(pausePath, trimPath);
+
+    // 2) 그래도 목표를 넘으면 그때만 배속. 상한을 넘는 초과분은 남겨 둔다 —
+    //    억지로 밀어 넣는 것보다 sync-durations 가 실길이를 반영하는 편이 낫다.
+    const trimmed = probeDuration(trimPath);
+    const tempo = targetSeconds && trimmed > targetSeconds
+      ? Math.min(trimmed / targetSeconds, QWEN_MAX_TEMPO)
+      : 1;
+    const filters = [tempo > 1 ? `atempo=${tempo.toFixed(4)}` : null, 'aresample=44100']
+      .filter(Boolean).join(',');
+    execFileSync('ffmpeg', ['-y', '-v', 'error', '-i', trimPath, '-af', filters,
+      '-ac', '1', '-sample_fmt', 's16', outPath]);
+
+    recordCost('voice-engineer', {
+      model: `qwen3-tts-local (${cloneRef ? 'clone' : speaker})`,
+      characters: text ? text.length : 0,
+      episode: costContext.episode || null,
+      stage: costContext.stage || null,
+      note: `${costContext.note || ''} local $0${tempo > 1 ? ` atempo=${tempo.toFixed(2)}` : ''}`.trim(),
+    });
+
+    return { path: outPath, raw: probeDuration(rawPath), trimmed, tempo, final: probeDuration(outPath) };
+  } finally {
+    for (const p of [rawPath, trimPath, pausePath]) { try { unlinkSync(p); } catch { /* 이미 없으면 그만 */ } }
+  }
+}
+
 function parseFrontmatter(mdPath) {
   const content = readFileSync(mdPath, 'utf-8');
   const match = content.match(/^---\n([\s\S]*?)\n---/);
@@ -128,14 +325,38 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
   try {
     const speed = parseSpeed(opts.speed);
+
+    // 엔진 선택은 두 진입점(--text, --script)에 모두 걸어야 한다.
+    // 처음엔 --script 쪽에만 걸었다가 --engine qwen 을 준 --text 호출이 조용히
+    // ElevenLabs 로 나가 과금됐다 (2026-08-14). 분기 위로 올린다.
+    const engine = (opts.engine || process.env.BT_TTS_ENGINE || 'elevenlabs').toLowerCase();
+    if (!['elevenlabs', 'qwen'].includes(engine)) {
+      throw new Error(`--engine 은 elevenlabs|qwen 중 하나여야 한다 (받음: ${engine})`);
+    }
+    const speaker = opts.speaker || QWEN_SPEAKER;
+
     if (opts.text && opts.out) {
-      await generateTTS({
-        text: opts.text,
-        outPath: resolve(opts.out),
-        settings: speed === null ? {} : { speed },
-        costContext: { stage: 'S6a', note: 'cli-text' },
-      });
-      console.log(`✅ TTS saved: ${opts.out}`);
+      if (engine === 'qwen') {
+        let cloneRef = null;
+        if (speaker === 'clone') {
+          cloneRef = loadCloneRef(opts.channel);
+          if (!cloneRef) throw new Error('--speaker clone 은 --channel <id> 와 그 채널의 voice-ref/ 가 필요하다');
+        }
+        const got = await generateTTSQwen({
+          text: opts.text, outPath: resolve(opts.out), speaker, cloneRef,
+          instruct: opts.instruct || null,
+          costContext: { stage: 'S6a', note: 'cli-text' },
+        });
+        console.log(`✅ TTS saved: ${opts.out} (qwen/${cloneRef ? 'clone' : speaker}, ${got.final.toFixed(1)}s)`);
+      } else {
+        await generateTTS({
+          text: opts.text,
+          outPath: resolve(opts.out),
+          settings: speed === null ? {} : { speed },
+          costContext: { stage: 'S6a', note: 'cli-text' },
+        });
+        console.log(`✅ TTS saved: ${opts.out}`);
+      }
     } else if (opts.script && opts['out-dir']) {
       const meta = parseFrontmatter(opts.script);
       const outDir = resolve(opts['out-dir']);
@@ -149,7 +370,26 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       const persona = meta.persona || null;
       const settings = { ...(persona && PERSONA_SETTINGS[persona] ? PERSONA_SETTINGS[persona] : {}) };
       if (speed !== null) settings.speed = speed;
-      if (persona) console.log(`🎭 Persona=${persona} → stability=${settings.stability ?? 'default'}, style=${settings.style ?? 'default'}, speed=${settings.speed ?? 'default'}`);
+
+      const instruct = opts.instruct || (persona ? QWEN_INSTRUCT[persona] : null) || null;
+
+      // speaker=clone 이면 채널의 참조 음성으로 복제한다.
+      let cloneRef = null;
+      if (engine === 'qwen' && speaker === 'clone') {
+        cloneRef = loadCloneRef(meta.channel_id);
+        if (!cloneRef) {
+          throw new Error(`--speaker clone 인데 참조 음성이 없다: `
+            + `workspace/channels/${meta.channel_id}/voice-ref/{ref.wav,ref.txt}`);
+        }
+        console.log(`   clone ref: ${cloneRef.audio} (${cloneRef.text.length}자 대사)`);
+      }
+
+      if (engine === 'qwen') {
+        console.log(`🎙 Engine=qwen3-tts (로컬 MLX, $0) speaker=${speaker}`);
+        if (instruct) console.log(`   instruct: ${instruct}`);
+      } else if (persona) {
+        console.log(`🎭 Persona=${persona} → stability=${settings.stability ?? 'default'}, style=${settings.style ?? 'default'}, speed=${settings.speed ?? 'default'}`);
+      }
 
       // narration은 TTS용 한글 수사, subtitle_text는 화면용 숫자 표기다.
       // phoneme override는 약어 발음에만 적용하며 숫자 표기를 대신하지 않는다.
@@ -198,23 +438,29 @@ if (import.meta.url === `file://${process.argv[1]}`) {
           totalOverrides += applied;
           console.log(`  📝 Scene ${scene.scene_id}: ${applied} phoneme override(s) applied`);
         }
-        await generateTTS({
-          text: ttsText,
-          outPath,
-          settings,
-          costContext: {
-            episode: meta.episode_id || null,
-            stage: 'S6a',
-            note: `scene_${scene.scene_id}${applied > 0 ? ` (${applied} phoneme overrides)` : ''}`,
-          },
-        });
-        console.log(`  ✅ Scene ${scene.scene_id} (${scene.narration.slice(0, 30)}...)`);
+        const costContext = {
+          episode: meta.episode_id || null,
+          stage: 'S6a',
+          note: `scene_${scene.scene_id}${applied > 0 ? ` (${applied} phoneme overrides)` : ''}`,
+        };
+        if (engine === 'qwen') {
+          const got = await generateTTSQwen({
+            text: ttsText, outPath, speaker, instruct, cloneRef,
+            targetSeconds: scene.target_seconds, costContext,
+          });
+          console.log(`  ✅ Scene ${scene.scene_id} ${got.raw.toFixed(1)}s → 무음압축 ${got.trimmed.toFixed(1)}s`
+            + `${got.tempo > 1 ? ` → ×${got.tempo.toFixed(2)} ` : ' → '}${got.final.toFixed(1)}s (목표 ${scene.target_seconds}s)`);
+        } else {
+          await generateTTS({ text: ttsText, outPath, settings, costContext });
+          console.log(`  ✅ Scene ${scene.scene_id} (${scene.narration.slice(0, 30)}...)`);
+        }
       }
       if (totalOverrides > 0) console.log(`\n📚 Total phoneme overrides applied: ${totalOverrides}`);
       console.log(`\n🎙 All TTS generated in ${outDir}`);
     } else {
       console.error('Usage: generate-tts.js --text "..." --out path/to/file.wav [--speed 0.7-1.2]');
       console.error('   or: generate-tts.js --script 30_script.md --out-dir assets/tts/ [--speed 0.7-1.2] [--force]');
+      console.error('                       [--engine elevenlabs|qwen] [--speaker sohee|ryan|...] [--instruct "..."]');
       process.exit(1);
     }
   } catch (e) {
