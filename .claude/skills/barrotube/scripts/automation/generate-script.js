@@ -44,6 +44,7 @@ import {
 import { formatToPlatform } from './paths.js';
 import { TEMPLATE, BOUNDS, KNOWN_PALETTES, CANONICAL_TAIL, MASCOT_CLAUSE } from './lib/image-prompt-contract.js';
 import { callClaudeCode, callCodex, resolveChain, runEngineChain } from './lib/text-engine.js';
+import { buildAnalystContractBlock, validateScript, formatIssue } from './lib/script-quality-contract.js';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const DEFAULT_MODEL = process.env.GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
@@ -176,6 +177,7 @@ RULES:
 3. Image prompts in ENGLISH. They MUST satisfy the image_prompt contract below (RULE 3-CONTRACT). It is machine-checked by validate-image-prompts.js before any image is generated — a violation blocks the pipeline.
 ${buildImagePromptContractBlock(mascotClause)}
 4. CRITICAL — narration is TTS input: write every date, number, decimal, percentage, and range as Korean spoken words; never use Arabic digits. Add subtitle_text for every scene with the same meaning, using Arabic number display where useful (예: narration "사십 퍼센트", subtitle_text "40%").
+${buildAnalystContractBlock(sceneCount)}
 5. BGM moods: tense_intro, calm_explain, dramatic_reveal, hopeful_outro, neutral_bg, upbeat_energy.
 6. emphasis_tokens: 1~3 Korean keywords per scene.
 7. Target audience: 20~40대 한국 투자자.
@@ -449,27 +451,56 @@ async function main() {
   const chain = requested === 'auto' ? ENGINE_CHAIN : [requested];
 
   // 엔진 러너는 lib/text-engine.js 의 runEngineChain 이 순서대로 시도한다.
-  const runners = {
-    claude: () => ({ json: callClaudeCode(systemPrompt, userPrompt, values.model || 'sonnet'), used: 'claude-code' }),
-    codex:  () => ({ json: callCodex(systemPrompt, userPrompt, values.model || null), used: 'codex' }),
-    gemini: async () => ({ json: await callGemini(systemPrompt, userPrompt, values.model, maxTokens),
+  const buildRunners = (prompt) => ({
+    claude: () => ({ json: callClaudeCode(systemPrompt, prompt, values.model || 'sonnet'), used: 'claude-code' }),
+    codex:  () => ({ json: callCodex(systemPrompt, prompt, values.model || null), used: 'codex' }),
+    gemini: async () => ({ json: await callGemini(systemPrompt, prompt, values.model, maxTokens),
                            used: values.model || DEFAULT_MODEL }),
-  };
-  const { json: rawJson, engineUsed } = await runEngineChain(chain, runners);
+  });
 
-  let parsed;
-  try {
-    parsed = JSON.parse(rawJson);
-  } catch (e) {
-    console.error('❌ JSON 파싱 실패');
-    console.error(rawJson.slice(0, 500));
-    process.exit(1);
-  }
+  /**
+   * 품질 계약 위반은 한 번만 되돌려 준다.
+   *
+   * 두 번째도 실패하면 위반을 frontmatter 에 남기고 진행한다 — 주관이 섞인 지표로
+   * 매일 도는 파이프라인을 멈춰 세우면, 다음 사람이 게이트를 끄는 쪽을 택하게 된다.
+   * 남은 위반은 Board 승인 화면에서 사람이 본다.
+   */
+  let parsed, engineUsed, scenes, qualityIssues = [];
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const prompt = attempt === 1
+      ? userPrompt
+      : [userPrompt, '', '## 재작성 지시 — 직전 응답이 RULE 4-CONTRACT 를 위반했다',
+         ...qualityIssues.map((i) => `- ${i.message}\n  → ${i.suggestion}`), '',
+         '지적된 것만 고치고 나머지 계약(씬 수·target_seconds 합·image_prompt·TTS 한글 수사)은 그대로 지켜라.',
+         '수치를 덜어낸 자리는 비우지 말고, 오늘 이 뉴스에서만 할 수 있는 인과·함의로 채워라. 분량은 유지한다.',
+        ].join('\n');
 
-  const scenes = parsed.scenes;
-  if (!Array.isArray(scenes) || scenes.length !== spec.scene_count) {
-    console.error(`❌ 씬 수 불일치: 기대 ${spec.scene_count}씬, 실제 ${scenes?.length || 0}씬`);
-    process.exit(1);
+    const got = await runEngineChain(chain, buildRunners(prompt));
+    engineUsed = got.engineUsed;
+
+    try {
+      parsed = JSON.parse(got.json);
+    } catch {
+      console.error('❌ JSON 파싱 실패');
+      console.error(got.json.slice(0, 500));
+      process.exit(1);
+    }
+
+    scenes = parsed.scenes;
+    if (!Array.isArray(scenes) || scenes.length !== spec.scene_count) {
+      console.error(`❌ 씬 수 불일치: 기대 ${spec.scene_count}씬, 실제 ${scenes?.length || 0}씬`);
+      process.exit(1);
+    }
+
+    qualityIssues = validateScript(scenes);
+    qualityIssues.forEach((i) => console.error(`   ${formatIssue(i)}`));
+    if (!qualityIssues.some((i) => i.severity === 'error')) break;
+
+    if (attempt === 2) {
+      console.warn('   ⚠ 재작성 후에도 품질 계약 위반이 남았다 — frontmatter 에 기록하고 진행한다');
+      break;
+    }
+    console.warn('   ↻ 품질 계약 위반 — 위반 목록을 붙여 한 번 재작성한다');
   }
 
   const total = scenes.reduce((a, s) => a + (s.target_seconds || (spec.target_total_seconds / spec.scene_count)), 0);
@@ -492,6 +523,10 @@ async function main() {
     if (fm.series_total) outFM.series_total = fm.series_total;
   }
   if (fm.parent_episode_id) outFM.parent_episode_id = fm.parent_episode_id;
+  // 남은 위반은 숨기지 않는다 — Board 승인 화면과 사후 추적이 이 필드를 본다.
+  if (qualityIssues.length) {
+    outFM.quality_issues = qualityIssues.map((i) => `${i.severity}: ${i.rule} ${i.message}`);
+  }
   outFM.scenes = scenes;
 
   const scriptBody = [

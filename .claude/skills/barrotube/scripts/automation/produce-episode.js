@@ -275,6 +275,11 @@ async function main() {
       console.log(`\n⏭  S4 Script: ${p.script} 존재 (skip, --force로 재생성)`);
     }
 
+    // S4 품질 — 분석 밀도 계약. generate-script.js 가 이미 한 번 재작성시켰으므로
+    // 여기서는 남은 위반을 로그에 남기기만 한다(--strict 없음). 두 번 멈출 이유가 없다.
+    runTracked(absEp, episodeId, 'S4', 'S4 Script Quality', '05-writer',
+      'scripts/automation/validate-script-quality.js', ['--file', scriptArg]);
+
     // S6a TTS — narration 한글 수사 / subtitle_text 숫자 표기를 먼저 강제한다.
     runTracked(absEp, episodeId, 'S6a', 'S6a TTS Subtitle Policy', '09-voice-engineer',
       'scripts/automation/validate-tts-policy.js', ['--file', scriptArg, '--strict']);
