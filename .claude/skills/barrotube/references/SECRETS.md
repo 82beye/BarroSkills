@@ -186,3 +186,68 @@ node scripts/automation/setup-youtube-oauth.js
 [동의 화면](https://console.cloud.google.com/apis/credentials/consent)을 **프로덕션**으로 게시하면
 만료가 사라진다. 사용자 100명 미만 자가 운영은 Google 심사가 필요 없다.
 게시 후 `.env` 에 `YOUTUBE_OAUTH_PUBLISHED=1` 을 넣으면 경과일 검사를 끈다.
+
+
+## 다른 머신으로 이식
+
+경로는 전부 환경변수 → `$HOME` 순으로 풀린다. 개인 절대경로는 코드에 없다
+(`tests/portability.test.js` 가 이를 고정한다).
+
+### 1. 레포와 데이터
+
+```bash
+git clone https://github.com/82beye/BarroSkills.git ~/workspace/BarroSkills
+# 데이터는 git 밖이다 — 별도로 옮긴다
+rsync -a old-host:~/BarroTubeData/ ~/BarroTubeData/
+```
+
+기본 위치가 아니면 환경변수로 지정한다.
+
+| 변수 | 기본값 | 용도 |
+|---|---|---|
+| `BARROTUBE_DATA` | `~/BarroTubeData` | workspace·에피소드·인텔 |
+| `BARRO_AI_FACTORY` | `~/BarroAiFactory` | today.myo 등 외부 채널 |
+| `BARROTUBE_HOME` | 스크립트 위치에서 자동 감지 | 스킬 루트 |
+| `BARROTUBE_CHARACTER_SHEET` | `$BARROTUBE_DATA/workspace/docs/바로경제_캐릭터시트.png` | 캐릭터 시트 |
+
+### 2. workspace 심볼릭
+
+`.claude/skills/barrotube/workspace` 는 gitignore 대상이다. 새 머신에서 만든다.
+
+```bash
+ln -s "${BARROTUBE_DATA:-$HOME/BarroTubeData}/workspace" \
+      ~/workspace/BarroSkills/.claude/skills/barrotube/workspace
+```
+
+### 3. 시크릿
+
+`.env` 는 추적되지 않는다. 옮기거나 새로 만든다 — 항목은 이 문서 위쪽 표 참조.
+YouTube OAuth 는 머신이 바뀌어도 refresh token 을 그대로 쓸 수 있다.
+
+### 4. 스케줄 설치
+
+```bash
+cd ~/workspace/BarroSkills/.claude/skills/barrotube
+npm install
+bash lib/install-cron.sh install competitor-scan "05:20,15:20"
+bash lib/install-cron.sh install us-close  "06:00"
+bash lib/install-cron.sh install kr-close  "Mon-Fri 16:00"
+bash lib/install-cron.sh install weekly-marketing "Mon 09:00"
+bash lib/doctor-cli.sh
+```
+
+`install-cron.sh` 가 설치 시점에 경로·node 를 새로 감지하므로 plist 를 복사하면 안 된다.
+node 는 실행 시점에도 `guards.sh` 의 `ensure_node_on_path` 가 다시 찾으므로
+nvm 버전이 올라가도 재설치 없이 계속 돈다.
+
+### 5. macOS 밖에서
+
+`install-cron.sh` 는 launchd 전용이다. Linux 라면 같은 스크립트를 crontab 에 건다.
+
+```cron
+20 5,15 * * *  /bin/bash ~/workspace/BarroSkills/.claude/skills/barrotube/lib/competitor-pipeline.sh
+0  6   * * *   /bin/bash ~/.../lib/auto-pipeline.sh --slot us-close
+0  16  * * 1-5 /bin/bash ~/.../lib/auto-pipeline.sh --slot kr-close
+```
+
+파이프라인 스크립트 자체는 bash 3.2 호환이고 PATH 를 스스로 보정하므로 그대로 돈다.

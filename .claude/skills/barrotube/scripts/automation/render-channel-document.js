@@ -12,6 +12,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, extname, join, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { parseArgs } from 'node:util';
 
 import { scanChannelEpisodes } from './lib/channel-adapters.js';
@@ -20,8 +21,8 @@ import { createChannelRegistry } from './lib/channel-registry.js';
 
 const SKILL_ROOT = resolve(import.meta.dirname, '../..');
 const REPO_ROOT = resolve(SKILL_ROOT, '../../..');
-const DATA_ROOT = resolve(process.env.BARROTUBE_DATA || '/Users/beye/BarroTubeData');
-const FACTORY_ROOT = resolve(process.env.BARRO_AI_FACTORY || '/Users/beye/BarroAiFactory');
+const DATA_ROOT = resolve(process.env.BARROTUBE_DATA || join(homedir(), 'BarroTubeData'));
+const FACTORY_ROOT = resolve(process.env.BARRO_AI_FACTORY || join(homedir(), 'BarroAiFactory'));
 
 const { values } = parseArgs({
   options: {

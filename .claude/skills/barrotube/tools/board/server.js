@@ -30,6 +30,7 @@ import {
 } from 'node:fs';
 import { createServer } from 'node:http';
 import { basename, dirname, extname, join, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
@@ -52,8 +53,8 @@ const REPO_ROOT = resolve(SKILL_ROOT, '../../..');
 const AUTOMATION_ROOT = join(SKILL_ROOT, 'scripts', 'automation');
 const MEDIA_RENDER_ROOT = resolve(SKILL_ROOT, '../barrotube-media-render');
 const MEDIA_RENDER_SCRIPTS = join(MEDIA_RENDER_ROOT, 'scripts');
-const DEFAULT_DATA_ROOT = resolve(process.env.BARROTUBE_DATA || '/Users/beye/BarroTubeData');
-const DEFAULT_FACTORY_ROOT = resolve(process.env.BARRO_AI_FACTORY || '/Users/beye/BarroAiFactory');
+const DEFAULT_DATA_ROOT = resolve(process.env.BARROTUBE_DATA || join(homedir(), 'BarroTubeData'));
+const DEFAULT_FACTORY_ROOT = resolve(process.env.BARRO_AI_FACTORY || join(homedir(), 'BarroAiFactory'));
 const DEFAULT_CHANNELS_ROOT = join(DEFAULT_DATA_ROOT, 'workspace', 'channels');
 const BODY_LIMIT = 1024 * 1024;
 const OUTPUT_LIMIT = 2 * 1024 * 1024;

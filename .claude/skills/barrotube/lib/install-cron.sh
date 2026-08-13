@@ -32,7 +32,13 @@ BARROTUBE_HOME="${BARROTUBE_HOME:-$(dirname "$SCRIPT_DIR")}"
 BARROSKILLS_HOME="$BARROTUBE_HOME"   # 하위 호환 alias
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 LABEL_PREFIX="com.barroskills.barrotube"   # collection.skill 형식 — 다른 스킬과 충돌 회피
-NODE_BIN="$(which node || echo /Users/beye/.nvm/versions/node/v24.11.1/bin/node)"
+# node 는 런타임에도 guards.sh 의 ensure_node_on_path 가 다시 찾는다.
+# 여기 값은 plist PATH 구성용 힌트일 뿐이라 특정 버전을 박지 않는다.
+NODE_BIN="$(command -v node || true)"
+if [ -z "$NODE_BIN" ] && [ -d "$HOME/.nvm/versions/node" ]; then
+  NODE_BIN="$HOME/.nvm/versions/node/$(ls -1 "$HOME/.nvm/versions/node" | sort -V | tail -1)/bin/node"
+fi
+[ -n "$NODE_BIN" ] || NODE_BIN="/usr/bin/env node"
 
 # launchd 는 로그인 셸을 거치지 않아 PATH 가 거의 비어 있다. 설치 시점에 실제 경로를
 # 찾아 박아 넣는다 — 기존 고정 PATH 로는 claude(~/.local/bin)를 못 찾고, node 도

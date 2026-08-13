@@ -12,7 +12,7 @@ import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync, sta
 import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { execSync, spawnSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import { renderDirect } from './render-direct.js';
 import { buildDistributionPackage } from './build-distribution.js';
 import {
@@ -31,8 +31,8 @@ const ROOT = resolve(import.meta.dirname, '../..');
 
 const WORKSPACE = resolve(import.meta.dirname, '../../workspace');
 const LOGS = resolve(import.meta.dirname, '../../logs');
-const DATA_ROOT = resolve(process.env.BARROTUBE_DATA || '/Users/beye/BarroTubeData');
-const FACTORY_ROOT = resolve(process.env.BARRO_AI_FACTORY || '/Users/beye/BarroAiFactory');
+const DATA_ROOT = resolve(process.env.BARROTUBE_DATA || join(homedir(), 'BarroTubeData'));
+const FACTORY_ROOT = resolve(process.env.BARRO_AI_FACTORY || join(homedir(), 'BarroAiFactory'));
 let ACTIVE_CHANNEL_ID = null;
 
 async function loadPublishChannel(channelId) {
