@@ -77,3 +77,10 @@ _local/*
 
 # git worktree 작업 폴더 (EnterWorktree)
 .claude/worktrees/
+
+# bkit 도구 자동 상태 — 세션 카운터·타임스탬프뿐이라 매 세션 diff 만 남긴다.
+# 실제로 무관한 커밋 6개 이상에 딸려 들어갔다(58e5491, 003d525, a08a966 …).
+# .pdca-status.json 은 22KB 지만 내용은 자동 감지된 디렉터리 이름이 전부이고
+# documents 는 전부 0 이라 복원 가치가 없다. 지우면 bkit 이 다시 만든다.
+**/.bkit-memory.json
+**/.pdca-status.json
