@@ -286,7 +286,9 @@ async function main() {
 
     const ttsDone = exists(join(p.ttsDir, 'scene_001.wav')) && exists(join(p.ttsDir, 'scene_005.wav'));
     if (!ttsDone || force) {
-      runTracked(absEp, episodeId, 'S6a', 'S6a TTS (ElevenLabs)', '09-voice-engineer',
+      // 엔진은 generate-tts.js 가 BT_TTS_ENGINE_CHAIN 으로 정한다 (기본 qwen → elevenlabs).
+      // BT_IMAGE_ENGINE 과 같은 env 관례라 여기서 인자를 넘기지 않는다.
+      runTracked(absEp, episodeId, 'S6a', 'S6a TTS (qwen → elevenlabs)', '09-voice-engineer',
         'scripts/automation/generate-tts.js', [
           '--script', scriptArg,
           '--out-dir', ttsDirArg,

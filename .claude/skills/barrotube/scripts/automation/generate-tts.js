@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * generate-tts.js — ElevenLabs TTS 생성
+ * generate-tts.js — TTS 생성 (로컬 Qwen3-TTS → ElevenLabs 체인)
  *
  * Usage:
  *   node generate-tts.js --text "나레이션 텍스트" --out path/scene_001.wav
@@ -30,7 +30,19 @@ const DEFAULT_MODEL = 'eleven_multilingual_v2';
  * 문장 사이를 길게 쉬는 것이었다 — 그래서 배속(atempo)보다 무음 압축을 먼저 쓴다.
  */
 const QWEN_DIR = process.env.BT_QWEN_TTS_DIR || join(homedir(), 'qwen3-tts');
-const QWEN_SPEAKER = process.env.BT_QWEN_SPEAKER || 'sohee';
+const QWEN_SPEAKER = process.env.BT_QWEN_SPEAKER || 'clone';
+
+/**
+ * auto 모드의 시도 순서. 로컬($0)을 먼저 쓰고 유료 API 를 뒤에 둔다.
+ *
+ * 로컬 모델은 확률적으로 폭주하고(실측: 123자를 63.8초), 그건 재생성으로도 못 뚫을 수
+ * 있다. 무인 cron 에서 그 한 씬 때문에 하루치 에피소드를 못 내보내는 것보다,
+ * 그 씬만 유료로 넘기고 경고를 남기는 편이 낫다. generate-script.js 의 엔진 체인과 같은 규약.
+ */
+export function resolveTtsChain(spec = process.env.BT_TTS_ENGINE_CHAIN) {
+  const fallback = 'qwen,elevenlabs';
+  return String(spec || fallback).split(',').map((e) => e.trim()).filter(Boolean);
+}
 const QWEN_MAX_PAUSE = 0.25;   // 문장 사이에 남길 무음(초)
 const QWEN_MAX_TEMPO = 1.35;   // 이보다 빠르게 밀면 알아듣기 어려워진다
 const QWEN_MIN_RATE = 2.5;     // 이보다 느리면 정상 발화가 아니라 반복 루프다 (자/초)
@@ -329,14 +341,19 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     // 엔진 선택은 두 진입점(--text, --script)에 모두 걸어야 한다.
     // 처음엔 --script 쪽에만 걸었다가 --engine qwen 을 준 --text 호출이 조용히
     // ElevenLabs 로 나가 과금됐다 (2026-08-14). 분기 위로 올린다.
-    const engine = (opts.engine || process.env.BT_TTS_ENGINE || 'elevenlabs').toLowerCase();
-    if (!['elevenlabs', 'qwen'].includes(engine)) {
-      throw new Error(`--engine 은 elevenlabs|qwen 중 하나여야 한다 (받음: ${engine})`);
+    const engine = (opts.engine || process.env.BT_TTS_ENGINE || 'auto').toLowerCase();
+    if (!['auto', 'elevenlabs', 'qwen'].includes(engine)) {
+      throw new Error(`--engine 은 auto|elevenlabs|qwen 중 하나여야 한다 (받음: ${engine})`);
     }
+    // 명시 지정은 폴백 없이 그 엔진으로만 간다 — 그렇게 부른 사람은 실패를 보고 싶은 것이다
+    // (generate-script.js 의 --engine 과 같은 규약).
+    let chain = engine === 'auto' ? resolveTtsChain() : [engine];
     const speaker = opts.speaker || QWEN_SPEAKER;
+    const engineUsed = {};
 
     if (opts.text && opts.out) {
-      if (engine === 'qwen') {
+      // 단발 호출은 체인을 돌리지 않는다 — 첫 엔진으로만 간다. 사람이 보고 있는 경로다.
+      if (chain[0] === 'qwen') {
         let cloneRef = null;
         if (speaker === 'clone') {
           cloneRef = loadCloneRef(opts.channel);
@@ -374,20 +391,27 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       const instruct = opts.instruct || (persona ? QWEN_INSTRUCT[persona] : null) || null;
 
       // speaker=clone 이면 채널의 참조 음성으로 복제한다.
+      // 참조가 없는 채널은 로컬을 건너뛰고 기존 ElevenLabs 목소리를 그대로 쓴다 —
+      // 참조도 없이 sohee 같은 기성 화자로 조용히 갈아타면 채널 정체성이 바뀐다.
       let cloneRef = null;
-      if (engine === 'qwen' && speaker === 'clone') {
+      if (chain.includes('qwen') && speaker === 'clone') {
         cloneRef = loadCloneRef(meta.channel_id);
-        if (!cloneRef) {
-          throw new Error(`--speaker clone 인데 참조 음성이 없다: `
+        if (cloneRef) {
+          console.log(`   clone ref: ${cloneRef.audio} (${cloneRef.text.length}자 대사)`);
+        } else if (chain.length > 1) {
+          console.warn(`  ⚠ ${meta.channel_id} 에 voice-ref 가 없다 — 로컬 복제를 건너뛴다`);
+          chain = chain.filter((e) => e !== 'qwen');
+        } else {
+          throw new Error('--speaker clone 인데 참조 음성이 없다: '
             + `workspace/channels/${meta.channel_id}/voice-ref/{ref.wav,ref.txt}`);
         }
-        console.log(`   clone ref: ${cloneRef.audio} (${cloneRef.text.length}자 대사)`);
       }
+      console.log(`🎙 Engine chain: ${chain.join(' → ')}${chain.includes('qwen') ? ` (qwen speaker=${speaker})` : ''}`);
 
-      if (engine === 'qwen') {
-        console.log(`🎙 Engine=qwen3-tts (로컬 MLX, $0) speaker=${speaker}`);
-        if (instruct) console.log(`   instruct: ${instruct}`);
-      } else if (persona) {
+      if (chain.includes('qwen') && instruct) {
+        console.log(`   instruct: ${instruct}`);
+      }
+      if (chain.includes('elevenlabs') && persona) {
         console.log(`🎭 Persona=${persona} → stability=${settings.stability ?? 'default'}, style=${settings.style ?? 'default'}, speed=${settings.speed ?? 'default'}`);
       }
 
@@ -443,24 +467,47 @@ if (import.meta.url === `file://${process.argv[1]}`) {
           stage: 'S6a',
           note: `scene_${scene.scene_id}${applied > 0 ? ` (${applied} phoneme overrides)` : ''}`,
         };
-        if (engine === 'qwen') {
-          const got = await generateTTSQwen({
-            text: ttsText, outPath, speaker, instruct, cloneRef,
-            targetSeconds: scene.target_seconds, costContext,
-          });
-          console.log(`  ✅ Scene ${scene.scene_id} ${got.raw.toFixed(1)}s → 무음압축 ${got.trimmed.toFixed(1)}s`
-            + `${got.tempo > 1 ? ` → ×${got.tempo.toFixed(2)} ` : ' → '}${got.final.toFixed(1)}s (목표 ${scene.target_seconds}s)`);
-        } else {
-          await generateTTS({ text: ttsText, outPath, settings, costContext });
-          console.log(`  ✅ Scene ${scene.scene_id} (${scene.narration.slice(0, 30)}...)`);
+        // 씬 단위로 체인을 돈다. 로컬이 폭주해 3회 재생성까지 실패해도 그 씬만 유료 API 로
+        // 넘어가고 나머지는 로컬로 남는다 — cron 이 한 씬 때문에 통째로 서지 않는다.
+        // 목소리가 섞이지 않는 이유: clone 의 참조가 애초에 ElevenLabs 화자다.
+        let lastError = null;
+        for (const [i, name] of chain.entries()) {
+          try {
+            if (name === 'qwen') {
+              const got = await generateTTSQwen({
+                text: ttsText, outPath, speaker, instruct, cloneRef,
+                targetSeconds: scene.target_seconds, costContext,
+              });
+              console.log(`  ✅ Scene ${scene.scene_id} ${got.raw.toFixed(1)}s → 무음압축 ${got.trimmed.toFixed(1)}s`
+                + `${got.tempo > 1 ? ` → ×${got.tempo.toFixed(2)} ` : ' → '}${got.final.toFixed(1)}s (목표 ${scene.target_seconds}s)`);
+            } else {
+              await generateTTS({ text: ttsText, outPath, settings, costContext });
+              console.log(`  ✅ Scene ${scene.scene_id} (${scene.narration.slice(0, 30)}...)`);
+            }
+            engineUsed[name] = (engineUsed[name] || 0) + 1;
+            lastError = null;
+            break;
+          } catch (e) {
+            lastError = e;
+            const last = i === chain.length - 1;
+            if (last) break;
+            console.warn(`  ⚠ Scene ${scene.scene_id} ${name} 실패 (${e.message.slice(0, 120)}) → ${chain[i + 1]} 로 폴백`);
+          }
         }
+        if (lastError) throw lastError;
       }
       if (totalOverrides > 0) console.log(`\n📚 Total phoneme overrides applied: ${totalOverrides}`);
-      console.log(`\n🎙 All TTS generated in ${outDir}`);
+      const used = Object.entries(engineUsed).map(([k, v]) => `${k} ${v}씬`).join(' · ');
+      console.log(`\n🎙 All TTS generated in ${outDir}${used ? ` (${used})` : ''}`);
+      if (engineUsed.elevenlabs && chain[0] === 'qwen') {
+        console.warn(`⚠ ${engineUsed.elevenlabs}개 씬이 유료 폴백으로 나갔다 — 로컬 엔진 상태를 확인하라`);
+      }
     } else {
       console.error('Usage: generate-tts.js --text "..." --out path/to/file.wav [--speed 0.7-1.2]');
       console.error('   or: generate-tts.js --script 30_script.md --out-dir assets/tts/ [--speed 0.7-1.2] [--force]');
-      console.error('                       [--engine elevenlabs|qwen] [--speaker sohee|ryan|...] [--instruct "..."]');
+      console.error('                       [--engine auto|qwen|elevenlabs] [--speaker clone|sohee|ryan|...] [--instruct "..."]');
+      console.error('  기본 auto = qwen → elevenlabs 체인 (BT_TTS_ENGINE_CHAIN 으로 변경).');
+      console.error('  --engine 을 명시하면 폴백 없이 그 엔진으로만 간다.');
       process.exit(1);
     }
   } catch (e) {
