@@ -72,6 +72,16 @@ test('cron pipeline keeps browser assets, render, and publish in fail-closed ord
   const produce = readFileSync(PRODUCE, 'utf8');
   assert.match(produce, /sceneIds\.every\(id => exists\(join\(p\.assetsDir, 'videos'/);
   assert.match(produce, /'--platform', platform/);
+
+  // S6c 는 이미지가 다 있고 클립만 없을 때 로컬 엔진을 먼저 돌린 뒤에야 멈춘다.
+  // 예전에는 그 자리에서 바로 exit 3 이었고, 무인 실행이 사람을 기다리며 끝났다.
+  const motionRun = produce.indexOf('generate-motion.js');
+  const exit3 = produce.indexOf('process.exit(3)');
+  assert.ok(motionRun > 0 && motionRun < exit3,
+    '로컬 모션 엔진 시도가 exit 3 보다 앞서야 한다');
+  assert.match(produce, /imgDone && !motionDone && platform === 'shorts' && motionEngine !== 'none'/);
+  assert.match(produce, /motionDone = motionExists\(\)/,
+    '엔진을 돌린 뒤 파일을 다시 확인해야 한다 — 성공 여부를 에이전트 응답으로 믿지 않는다');
 });
 
 test('closed markets switch research to current issues and Sunday pre-open mode', () => {
