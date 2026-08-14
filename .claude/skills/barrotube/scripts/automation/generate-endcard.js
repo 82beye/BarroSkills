@@ -31,6 +31,22 @@ function fontB64(weight) {
   return _fontCache[weight];
 }
 
+/**
+ * 카드에 찍을 채널 이름. 00_brief.md 의 channel_id → channel.yaml 의 identity.display_name.
+ * 못 찾으면 채널 id 를 그대로 쓴다 — 'BarroTube' 같은 엉뚱한 브랜드보다 낫다.
+ */
+function resolveChannelName(epAbs) {
+  try {
+    const brief = readFileSync(join(epAbs, '00_brief.md'), 'utf-8');
+    const cid = brief.match(/^channel_id:\s*(.+)$/m)?.[1]?.trim();
+    if (!cid) return 'BarroTube';
+    const yaml = readFileSync(join(ROOT, 'workspace', 'channels', cid, 'channel.yaml'), 'utf-8');
+    return yaml.match(/^\s*display_name:\s*(.+)$/m)?.[1]?.trim().replace(/^["']|["']$/g, '') || cid;
+  } catch {
+    return 'BarroTube';
+  }
+}
+
 function esc(s = '') {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
@@ -119,7 +135,10 @@ async function main() {
     options: {
       episode: { type: 'string', short: 'e' },
       platform: { type: 'string', default: 'long' },
-      'channel-name': { type: 'string', default: 'BarroTube' },
+      // 2026-08-14: 기본값이 'BarroTube' 였다 — 그건 스킬 이름이지 채널 이름이 아니다.
+      // 발행본 엔드카드는 전부 '바로경제' 인데 이 스크립트로 만든 카드만 다른 브랜드를 찍었다.
+      // 기본값을 비우고 아래에서 channel.yaml 의 identity.display_name 을 읽는다.
+      'channel-name': { type: 'string' },
       tagline: { type: 'string', default: '3분이면 충분한 경제' },
       base: { type: 'string' },
       out: { type: 'string' },
@@ -133,6 +152,7 @@ async function main() {
   }
 
   const epAbs = isAbsolute(values.episode) ? values.episode : resolve(process.cwd(), values.episode);
+  const channelName = values['channel-name'] || resolveChannelName(epAbs);
   const platform = values.platform === 'shorts' ? 'shorts' : 'long';
   const isLong = platform === 'long';
   const baseDir = join(epAbs, 'platforms', platform);
@@ -167,7 +187,7 @@ async function main() {
     baseForComposite = await sharp({ create: { width: W, height: H, channels: 3, background: '#0F1830' } }).png().toBuffer();
   }
 
-  const overlay = Buffer.from(buildOverlaySvg({ W, H, channelName: values['channel-name'], tagline: values.tagline, isLong }));
+  const overlay = Buffer.from(buildOverlaySvg({ W, H, channelName, tagline: values.tagline, isLong }));
   await sharp(baseForComposite).composite([{ input: overlay }]).png().toFile(outPath);
 
   console.log(`✅ Endcard saved: ${outPath} (${W}x${H}, platform=${platform})`);

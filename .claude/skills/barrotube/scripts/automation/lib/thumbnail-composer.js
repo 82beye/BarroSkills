@@ -160,6 +160,33 @@ async function loadBrandLogoLayers(spec) {
   return layers;
 }
 
+/**
+ * 헤드라인을 캔버스 폭 안에 맞춘다.
+ *
+ * 한글은 글자당 대략 1em 이므로 한 줄에 들어가는 글자 수 ≈ 사용폭 / fontSize.
+ * 큰 크기부터 시도하고, 가장 작은 크기로도 안 되면 공백 기준으로 두 줄로 나눈다.
+ */
+export function fitHeadline(text, sizes = [130, 112, 96]) {
+  const usable = CANVAS_W - 120;   // 좌우 60px 여백
+  for (const fontSize of sizes) {
+    if (text.length * fontSize <= usable) return { lines: [text], fontSize };
+  }
+  const fontSize = sizes[sizes.length - 1];
+  const parts = text.split(' ').filter(Boolean);
+  if (parts.length < 2) return { lines: [text], fontSize: Math.floor(usable / Math.max(1, text.length)) };
+  // 두 줄의 길이가 비슷해지는 지점에서 자른다.
+  let best = 1;
+  let bestDiff = Infinity;
+  for (let i = 1; i < parts.length; i++) {
+    const a = parts.slice(0, i).join(' ').length;
+    const b = parts.slice(i).join(' ').length;
+    if (Math.abs(a - b) < bestDiff) { bestDiff = Math.abs(a - b); best = i; }
+  }
+  const lines = [parts.slice(0, best).join(' '), parts.slice(best).join(' ')];
+  const longest = Math.max(...lines.map(l => l.length));
+  return { lines, fontSize: Math.min(fontSize, Math.floor(usable / Math.max(1, longest))) };
+}
+
 export async function composeThumbnail({ baseImagePath, spec, outPath }) {
   if (!existsSync(baseImagePath)) throw new Error(`base image not found: ${baseImagePath}`);
   if (!spec || typeof spec !== 'object') throw new Error('spec required');
@@ -220,8 +247,11 @@ export async function composeThumbnail({ baseImagePath, spec, outPath }) {
         fontSize = 90;
       }
     } else {
-      lines = [spec.headline_text];
-      fontSize = 130;
+      // 2026-08-14: 여기엔 길이 분기가 없어 130px 고정이었다. 한글은 글자당 대략 1em 이라
+      // 11자면 ~1430px — 1080px 캔버스 밖으로 잘려 나간다. EP-2026-0093 썸네일
+      // "코스피를 올린 진짜 힘" 이 좌우로 잘린 채 나왔다. intro 쪽에만 있던 길이 대응을
+      // 여기에도 둔다.
+      ({ lines, fontSize } = fitHeadline(spec.headline_text));
     }
     const lineHeight = Math.floor(fontSize * 1.25);
     const blockTop = isIntro ? 80 : 240;  // intro: 화면 상단 5% (base의 negative space)
