@@ -26,17 +26,16 @@ test('cron pipeline keeps browser assets, render, and publish in fail-closed ord
   const publish = source.indexOf('run_or_echo node scripts/automation/run-episode.js');
   assert.ok(chatgpt >= 0 && chatgpt < render && render < publish);
 
-  // 2026-08-14: 모션 클립 기본 엔진이 로컬 HyperFrames 로 바뀌었다. 브라우저 단계는
-  // 스틸만 책임지고, Grok image→video 절차는 BT_MOTION_ENGINE=none 분기에만 남는다.
-  // 그래서 Grok 문구의 파일 내 위치는 더 이상 실행 순서를 뜻하지 않는다 — 대신 분기가
-  // 살아 있는지와 기본값이 무엇인지를 고정한다.
-  assert.match(source, /MOTION_ENGINE="\$\{BT_MOTION_ENGINE:-hyperframes\}"/,
-    '기본 모션 엔진은 로컬이어야 한다');
+  // 2026-08-14: 모션 정본은 Grok 이다 — 피사체가 실제로 움직여야 화면이 산다.
+  // 로컬 HyperFrames 는 브라우저가 막혔을 때 파이프라인이 멈추지 않게 하는 폴백이고,
+  // produce-episode 의 S6c 가 클립이 비어 있을 때만 돌린다.
+  // 기본값이 로컬로 뒤집히면 매일 정지 화면 같은 영상이 나간다.
+  assert.match(source, /MOTION_ENGINE="\$\{BT_MOTION_ENGINE:-grok\}"/,
+    '기본 모션 엔진은 Grok 이어야 한다');
   assert.ok(source.includes('2. 위 이미지가 모두 저장된 뒤에만 Chrome의 Grok'),
-    'BT_MOTION_ENGINE=none 으로 되돌릴 Grok 절차가 남아 있어야 한다');
-  assert.ok(source.indexOf('generate-motion.js') === -1
-    || source.indexOf('로컬 HyperFrames 가 만든다') > 0,
-    '로컬 경로를 쓸 때는 브라우저 프롬프트가 Grok 을 열지 말라고 말해야 한다');
+    '브라우저에 Grok 클립을 요구하는 절차가 있어야 한다');
+  assert.ok(source.includes('로컬 HyperFrames 가 만든다'),
+    'local-only 로 돌릴 때의 안내도 남아 있어야 한다');
 
   for (const required of [
     '40_assets/images/scene_${id}.png',
@@ -82,6 +81,15 @@ test('cron pipeline keeps browser assets, render, and publish in fail-closed ord
   assert.match(produce, /imgDone && !motionDone && platform === 'shorts' && motionEngine !== 'none'/);
   assert.match(produce, /motionDone = motionExists\(\)/,
     '엔진을 돌린 뒤 파일을 다시 확인해야 한다 — 성공 여부를 에이전트 응답으로 믿지 않는다');
+
+  // S7 은 자막 층을 고른다. 기본은 Grok 모션 렌더 위에 HyperFrames 자막(references/CAPTIONS.md).
+  // 어느 쪽이든 산출물이 55_render/video.mp4 라 QA·승인·게시는 그대로다.
+  assert.match(produce, /BT_CAPTION_ENGINE \|\| 'hyperframes'/);
+  assert.match(produce, /render-with-captions\.js/);
+  assert.match(produce, /captionEngine === 'hyperframes'/);
+  const capIdx = produce.indexOf('render-with-captions.js');
+  const pilIdx = produce.indexOf('render-direct.js');
+  assert.ok(capIdx > 0 && pilIdx > 0, '두 경로가 모두 살아 있어야 한다');
 });
 
 test('closed markets switch research to current issues and Sunday pre-open mode', () => {

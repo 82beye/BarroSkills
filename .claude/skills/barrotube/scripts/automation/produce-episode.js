@@ -425,15 +425,29 @@ async function main() {
     }
 
     // S7 Render
+    // 자막 층 선택. 기본 hyperframes — Grok 모션으로 한 영상을 렌더한 뒤(자막 OFF)
+    // 그 영상을 배경으로 깔고 HyperFrames 가 자막을 그린다(references/CAPTIONS.md).
+    // BT_CAPTION_ENGINE=pil 이면 기존 파이썬 PNG 자막 경로.
+    // 어느 쪽이든 산출물은 55_render/video.mp4 라 QA·승인·게시는 그대로다.
+    const captionEngine = (process.env.BT_CAPTION_ENGINE || 'hyperframes').toLowerCase();
     mkdirSync(p.renderDir, { recursive: true });
     if (!exists(p.video) || force) {
-      runTracked(absEp, episodeId, 'S7', 'S7 Render (ffmpeg + PIL subtitles)', '10-capcut-composer',
-        'scripts/automation/render-direct.js', [
-          '--episode', relEp,
-          '--out', renderOutArg,
-          '--canvas', platform === 'long' ? 'horizontal' : 'vertical',
-          '--platform', platform,
-        ]);
+      if (captionEngine === 'hyperframes') {
+        runTracked(absEp, episodeId, 'S7', 'S7 Render (Grok 모션 + HyperFrames 자막)', '10-capcut-composer',
+          'scripts/automation/render-with-captions.js', [
+            '--episode', relEp,
+            '--out', renderOutArg,
+            '--platform', platform,
+          ]);
+      } else {
+        runTracked(absEp, episodeId, 'S7', 'S7 Render (ffmpeg + PIL subtitles)', '10-capcut-composer',
+          'scripts/automation/render-direct.js', [
+            '--episode', relEp,
+            '--out', renderOutArg,
+            '--canvas', platform === 'long' ? 'horizontal' : 'vertical',
+            '--platform', platform,
+          ]);
+      }
     } else {
       console.log(`\n⏭  S7 Render: ${p.video} 존재 (skip)`);
     }

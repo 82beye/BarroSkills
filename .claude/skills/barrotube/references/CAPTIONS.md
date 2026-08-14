@@ -4,7 +4,7 @@
 libass/drawtext 가 없어서 나온 우회로이고, 그래서 할 수 있는 연출이 "색이 바뀐다" 하나뿐이었다.
 
 ```bash
-node scripts/automation/pilot-variety-captions.js --episode workspace/episodes/EP-YYYY-NNNN \
+node scripts/automation/render-with-captions.js --episode workspace/episodes/EP-YYYY-NNNN \
   --platform shorts --keep-base
 ```
 
@@ -80,8 +80,12 @@ youtube `ddFFtFylJZE` 프레임 실측 (1920x1080).
 단어 타이밍이 **글자수 비례 근사**다. 기존 카라오케 모드와 같은 정밀도이고, TTS 타임스탬프
 사이드카가 생기면 `splitPhrases`/단어 배분만 갈아 끼우면 정확해진다.
 
-## 상태
+## 파이프라인에서의 자리
 
-**파일럿이다.** `produce-episode` 경로에 연결돼 있지 않다. 기존 렌더(`55_render/video.mp4`)와
-나란히 비교하도록 별도 산출물(`55_render/pilot_captions.mp4`)로 나온다.
-확정하면 `render-direct.js` 의 자막 층을 이 경로로 교체한다.
+`produce-episode` 의 **S7 이 기본으로 이 경로를 쓴다** (`BT_CAPTION_ENGINE=hyperframes`).
+산출물이 `55_render/video.mp4` 로 같으므로 QA·승인·게시 단계는 바뀌지 않는다.
+기존 파이썬 PNG 자막으로 되돌리려면 `BT_CAPTION_ENGINE=pil`.
+
+모션은 **Grok 이 정본**이다 — 피사체가 실제로 움직여야 화면이 산다. 로컬 HyperFrames 모션
+(`generate-motion.js`)은 브라우저가 막혔을 때의 폴백이고, 이 자막 층과는 별개다
+(`references/MOTION.md`).
