@@ -67,12 +67,18 @@ scenes:
   writeFileSync(join(dir, '45_intro.png'), 'present');
   writeFileSync(join(dir, '48_outro.png'), 'present');
   const motion = join(assets, 'videos/scene_001.mp4');
-  writeFileSync(motion, 'present');
 
   const runFfmpeg = (args) => {
     const result = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', ...args], { encoding: 'utf-8' });
     assert.equal(result.status, 0, result.stderr);
   };
+  // 진짜로 움직이는 클립이어야 한다. 예전엔 'present' 라는 글자를 .mp4 로 써 뒀는데,
+  // QA 가 파일 존재만 세던 시절엔 통과했다. 지금은 앞뒤 프레임을 실제로 비교한다.
+  const writeMotionClip = () => runFfmpeg([
+    '-f', 'lavfi', '-i', 'testsrc=size=64x64:rate=30:duration=2',
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', motion,
+  ]);
+  writeMotionClip();
   // 씬 TTS 는 scene target_seconds(2s) 에 맞춘다. 아래 렌더 영상만 인트로·아웃트로를
   // 포함한 전체 길이(7.5s)다 — 둘을 같이 늘리면 TTS sync 검사가 깨진다.
   runFfmpeg([
@@ -96,7 +102,7 @@ scenes:
 
   renderVideo('0.1');
   let report = runQa();
-  for (const row of ['Motion clips', 'BGM presence', 'AAC bitrate', 'Integrated loudness', 'True peak']) {
+  for (const row of ['Motion clips', 'Motion liveness', 'BGM presence', 'AAC bitrate', 'Integrated loudness', 'True peak']) {
     assert.match(report, new RegExp(`\\| ${row} \\|`));
   }
   assert.match(report, /bundled-alert:/);
@@ -109,7 +115,7 @@ scenes:
   assert.match(report, /\| Motion clips \| ❌ \| 0\/1 \|/);
   assert.match(report, /\*\*FAIL\*\*/);
 
-  writeFileSync(motion, 'present');
+  writeMotionClip();
   renderVideo('8');
   report = runQa();
   assert.match(report, /\| True peak \| ❌ \|/);

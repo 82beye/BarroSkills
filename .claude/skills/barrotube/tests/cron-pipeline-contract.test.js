@@ -22,10 +22,21 @@ test('cron pipeline keeps browser assets, render, and publish in fail-closed ord
   assert.equal(syntax.status, 0, syntax.stderr);
 
   const chatgpt = source.indexOf('1. Chrome의 ChatGPT');
-  const grok = source.indexOf('2. 위 이미지가 모두 저장된 뒤에만 Chrome의 Grok');
   const render = source.indexOf('run_or_echo node scripts/automation/produce-episode.js');
   const publish = source.indexOf('run_or_echo node scripts/automation/run-episode.js');
-  assert.ok(chatgpt >= 0 && chatgpt < grok && grok < render && render < publish);
+  assert.ok(chatgpt >= 0 && chatgpt < render && render < publish);
+
+  // 2026-08-14: 모션 클립 기본 엔진이 로컬 HyperFrames 로 바뀌었다. 브라우저 단계는
+  // 스틸만 책임지고, Grok image→video 절차는 BT_MOTION_ENGINE=none 분기에만 남는다.
+  // 그래서 Grok 문구의 파일 내 위치는 더 이상 실행 순서를 뜻하지 않는다 — 대신 분기가
+  // 살아 있는지와 기본값이 무엇인지를 고정한다.
+  assert.match(source, /MOTION_ENGINE="\$\{BT_MOTION_ENGINE:-hyperframes\}"/,
+    '기본 모션 엔진은 로컬이어야 한다');
+  assert.ok(source.includes('2. 위 이미지가 모두 저장된 뒤에만 Chrome의 Grok'),
+    'BT_MOTION_ENGINE=none 으로 되돌릴 Grok 절차가 남아 있어야 한다');
+  assert.ok(source.indexOf('generate-motion.js') === -1
+    || source.indexOf('로컬 HyperFrames 가 만든다') > 0,
+    '로컬 경로를 쓸 때는 브라우저 프롬프트가 Grok 을 열지 말라고 말해야 한다');
 
   for (const required of [
     '40_assets/images/scene_${id}.png',

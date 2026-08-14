@@ -31,6 +31,7 @@ import {
 } from './lib/qa-policy-detect.js';
 import { checkEpisodePrompts } from './lib/image-prompt-contract.js';
 import { matchIntroOutro } from './lib/qa-frame-match.js';
+import { verifyMotionClip } from './lib/motion-verify.js';
 
 /**
  * image_prompt 계약 결과를 QA 리포트에 싣는다.
@@ -356,6 +357,11 @@ async function main() {
 
   // Motion clips are required for every scene in the media-render pipeline.
   const videosDir = join(assetsDir, 'videos');
+  // 어떤 엔진이 만든 클립인지 — generate-motion.js 가 남긴다. 없으면 엔진 미상(Grok 수동).
+  let motionManifest = {};
+  try {
+    motionManifest = JSON.parse(readFileSync(join(videosDir, '_engines.json'), 'utf-8'));
+  } catch { /* 없으면 엔진 표기 없이 진행 */ }
   const motionCount = scenes.filter(s =>
     existsSync(join(videosDir, `scene_${s.scene_id}.mp4`))
   ).length;
@@ -364,6 +370,36 @@ async function main() {
     mark: motionCount === scenes.length ? OK : FAIL,
     val: `${motionCount}/${scenes.length}`,
   });
+
+  // 파일이 있다고 움직이는 것은 아니다. render-direct 는 videos/scene_NNN.mp4 가 있으면
+  // Ken Burns 를 끄고 그 클립을 그대로 쓰므로, 정지 클립이 들어오면 완전히 멈춘 씬이
+  // 나온다 — 개수만 세는 위 검사로는 5/5 로 통과한다. 그래서 앞·뒤 프레임을 실제로 본다.
+  // (2026-08-14: 인트로·아웃트로가 개수 검사만으로 통과했던 것과 같은 종류의 구멍이다.)
+  const liveness = [];
+  for (const s of scenes) {
+    const clip = join(videosDir, `scene_${s.scene_id}.mp4`);
+    if (!existsSync(clip)) continue;
+    const v = verifyMotionClip({ videoPath: clip, expectDurationSec: null, expectW: null, expectH: null });
+    liveness.push({ sceneId: s.scene_id, ...v });
+  }
+  if (liveness.length) {
+    const dead = liveness.filter(v => !v.ok);
+    const engines = {};
+    for (const s of scenes) {
+      const e = motionManifest[s.scene_id]?.engine;
+      if (e) engines[e] = (engines[e] || 0) + 1;
+    }
+    const engineNote = Object.keys(engines).length
+      ? ` · ${Object.entries(engines).map(([k, n]) => `${k} ${n}`).join(', ')}`
+      : '';
+    checks.push({
+      item: 'Motion liveness',
+      mark: dead.length === 0 ? OK : FAIL,
+      val: dead.length === 0
+        ? `${liveness.length}/${liveness.length} 움직임 확인${engineNote}`
+        : dead.map(v => `씬 ${v.sceneId}: ${v.reasons[0]}`).join(' · '),
+    });
+  }
 
   // Custom episode BGM wins; otherwise require the bundled persona track.
   const bgmCategory = fm.persona === 'barro-alert'

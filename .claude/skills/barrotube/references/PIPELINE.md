@@ -124,6 +124,14 @@ ffprobe 로 길이·코덱·라우드니스만 검사하던 시절, **아웃트�
 |---|---|---|
 | `Intro/Endcard cards` | 파일 존재 | 카드를 아예 안 만든 경우 |
 | `Intro/Endcard in render` | **영상 프레임 vs 카드 그림** | 카드는 있는데 렌더에 안 붙은 경우 |
+| `Motion clips` | 파일 존재 | 씬 클립을 아예 안 만든 경우 |
+| `Motion liveness` | **클립 앞뒤 프레임끼리 비교** | 파일은 있는데 화면이 멈춰 있는 경우 |
+
+`Motion liveness` 가 같은 종류의 구멍을 하나 더 막는다. `render-direct.js` 는
+`videos/scene_NNN.mp4` 가 있으면 Ken Burns 를 끄고 그 클립을 그대로 쓰므로, 정지 클립이
+들어오면 완전히 멈춘 씬이 나가는데 개수만 세는 검사는 5/5 로 통과시킨다.
+문턱은 `lib/motion-verify.js` 의 `MOTION_MIN_DIFF`(0.008) — 정지 0.000, 실제 움직임
+0.017~0.046 (`references/MOTION.md` 에 측정표).
 
 프레임 대조는 `lib/qa-frame-match.js` 가 한다. 영상 1.0초 지점과 (끝-1.0초) 지점을
 24×24 그레이스케일로 줄여 카드 이미지와 비교하고, 구도 차이와 밝기 차이를 반반 섞은
