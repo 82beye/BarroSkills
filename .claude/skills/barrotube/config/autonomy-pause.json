@@ -1,14 +1,14 @@
 {
   "status": "active",
   "version": 1,
-  "updated_at": "2026-08-13T17:38:33.394303+09:00",
-  "updated_by": "operator-resume-2026-08-13",
+  "updated_at": "2026-08-14T23:59:50.771380+09:00",
+  "updated_by": "operator-autonomous-publish-2026-08-14",
   "note": "BarroSkills 자율 운영 마스터 스위치. status=paused 시 auto-pipeline + 모든 routine cron 즉시 종료. 운영자가 수동 편집 또는 Telegram /pause·/resume으로 토글.",
   "guards": {
     "max_episodes_per_day": 2,
     "max_publish_per_day": 3,
     "max_new_series_per_day": 1,
-    "publish_remains_human_only": true,
+    "publish_remains_human_only": false,
     "publish_requires_telegram_window": true,
     "publish_reject_window_minutes": 30,
     "publish_telegram_notify": true,
@@ -30,6 +30,12 @@
       "at": "2026-08-03T20:20:51+09:00",
       "action": "paused",
       "by": "codex-cron-pause"
+    },
+    {
+      "at": "2026-08-14T23:59:50.771380+09:00",
+      "action": "publish_remains_human_only=false",
+      "by": "operator (대화에서 명시 지시: 예약 게시까지 스스로 완료)",
+      "note": "게시는 private+publishAt 예약이며 업로드 전 텔레그램 30분 거부 창구가 있다. QA·팩트체크 게이트는 그대로 유지."
     }
   ]
 }

@@ -7,7 +7,7 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { getSecret } from './config-loader.js';
 
 const CONFIG_PATH = resolve(import.meta.dirname, '../../config/notifications.json');
@@ -27,28 +27,32 @@ function loadConfig() {
  */
 async function sendTelegram(botToken, chatId, message, parseMode = 'HTML') {
   const text = formatTelegramMessage(message);
+  const payload = JSON.stringify({
+    chat_id: chatId,
+    text,
+    parse_mode: parseMode,
+    disable_web_page_preview: true,
+  });
 
-  const response = await fetch(
+  // fetch 가 아니라 curl 을 쓴다. api.telegram.org 는 A·AAAA 를 둘 다 주는데 이 네트워크의
+  // IPv6 경로가 죽어 있고, undici 는 --dns-result-order=ipv4first 도 무시해 ETIMEDOUT 이
+  // 난다(2026-08-14 실측: node fetch 실패 / curl 200 / curl -4 302). lib/guards.sh 의
+  // notify_telegram 도 같은 이유로 curl 이다 — 두 경로를 같은 방식으로 맞춘다.
+  const out = execFileSync('curl', [
+    '-sS', '-4', '-m', '15', '-X', 'POST',
     `https://api.telegram.org/bot${botToken}/sendMessage`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text,
-        parse_mode: parseMode,
-        disable_web_page_preview: true,
-      }),
-    }
-  );
+    '-H', 'Content-Type: application/json',
+    '--data-binary', '@-',
+  ], { input: payload, encoding: 'utf-8' });
 
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Telegram API ${response.status}: ${err}`);
+  let result;
+  try {
+    result = JSON.parse(out);
+  } catch {
+    throw new Error(`Telegram 응답을 파싱하지 못했다: ${out.slice(0, 160)}`);
   }
-
-  const result = await response.json();
-  return result.ok;
+  if (!result.ok) throw new Error(`Telegram API: ${JSON.stringify(result).slice(0, 160)}`);
+  return true;
 }
 
 /**
