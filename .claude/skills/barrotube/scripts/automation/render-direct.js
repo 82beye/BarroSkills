@@ -153,7 +153,10 @@ const KEN_BURNS_FPS = 30;
 
 function renderScene({ imagePath, videoPath = null, ttsPath, durationSec, narration, workDir, sceneId, outPath, canvasW = 1080, canvasH = 1920, subtitle = null }) {
   // 나레이션을 시간 기반 phrase로 분할 → 자막 PNG 여러 개 생성 → 시간 오버레이
-  const phrases = narration ? splitNarrationByTime(narration, durationSec) : [];
+  // mode=none 이면 자막을 굽지 않는다. 자막 층을 다른 방식(HyperFrames 알파 트랙 등)으로
+  // 얹어 비교할 때 필요하다 — 안 그러면 두 겹이 된다.
+  const noSubtitle = subtitle && subtitle.mode === 'none';
+  const phrases = (narration && !noSubtitle) ? splitNarrationByTime(narration, durationSec) : [];
   const overlays = [];
   const karaoke = subtitle && subtitle.mode === 'karaoke';
   for (let i = 0; i < phrases.length; i++) {

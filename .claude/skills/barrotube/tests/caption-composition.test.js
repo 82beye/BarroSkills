@@ -107,3 +107,38 @@ test('문구 분리에 · 를 쓰지 않는다', () => {
 test('타임라인 등록이 있어야 렌더가 돈다', () => {
   assert.match(build(), /window\.__timelines\["main"\] = tl;/);
 });
+
+test('배경 영상을 주면 <video> 를 클립으로 깔고 배경을 불투명하게 만든다', () => {
+  // 초기 구현은 자막만 알파 WebM 으로 뽑아 ffmpeg 로 덮었다. VP9 알파 인코딩이 이 파이프라인에서
+  // 제일 느린 구간이라, HyperFrames 가 <video> 를 클립으로 받는 걸 이용해 한 패스로 합쳤다.
+  const withBg = buildCaptionComposition({
+    segments: [{ text: '코스피 +2.42%', start: 2, duration: 8, emphasis: [] }],
+    totalSec: 62.7, videoRel: 'assets/base.mp4',
+    fontRel: 'assets/kr.otf', gsapRel: 'assets/gsap.min.js',
+  });
+  assert.match(withBg, /<video id="bg" class="clip" src="assets\/base\.mp4" data-start="0" data-duration="62\.7"/);
+  assert.match(withBg, /data-track-index="0"/, '배경은 가장 아래 트랙이어야 한다');
+  assert.match(withBg, /background: #000;/, '알파가 아니므로 투명 배경이면 안 된다');
+
+  // 배경을 안 주면 예전처럼 투명 — 알파로 뽑아 따로 얹는 경로도 살아 있어야 한다.
+  assert.match(build(), /background: transparent;/);
+  assert.doesNotMatch(build(), /<video/);
+});
+
+test('segments 는 절대 시각으로 놓이고 인트로 구간은 비워 둔다', () => {
+  // render-direct 는 [인트로][씬…][아웃트로][엔드카드] 로 이어 붙인다. 인트로·엔드카드 위에
+  // 자막이 뜨면 카드가 가려진다.
+  const html = buildCaptionComposition({
+    segments: [
+      { text: '코스피 상승', start: 2, duration: 8, emphasis: [] },
+      { text: '외국인 순매수', start: 10, duration: 8, emphasis: ['외국인'] },
+    ],
+    totalSec: 30, videoRel: null, fontRel: 'a.otf', gsapRel: 'g.js',
+  });
+  const starts = [...html.matchAll(/class="phrase clip" data-start="([\d.]+)"/g)].map(m => Number(m[1]));
+  assert.ok(starts.length >= 2);
+  assert.ok(starts[0] >= 2, `첫 자막이 인트로(0~2s) 안에 있으면 안 된다: ${starts[0]}`);
+  assert.ok(starts.every((s, i, a) => i === 0 || s >= a[i - 1]), '시각이 뒤로 가면 안 된다');
+  // 씬마다 emphasis_tokens 가 다르므로 문구가 들고 온 것을 써야 한다.
+  assert.match(html, /class="w em"[^>]*>외국인</);
+});

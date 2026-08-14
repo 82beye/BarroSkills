@@ -65,7 +65,7 @@ args가 있으면 곧장 해당 흐름으로:
 | 2 | 스크립트 → TTS·길이 동기화 | `40_assets/tts/scene_NNN.wav`와 동기화된 스크립트 생성. |
 | 3 | 캐릭터 시트 첨부 → ChatGPT 씬 이미지 | `바로경제_캐릭터시트.png`를 각 생성 전에 첨부해 `40_assets/images/scene_NNN.png`에 저장. |
 | 4 | 씬 이미지 → 모션 클립 | 로컬 HyperFrames가 승인된 스틸을 움직여 `40_assets/videos/scene_NNN.mp4`로 저장 (브라우저 불필요, `references/MOTION.md`). Grok image→video는 `BT_MOTION_ENGINE=none`일 때만. |
-| 5 | 인트로·아웃트로 추가 → 최종 렌더·QA·메타 | ChatGPT에서 `45_intro.png`, `48_outro.png`를 생성·검수하고 FFmpeg/CapCut으로 `55_render/video.mp4`를 만든다. QA 통과 후 `70_publish_meta.json`을 생성한다. |
+| 5 | 인트로·아웃트로 추가 → 최종 렌더·QA·메타 | ChatGPT에서 `45_intro.png`, `48_outro.png`를 생성·검수하고 FFmpeg/CapCut으로 `55_render/video.mp4`를 만든다. QA 통과 후 `70_publish_meta.json`을 생성한다. 자막을 HyperFrames 카라오케로 뽑아보려면 `references/CAPTIONS.md` (파일럿). |
 | 6 | 발행 여부 확인 → YouTube 발행 | QA 통과본·제목·설명·예약 시각을 요약해 발행 여부만 묻는다. 승인 시 S10 토큰을 만들고 S11로 업로드한다. |
 
 3~5단계는 `barrotube-media-render` 스킬의 브라우저 절차를 사용한다. 브라우저 로그인,

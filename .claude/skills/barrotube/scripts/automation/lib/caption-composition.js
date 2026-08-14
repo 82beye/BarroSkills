@@ -147,12 +147,29 @@ export function layoutPhrase(phrase, forceSize = null) {
  * 자막 트랙 컴포지션. 배경은 렌더 쪽에서 깔고 여기서는 **투명 배경 위의 자막만** 그린다
  * — WebM(alpha)으로 뽑아 ffmpeg 로 얹기 위해서다.
  */
-export function buildCaptionComposition({ text, durationSec, emphasis = [], fontRel, gsapRel }) {
-  if (!(durationSec > 0)) throw new Error('durationSec 가 있어야 한다');
+export function buildCaptionComposition({
+  text, durationSec, emphasis = [], fontRel, gsapRel,
+  /** 여러 씬을 한 트랙에 담을 때 사용. [{ text, start, duration, emphasis }] */
+  segments = null,
+  /** 트랙 전체 길이. segments 를 줄 때 필요(마지막 씬 뒤의 아웃트로까지 덮으려면). */
+  totalSec = null,
+  /**
+   * 배경 영상 상대경로. 주면 HyperFrames 가 영상을 직접 깔고 그 위에 자막을 그린다
+   * — 알파 WebM 을 따로 뽑아 ffmpeg 로 덮는 두 단계가 사라진다(VP9 알파 인코딩이
+   * 이 파이프라인에서 제일 느린 구간이었다). 안 주면 투명 배경으로 나온다.
+   */
+  videoRel = null,
+}) {
+  if (!segments && !(durationSec > 0)) throw new Error('durationSec 가 있어야 한다');
   if (!fontRel || !gsapRel) throw new Error('fontRel·gsapRel 이 있어야 한다');
 
-  const dur = Number(durationSec.toFixed(3));
-  const phrases = splitPhrases(text, dur);
+  const dur = Number((totalSec ?? durationSec).toFixed(3));
+  // 씬별 구간을 각각 문구로 쪼갠 뒤 절대 시각으로 옮긴다. 인트로·아웃트로 구간에는
+  // 자막이 없어야 하므로 그 사이는 비워 둔다.
+  const phrases = segments
+    ? segments.flatMap(seg => splitPhrases(seg.text, seg.duration)
+      .map(p => ({ ...p, start: seg.start + p.start, emphasis: seg.emphasis || [] })))
+    : splitPhrases(text, dur);
   const nodes = [];
   const tweens = [];
 
@@ -171,7 +188,9 @@ export function buildCaptionComposition({ text, durationSec, emphasis = [], font
     // 강조 판정은 **문구 단위**로 한다. 줄마다 따로 보면 키워드가 없는 줄에서 리드 폴백이
     // 또 발동해 한 문구에 노란 덩어리가 두 개 생긴다.
     const flat = [];
-    lines.forEach((line, li) => markWords(line, emphasis, { leadFallback: false })
+    // segments 모드에서는 씬마다 emphasis_tokens 가 다르다 — 문구가 들고 온 것을 쓴다.
+    const phEmphasis = ph.emphasis || emphasis;
+    lines.forEach((line, li) => markWords(line, phEmphasis, { leadFallback: false })
       .forEach(m => flat.push({ ...m, li })));
     if (flat.length && !flat.some(w => w.emphasis)) {
       const lead = flat.find(w => w.text.replace(/[^\p{L}\p{N}]/gu, '').length >= 2) || flat[0];
@@ -232,9 +251,10 @@ export function buildCaptionComposition({ text, durationSec, emphasis = [], font
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body {
         width: ${CANVAS.w}px; height: ${CANVAS.h}px; overflow: hidden;
-        background: transparent;   /* 알파로 뽑아 영상 위에 얹는다 */
+        background: ${videoRel ? '#000' : 'transparent'};
       }
       #root { position: relative; width: ${CANVAS.w}px; height: ${CANVAS.h}px; }
+      #bg { position: absolute; inset: 0; width: ${CANVAS.w}px; height: ${CANVAS.h}px; object-fit: cover; }
       .phrase {
         position: absolute;
         left: 0; right: 0; bottom: ${SAFE_BOTTOM}px;
@@ -264,7 +284,7 @@ export function buildCaptionComposition({ text, durationSec, emphasis = [], font
   <body>
     <div id="root" data-composition-id="main" data-start="0" data-duration="${dur}"
          data-width="${CANVAS.w}" data-height="${CANVAS.h}" data-fps="${CANVAS.fps}">
-${nodes.join('\n')}
+${videoRel ? `      <video id="bg" class="clip" src="${videoRel}" data-start="0" data-duration="${dur}" data-track-index="0" data-volume="1"></video>\n` : ''}${nodes.join('\n')}
     </div>
     <script>
       // 이 등록이 없으면 렌더가 프레임을 한 장도 못 뜨고 무한 대기한다 (references/MOTION.md).

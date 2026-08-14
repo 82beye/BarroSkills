@@ -1,20 +1,27 @@
 #!/usr/bin/env node
 /**
- * pilot-variety-captions.js — 예능형 자막 파일럿 (HyperFrames).
+ * pilot-variety-captions.js — 레퍼런스형 자막 파일럿 (HyperFrames).
  *
  * 기존 자막은 파이썬이 구운 정지 PNG 라 "색이 바뀐다" 외의 연출이 불가능하다.
- * 이 스크립트는 자막만 **알파 WebM** 으로 따로 뽑아(HyperFrames) 기존 모션 클립 위에
- * ffmpeg 로 얹는다. 배경 렌더는 건드리지 않으므로 기존 파이프라인과 나란히 비교할 수 있다.
+ * 이 스크립트는 두 단계로 만든다.
  *
- * 파일럿이다 — produce-episode 경로에 연결돼 있지 않다. 결과가 좋으면
- * render-direct.js 의 자막 층을 이걸로 교체하면 된다.
+ *   1) render-direct.js 를 **자막 없이**(BT_SUBTITLE_MODE=none) 돌려 완성본을 만든다.
+ *      인트로 카드·아웃트로 패드·엔드카드·BGM 더킹이 전부 들어간 실제 발행 화면이다.
+ *   2) 그 영상을 HyperFrames 컴포지션의 **배경 <video>** 로 깔고 그 위에 자막을 그려
+ *      한 번에 MP4 로 뽑는다. 원본 오디오도 그대로 실린다.
+ *
+ * 씬 클립에만 얹으면 인트로·아웃트로·BGM 이 빠진 반쪽짜리가 나온다 — 그래서 완성본 위에
+ * 올린다. 초기에는 자막만 알파 WebM 으로 뽑아 ffmpeg 로 덮었는데, VP9 알파 인코딩이
+ * 이 파이프라인에서 제일 느린 구간이라 배경 <video> 방식으로 합쳤다.
+ *
+ * 파일럿이다 — produce-episode 경로에 연결돼 있지 않다.
  *
  * Usage:
  *   node scripts/automation/pilot-variety-captions.js --episode <dir> [--platform shorts]
- *     [--scenes 001,002] [--out <mp4>]
+ *     [--out <mp4>] [--keep-base]
  */
 
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -22,7 +29,7 @@ import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYAML } from 'yaml';
 
-import { buildCaptionComposition, CANVAS } from './lib/caption-composition.js';
+import { buildCaptionComposition } from './lib/caption-composition.js';
 import { resolveGsap, resolveHyperframes, resolveAssetsDir, resolveScript } from './generate-motion.js';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -40,36 +47,42 @@ function parseFrontmatter(mdPath) {
   return parseYAML(m[1]);
 }
 
-/** 자막 트랙만 알파 WebM 으로 렌더한다. */
-function renderCaptionTrack({ hfBin, gsapPath, text, durationSec, emphasis, outPath }) {
+/**
+ * 완성본 영상을 배경으로 깔고 그 위에 자막을 그려 한 번에 MP4 로 뽑는다.
+ *
+ * 처음에는 자막만 알파 WebM 으로 뽑아 ffmpeg 로 덮었는데, VP9 알파 인코딩이 이 파이프라인에서
+ * 제일 느린 구간이었다. HyperFrames 는 <video> 를 클립으로 받으므로 한 번에 끝난다.
+ * 원본 오디오도 그대로 실린다(실측: hasAudio=true, 출력에 AAC).
+ */
+function renderWithCaptions({ hfBin, gsapPath, basePath, segments, totalSec, outPath }) {
   const projectDir = mkdtempSync(join(tmpdir(), 'bt-cap-'));
   try {
     mkdirSync(join(projectDir, 'assets'), { recursive: true });
     copyFileSync(FONT, join(projectDir, 'assets', 'kr.otf'));
     copyFileSync(gsapPath, join(projectDir, 'assets', 'gsap.min.js'));
+    copyFileSync(basePath, join(projectDir, 'assets', 'base.mp4'));
     writeFileSync(join(projectDir, 'hyperframes.json'), JSON.stringify({
       paths: { blocks: 'compositions', components: 'compositions/components', assets: 'assets' },
     }, null, 2));
     writeFileSync(join(projectDir, 'index.html'), buildCaptionComposition({
-      text, durationSec, emphasis,
+      segments, totalSec,
+      videoRel: 'assets/base.mp4',
       fontRel: 'assets/kr.otf',
       gsapRel: 'assets/gsap.min.js',
     }));
 
-    const rendered = join(projectDir, 'cap.webm');
-    // WebM/MOV 만 알파를 보존한다. --low-memory-mode 는 필수 (references/MOTION.md).
-    // --resolution 은 알파 출력과 함께 쓸 수 없다 ("outputResolution cannot be combined with
-    // alpha output") — 컴포지션이 이미 1080x1920 이라 그대로 뜨면 된다.
+    const rendered = join(projectDir, 'out.mp4');
+    // --low-memory-mode 는 필수 (references/MOTION.md).
     const res = spawnSync(process.execPath, [hfBin, 'render', projectDir, '-o', rendered,
-      '--format', 'webm', '--quality', 'standard',
-      '--low-memory-mode', '--quiet'], {
+      '--resolution', 'portrait', '--quality', 'standard', '--low-memory-mode', '--quiet'], {
       encoding: 'utf-8',
       env: { ...process.env, HYPERFRAMES_SKIP_SKILLS: '1' },
-      timeout: 10 * 60 * 1000,
+      timeout: 60 * 60 * 1000,
     });
     if (res.status !== 0 || !existsSync(rendered)) {
       throw new Error(`caption render 실패 (exit ${res.status}): ${`${res.stderr || ''}${res.stdout || ''}`.trim().slice(-500)}`);
     }
+    mkdirSync(dirname(outPath), { recursive: true });
     copyFileSync(rendered, outPath);
     return outPath;
   } finally {
@@ -77,33 +90,17 @@ function renderCaptionTrack({ hfBin, gsapPath, text, durationSec, emphasis, outP
   }
 }
 
-/** 모션 클립 + 자막 트랙 + TTS 를 한 씬 클립으로 합친다. */
-function composeScene({ videoPath, captionPath, ttsPath, durationSec, outPath }) {
-  const args = ['-y', '-i', videoPath, '-c:v', 'libvpx-vp9', '-i', captionPath, '-i', ttsPath,
-    '-filter_complex',
-    `[0:v]scale=${CANVAS.w}:${CANVAS.h}:force_original_aspect_ratio=increase,crop=${CANVAS.w}:${CANVAS.h},fps=30[bg];`
-    + `[1:v]fps=30[cap];[bg][cap]overlay=0:0:format=auto[v];`
-    + `[2:a]apad=pad_dur=${durationSec},atrim=duration=${durationSec},asetpts=PTS-STARTPTS,aresample=44100[a]`,
-    '-map', '[v]', '-map', '[a]',
-    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-r', '30',
-    '-c:a', 'pcm_s16le', '-ar', '44100', '-ac', '1',
-    '-t', String(durationSec), outPath];
-  const r = spawnSync('ffmpeg', args.filter(a => a !== '-c:v' || true), { stdio: 'pipe' });
-  if (r.status !== 0) throw new Error(`ffmpeg compose 실패: ${r.stderr.toString().slice(-500)}`);
-  return outPath;
-}
-
 function main() {
   const { values } = parseArgs({
     options: {
       episode: { type: 'string' },
       platform: { type: 'string' },
-      scenes: { type: 'string' },
       out: { type: 'string' },
+      'keep-base': { type: 'boolean', default: false },
     },
   });
   if (!values.episode) {
-    console.error('Usage: pilot-variety-captions.js --episode <dir> [--platform shorts] [--scenes 001,002] [--out sample.mp4]');
+    console.error('Usage: pilot-variety-captions.js --episode <dir> [--platform shorts] [--out sample.mp4]');
     process.exit(2);
   }
 
@@ -112,49 +109,60 @@ function main() {
   if (!hfBin || !gsapPath) throw new Error('hyperframes/gsap 없음 — generate-motion.js --doctor 로 점검하세요');
   if (!existsSync(FONT)) throw new Error(`폰트 없음: ${FONT} (build-fonts.js 실행)`);
 
-  const scriptPath = resolveScript(resolve(values.episode), values.platform || null);
+  const epDir = resolve(values.episode);
+  const scriptPath = resolveScript(epDir, values.platform || null);
   const baseDir = dirname(scriptPath);
   const assetsDir = resolveAssetsDir(baseDir);
   const meta = parseFrontmatter(scriptPath);
-  const want = values.scenes ? values.scenes.split(',').map(s => s.trim()) : null;
-  const scenes = (meta.scenes || []).filter(s => !want || want.includes(String(s.scene_id)));
-  if (!scenes.length) throw new Error('대상 씬이 없다');
+  const scenes = meta.scenes || [];
+  if (!scenes.length) throw new Error('대본에 씬이 없다');
 
   const workDir = mkdtempSync(join(tmpdir(), 'bt-pilot-'));
-  const clips = [];
-  console.log(`🎬 예능 자막 파일럿 — ${scenes.length}개 씬`);
-
   try {
-    for (const scene of scenes) {
-      const id = scene.scene_id;
-      const videoPath = join(assetsDir, 'videos', `scene_${id}.mp4`);
-      const imagePath = join(assetsDir, 'images', `scene_${id}.png`);
-      const ttsPath = join(assetsDir, 'tts', `scene_${id}.wav`);
-      if (!existsSync(ttsPath)) throw new Error(`TTS 없음: ${ttsPath}`);
-      const bg = existsSync(videoPath) ? videoPath : imagePath;
-      if (!existsSync(bg)) throw new Error(`배경 없음: ${videoPath}`);
-
-      const durationSec = Math.max(probeDuration(ttsPath), Number(scene.target_seconds) || 0) || 10;
-      const text = scene.subtitle_text || scene.narration || '';
-      const t0 = Date.now();
-
-      const capPath = join(workDir, `cap_${id}.webm`);
-      renderCaptionTrack({ hfBin, gsapPath, text, durationSec, emphasis: scene.emphasis_tokens || [], outPath: capPath });
-
-      const clipPath = join(workDir, `clip_${id}.mov`);
-      composeScene({ videoPath: bg, captionPath: capPath, ttsPath, durationSec, outPath: clipPath });
-      clips.push(clipPath);
-      console.log(`  ✅ Scene ${id} (${durationSec.toFixed(1)}s, ${((Date.now() - t0) / 1000).toFixed(0)}s)  "${text.slice(0, 30)}…"`);
+    // 1) 자막 없이 완성본을 만든다 — 인트로·아웃트로·엔드카드·BGM 이 다 들어간다.
+    const basePath = join(workDir, 'base.mp4');
+    console.log('🎬 1/2 자막 없는 완성본 렌더 (인트로·아웃트로·BGM 포함)');
+    const r = spawnSync(process.execPath, [join(SCRIPT_DIR, 'render-direct.js'),
+      '--episode', epDir, '--out', basePath], {
+      encoding: 'utf-8',
+      env: { ...process.env, BT_SUBTITLE_MODE: 'none' },
+      timeout: 30 * 60 * 1000,
+    });
+    if (r.status !== 0 || !existsSync(basePath)) {
+      throw new Error(`base 렌더 실패: ${`${r.stderr || ''}${r.stdout || ''}`.trim().slice(-500)}`);
     }
+    const totalSec = probeDuration(basePath);
 
-    const listPath = join(workDir, 'list.txt');
-    writeFileSync(listPath, clips.map(p => `file '${p}'`).join('\n'));
-    const outPath = resolve(values.out || join(baseDir, '55_render', 'pilot_variety_captions.mp4'));
-    mkdirSync(dirname(outPath), { recursive: true });
-    execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'concat', '-safe', '0', '-i', listPath,
-      '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-r', '30', '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1',
-      outPath]);
-    console.log(`\n✅ 샘플: ${outPath}`);
+    // 2) 그 타임라인에 맞춰 자막 구간을 잡는다.
+    //    render-direct 는 [인트로][씬…][아웃트로 패드][엔드카드] 순으로 이어 붙인다.
+    const introSec = Number(process.env.BT_INTRO_SEC) || 2;
+    const hasIntro = ['45_intro.png', '47_thumbnail.png'].some(f => existsSync(join(baseDir, f)));
+    let cursor = hasIntro ? introSec : 0;
+    const segments = scenes.map((scene, i) => {
+      const id = scene.scene_id || String(i + 1).padStart(3, '0');
+      const ttsPath = join(assetsDir, 'tts', `scene_${id}.wav`);
+      const duration = Math.max(probeDuration(ttsPath), Number(scene.target_seconds) || 0) || 10;
+      const seg = {
+        text: scene.subtitle_text || scene.narration || '',
+        emphasis: scene.emphasis_tokens || [],
+        start: cursor,
+        duration,
+      };
+      cursor += duration;
+      return seg;
+    });
+    // 3) 그 영상을 HyperFrames 배경으로 깔고 자막을 그려 한 번에 뽑는다.
+    console.log(`🎬 2/2 배경 영상 + 자막 렌더 — ${segments.length}구간 / 전체 ${totalSec.toFixed(1)}s`
+      + `${hasIntro ? ` (인트로 ${introSec}s 뒤부터)` : ''}`);
+    const outPath = resolve(values.out || join(baseDir, '55_render', 'pilot_captions.mp4'));
+    renderWithCaptions({ hfBin, gsapPath, basePath, segments, totalSec, outPath });
+
+    if (values['keep-base']) {
+      const keep = outPath.replace(/\.mp4$/, '.nosub.mp4');
+      copyFileSync(basePath, keep);
+      console.log(`   비교용 자막 없는 원본: ${keep}`);
+    }
+    console.log(`\n✅ 샘플: ${outPath} (${totalSec.toFixed(1)}s)`);
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }
