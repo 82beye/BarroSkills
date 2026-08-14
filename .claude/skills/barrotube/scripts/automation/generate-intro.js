@@ -34,6 +34,7 @@ import {
   parseFrontmatter,
 } from './generate-image-gemini.js';
 import { composeThumbnail } from './lib/thumbnail-composer.js';
+import { generateImageOpenAI } from './lib/image-engines/openai-gpt-image.js';
 import { resolveImageEngine } from './lib/image-engine-config.js';
 import { getSecret } from './config-loader.js';
 
@@ -82,6 +83,16 @@ function displaySeriesName(seriesId) {
 
 function aspectForFormat(format) {
   return format === 'long-3min' ? '16:9' : '9:16';
+}
+
+/** 채널 배지에 찍을 이름. channel.yaml 의 identity.display_name 이 정본. */
+function channelDisplayName(channel) {
+  try {
+    const y = readFileSync(resolve('workspace/channels', channel, 'channel.yaml'), 'utf-8');
+    const m = y.match(/^\s*display_name:\s*(.+)$/m);
+    if (m) return m[1].trim().replace(/^["']|["']$/g, '');
+  } catch { /* 없으면 아래 폴백 */ }
+  return channel;
 }
 
 function resolveStylePrefix(channel, format) {
@@ -258,7 +269,9 @@ async function main() {
       || null,
     accent_color: briefThumb.accent_color || specSeriesEntry?.accent_color || 'yellow',
     background_style: briefThumb.background_style || specSeriesEntry?.background_style || 'dark',
-    series_badge_text: isStandalone ? 'BarroTube' : `${seriesName} ${seriesN}/${seriesM}`,
+    // 발행본 인트로·엔드카드의 배지는 채널 한글명("바로경제")이다. 'BarroTube' 는 스킬 이름이지
+    // 채널 이름이 아니다 — 그대로 쓰면 영상에만 다른 브랜드가 찍힌다.
+    series_badge_text: isStandalone ? channelDisplayName(channel) : `${seriesName} ${seriesN}/${seriesM}`,
   };
   const isV2 = !!v2spec.headline_text;
 
@@ -336,7 +349,12 @@ async function main() {
     if (isV2) {
       // 2026-05-16 v10: OpenAI 있으면 ALL-IN-ONE + verify retry loop (한글 정확도 보장).
       // 폴백: Gemini base + composer (기존 v2). 엔진은 위 resolver가 결정(useOpenAI).
-      if (useOpenAI) {
+      // v10 은 헤드라인까지 이미지 모델이 그린다. 철자는 vision 으로 검증하지만 **그림의 뜻**은
+      // 검증하지 않는다 — 2026-08-14 EP-0093: +2.42% 상승 회차인데 빨간 폭락 차트와 LED "N/A",
+      // 지폐 인물까지 그려 놓고 "headline 철자 정확" 으로 통과했다.
+      // BT_INTRO_V10=0 이면 그림만 모델에 맡기고 한글은 로컬 SVG 로 얹는다(오타 원천 차단).
+      const useV10 = useOpenAI && process.env.BT_INTRO_V10 !== '0';
+      if (useV10) {
         const { generateIntroV10, resolveIntroHeadline } = await import('./lib/image-engines/intro-v10.js');
         const introHeadline = resolveIntroHeadline({ briefThumb, topic: briefFM.topic || '' });
         const introKeyword = briefThumb.intro_keyword_number || briefThumb.keyword_number || '';
@@ -348,6 +366,8 @@ async function main() {
           keyword: introKeyword,
           outPath,
           maxRetries: 2,
+          channel,   // 캐릭터시트 첨부 → 발행본 인트로처럼 마시가 들어간다
+
           // 2026-06-27 B-2: long(16:9)은 가로 1536x1024, shorts(9:16)는 세로 1024x1536.
           // (이전엔 intro-v10에 '1024x1536' 세로 하드코딩 → long 인트로가 세로로 나오는 버그)
           size: aspectRatio === '16:9' ? '1536x1024' : '1024x1536',
@@ -355,14 +375,25 @@ async function main() {
         console.log(`✅ Intro (v10${result.accurate ? ' ✓ accurate' : ' ⚠ partial accuracy'}, $${result.cost_usd.toFixed(4)}): ${outPath}`);
       } else {
         const baseOutPath = join(baseDir, '45_intro.base.png');
-        await generateImageGemini({
-          prompt,
-          outPath: baseOutPath,
-          aspectRatio,
-          resolution: '1K',
-          costContext: { episode: fm.episode_id || null, stage: 'S6d', note: 'intro_base_gemini' },
-        });
-        console.log(`   📸 Base image (Gemini fallback): ${baseOutPath}`);
+        if (useOpenAI) {
+          // 씬 이미지와 같은 경로 — 캐릭터시트를 붙여 마시를 지킨다.
+          await generateImageOpenAI({
+            prompt, outPath: baseOutPath, channel,
+            size: aspectRatio === '16:9' ? '1536x1024' : '1024x1536', quality: 'high',
+            costContext: { episode: fm.episode_id || null, stage: 'S6d', note: 'intro_base_openai' },
+          });
+          console.log(`   📸 Base image (openai + 캐릭터시트): ${baseOutPath}`);
+        } else {
+          await generateImageGemini({
+            prompt,
+            outPath: baseOutPath,
+            aspectRatio,
+            resolution: '1K',
+            channel,
+            costContext: { episode: fm.episode_id || null, stage: 'S6d', note: 'intro_base_gemini' },
+          });
+          console.log(`   📸 Base image (Gemini fallback): ${baseOutPath}`);
+        }
         const result = await composeThumbnail({ baseImagePath: baseOutPath, spec: v2spec, outPath });
         console.log(`✅ Intro (v2 composer fallback, ${result.layers} layers): ${outPath}`);
       }
