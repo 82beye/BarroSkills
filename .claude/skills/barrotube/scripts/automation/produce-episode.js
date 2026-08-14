@@ -354,9 +354,25 @@ async function main() {
       console.log(`\n⏭  S6c Images: 이미 있음 (skip)`);
     }
 
-    // S6d Intro Card — 시리즈 EP: Gemini 브랜드 카드 생성 / 단발 EP: S6e 완료 후 thumbnail 복사
+    // S6d/S6f 인트로·아웃트로 카드 — 기본은 HyperFrames 텍스트 합성.
+    // 글자를 이미지 모델에게 그리게 하면 한글 오타("메타"→"머타")가 나고, vision 검증은
+    // 철자만 봐서 뜻이 어긋난 카드도 통과시킨다(EP-0093: 상승 회차에 빨간 폭락 차트).
+    // 배경만 씬 이미지에서 가져오고 글자는 로컬에서 얹으면 둘 다 사라진다.
+    // 문안 규칙: 인트로=자극적 타이틀 / 아웃트로=정의. 타이포는 config/cards.json.
+    // BT_CARD_ENGINE=none 이면 예전 경로(generate-intro.js / 브라우저)로 돌아간다.
+    const cardEngine = (process.env.BT_CARD_ENGINE || 'hyperframes').toLowerCase();
+    if (cardEngine === 'hyperframes') {
+      runTracked(absEp, episodeId, 'S6d', 'S6d/S6f 인트로·아웃트로 카드 (HyperFrames)', '08-image-generator',
+        'scripts/automation/generate-cards.js', [
+          '--episode', relEp,
+          '--platform', platform,
+          ...(force ? ['--force'] : []),
+        ]);
+    }
+
+    // (레거시) 시리즈 EP 의 Gemini 브랜드 인트로. cardEngine=none 일 때만 의미가 있다.
     const hasSeriesId = !!briefFM.series_id;
-    if (hasSeriesId) {
+    if (cardEngine !== 'hyperframes' && hasSeriesId) {
       if (!exists(p.intro) || force) {
         runTracked(absEp, episodeId, 'S6d', 'S6d Intro Card (Gemini)', '08-image-generator',
           'scripts/automation/generate-intro.js', [

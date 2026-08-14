@@ -1,0 +1,22 @@
+{
+  "_comment": "인트로·아웃트로 카드의 타이포 정본. lib/card-composition.js 가 읽는다. 폰트를 바꾸려면 여기만 고친다.",
+  "version": "1.0",
+  "intro": {
+    "_note": "2026-08-14 운영자 채택 — 예능체 후보 10종 중 1번(도현 · 외곽선 14). 굵은 외곽선으로 볼드를 낸다(배민 폰트는 단일 굵기라 font-weight 가 안 먹는다).",
+    "fontFamily": "BM DoHyeon OTF",
+    "fallbackBundled": "NotoSansKR-Black.otf",
+    "treatment": { "stroke": 14, "shadow": "hard" },
+    "tone": "accent"
+  },
+  "outro": {
+    "_note": "끝말은 **정의**다 — 그 회차가 무엇이었는지 한 줄로 규정한다. 인트로와 같은 타이포를 쓴다.",
+    "fontFamily": "BM DoHyeon OTF",
+    "fallbackBundled": "NotoSansKR-Black.otf",
+    "treatment": { "stroke": 14, "shadow": "hard" },
+    "tone": "accent",
+    "cta": ["구독", "좋아요", "알림"],
+    "ctaLead": "이 영상이 도움됐다면",
+    "disclaimer": "정보 제공용 · 투자조언 아님"
+  },
+  "_font_license": "배달의민족 도현체는 사용은 자유지만 폰트 파일 재배포가 금지다. git 에 커밋하지 말고 시스템 설치본을 참조하거나 설치 스크립트로 받는다. 없으면 fallbackBundled 로 떨어진다."
+}

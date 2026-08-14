@@ -89,3 +89,54 @@ youtube `ddFFtFylJZE` 프레임 실측 (1920x1080).
 모션은 **Grok 이 정본**이다 — 피사체가 실제로 움직여야 화면이 산다. 로컬 HyperFrames 모션
 (`generate-motion.js`)은 브라우저가 막혔을 때의 폴백이고, 이 자막 층과는 별개다
 (`references/MOTION.md`).
+
+---
+
+# 인트로·아웃트로 카드 (`generate-cards.js`)
+
+같은 원리를 카드에도 쓴다 — **배경 그림만 모델이 그리고 글자는 HyperFrames 가 얹는다.**
+
+```bash
+node scripts/automation/generate-cards.js --episode <dir> --platform shorts [--force]
+```
+
+`produce-episode` 의 S6d 가 기본으로 이걸 부른다(`BT_CARD_ENGINE=hyperframes`).
+`none` 이면 예전 경로(`generate-intro.js` / 브라우저)로 돌아간다.
+
+## 문안 규칙 (운영자 확정 2026-08-14)
+
+| 카드 | 성격 | 예 |
+|---|---|---|
+| 인트로·썸네일 | **자극적인 타이틀** — 대비·반전에 수치를 박는다 | 「사상 최고치인데 AMD는 왜 **8% 빠졌나**」 |
+| 아웃트로 | **정의** — 그 회차가 무엇이었는지 한 줄로 규정 | 「이젠 얼마 버나가 아니라 **얼마 쓰나**를 본다」 |
+
+아웃트로는 CTA(구독·좋아요·알림)와 면책 문구를 함께 얹는다.
+
+문안은 `brief.thumbnail.intro_headline_text` / `outro_definition` 이 최우선이고, 없으면
+텍스트 엔진 체인(claude→codex)이 대본에서 카드용으로 다시 쓴다. 엔진이 다 죽으면
+대본 문장을 잘라 쓰는 폴백으로 간다 — `subtitle_text` 는 자막용 산문이라 잘라 쓰면
+「AMD는 정규장에서 7% 올랐습니다. 그런데 실적을」 처럼 문장 중간이 잘린다. 그래서 폴백이다.
+
+## 타이포 — `config/cards.json` 이 정본
+
+```json
+{ "fontFamily": "BM DoHyeon OTF", "treatment": { "stroke": 14, "shadow": "hard" } }
+```
+
+폰트 후보 10종을 비교해 운영자가 1번(도현 · 외곽선 14)을 채택했다.
+폰트를 바꾸려면 이 파일만 고친다 — 스크립트마다 박아 두면 인트로와 아웃트로가 갈라진다.
+
+**볼드는 외곽선으로 낸다.** 배달의민족 폰트는 단일 굵기라 `font-weight` 가 안 먹는다.
+`-webkit-text-stroke` + `paint-order: stroke fill` 로 글자를 실제로 두껍게 만든다.
+
+**폰트 라이선스**: 도현체는 사용은 자유지만 **폰트 파일 재배포가 금지**다. git 에 커밋하지
+않고 시스템 설치본을 참조한다. 없는 머신에서는 번들 `NotoSansKR-Black` 으로 자동 폴백한다.
+
+## 함정
+
+- **`.tline` 은 `display: block` 이어야 한다.** inline-block 으로 두면 줄들이 나란히 붙어
+  「사상 최고치인데AMD는 왜」 처럼 줄바꿈이 사라진다. 폰트 폭이 좁을수록 잘 터진다.
+  회전은 block 에도 적용되므로 inline-block 으로 바꿀 이유가 없다.
+- **그라데이션과 외곽선은 함께 못 쓴다.** `-webkit-text-fill-color: transparent` 가
+  외곽선까지 지운다 — 배경에 묻혀 가독성이 떨어진다.
+- **칩에는 세로 여백을 준다.** 안 그러면 강조어의 위아래가 잘린다.
