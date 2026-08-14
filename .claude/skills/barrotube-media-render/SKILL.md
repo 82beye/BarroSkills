@@ -309,6 +309,29 @@ This is the **default** S7 path (`BT_CAPTION_ENGINE=hyperframes`); it writes the
 `55_render/video.mp4`, so QA, approval and publish are unchanged. `BT_CAPTION_ENGINE=pil` goes
 back to the Python PNG subtitles. Motion still comes from **Grok** — this layer only draws text.
 
+### Intro / outro cards — also HyperFrames text
+
+The same rule covers the cards: the browser (or the image API) supplies **only the artwork**;
+every Korean glyph is composited locally. That kills the misspelling class outright — the old
+procedure literally said "zoom in and proofread the title before saving" because a model once
+rendered 메타 as 머타 — and it kills the subtler failure where the vision check passes the
+spelling while the picture contradicts the episode (a +2.42% up day drawn as a red crash chart).
+
+```bash
+node ../barrotube/scripts/automation/generate-cards.js --episode <dir> --platform shorts
+```
+
+Copy rules, confirmed by the operator on 2026-08-14:
+
+| Card | Job | Example |
+|---|---|---|
+| intro / thumbnail | a **provocative title** — contrast or reversal with a number in it | 「사상 최고치인데 AMD는 왜 **8% 빠졌나**」 |
+| outro | a **definition** — one line stating what the episode was | 「이젠 얼마 버나가 아니라 **얼마 쓰나**를 본다」 |
+
+Typography lives in `barrotube/config/cards.json`, not in the scripts — put it in two places and
+the intro and the outro drift apart. Bold comes from the outline (`-webkit-text-stroke` +
+`paint-order`), because the display fonts ship a single weight and ignore `font-weight`.
+
 ## Reel batch mode (render a whole reel)
 
 When the input is a reel, follow **`references/reel-batch.md`**. Quick shape:
