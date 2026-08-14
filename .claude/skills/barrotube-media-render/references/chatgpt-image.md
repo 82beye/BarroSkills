@@ -47,10 +47,17 @@ image-generation request so the mascot matches exactly — do not rely on text a
    page is not evidence of logout. Stop only when the composer is absent and an explicit
    sign-in form or captcha is present; leave that tab in front for the user.
 
-2. **Make image intent explicit.** Either click **이미지 만들기** if visible, or start
-   the prompt with: `Create a single vertical 9:16 cinematic image with Masi as the
-   dominant central actor.` This reliably routes ChatGPT to image generation in the
-   current UI.
+2. **Select the 이미지 만들기 tool — this is required, not optional.** Open the composer
+   tool menu (`+` / 도구) and click **이미지 만들기** so the chip is attached BEFORE typing.
+   Verify the chip by screenshot. Do not send without it.
+
+   Falling back to a text-only cue (`Create a single vertical 9:16 …`) was previously
+   allowed as an alternative; it is not. 2026-08-14 실측: 텍스트 경로로만 요청하면
+   ChatGPT 가 일반 응답 경로로 라우팅돼 생성이 멈추거나 규격 밖 이미지가 나온다.
+   The text cue may be added on top of the chip, never instead of it.
+
+   If the tool menu does not expose **이미지 만들기**, stop and report
+   「이미지 만들기 도구 없음」 — do not improvise with a plain prompt.
 
    For BarroTube scenes, immediately add the framing rule:
    `Show Masi's readable face and full-body action in the centre. Keep one key scene

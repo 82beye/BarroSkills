@@ -37,17 +37,45 @@ export const CANONICAL_TAIL =
  *
  * 즉 DNA 는 "이미지 생성 단계의 정본", 이 절은 "대본 단계의 정본"이다. 둘은 용도가 다르다.
  */
+// 2026-08-14: 여기에 "bare cream-white … arms and legs visible" 를 덧붙였다가 되돌렸다.
+// EP-0092 의 정장·팔 소실은 이 절이 부족해서가 아니라 스테이징 문구(STAGING_PHRASES)가
+// 통째로 빠져서 생긴 것이었고(발행본 5/5 vs 0092 0/5), 절을 늘리면 프롬프트가 780자
+// 상한을 넘겨 씬 묘사를 깎아먹는다. 절은 발행본과 같게 둔다.
+// 2026-08-14: "rounded pear-shaped body" 를 버렸다. 배 모양은 아래가 불룩한 형태라
+// 모델이 마시를 뚱뚱하게 그렸다(EP-0092 실측). 정본 캐릭터시트의 몸통은 좁고 날씬한
+// 캡슐이고 팔다리는 막대처럼 가늘다 — 시트 §1 MAIN CHARACTER·§2 TURNAROUND 기준.
 export const MASCOT_CLAUSE =
   '마시 the 바로경제 mascot (official character sheet for the character only — ' +
-  'large round head on a separate rounded pear-shaped body, white mitten hands and ' +
+  'large round head on a slim capsule body with thin stick limbs, white mitten hands and ' +
   'rounded shoe-feet, big solid black eyes with white highlights, orange (#FF9A1F) ' +
   'blush cheeks, no nose or ears)';
 
-/** 작성 템플릿. generate-script.js 가 그대로 모델에게 넘긴다. */
+/**
+ * 작성 템플릿. generate-script.js 가 그대로 모델에게 넘긴다.
+ *
+ * 고정 문구(a single … in the centre / face readable / the unified …)는 장식이 아니라
+ * 실측으로 검증된 것이다. 발행본 EP-2026-0091 은 5컷 전부가 이 문구를 갖고 있었고,
+ * 이 문구가 하나도 없던 EP-2026-0092 는 마시가 정장을 입고 화면 30% 로 줄고 배경이
+ * 회화풍으로 채워졌다(2026-08-14 실측). 마스코트에게 신체 동작을 주지 않으면
+ * 모델이 그를 배치 대상이 아니라 나중에 얹는 장식으로 처리한다.
+ */
 export const TEMPLATE =
-  '[palette:<tag>] <MASCOT_CLAUSE>, <emotion>, <pose and scene action in ONE clause>. ' +
-  'BACKGROUND: <background colour + place>, <accent> on <element>, <texture> at low contrast, ' +
+  '[palette:<tag>] <MASCOT_CLAUSE>, <emotion>, standing before a single <adjective> ' +
+  '<scene object> in the centre, face readable, <mascot body action — planting its ' +
+  'rounded shoe-feet / bracing its body> while one white mitten hand <acts on the object>, ' +
+  'the unified <scene object> <state that carries the scene meaning>. ' +
+  'BACKGROUND: deep navy abstract <place>, <accent> on <element>, <texture> at low contrast, ' +
   CANONICAL_TAIL;
+
+/**
+ * 발행본이 100% 갖고 있던 스테이징 문구. 하나라도 빠지면 마스코트가 구석으로 밀린다.
+ * 값을 늘리기 전에 발행본 실측을 먼저 하라 — 여기 있는 셋은 EP-0091 5/5 근거다.
+ */
+export const STAGING_PHRASES = [
+  { key: 'in the centre', re: /in the cent(re|er)/i, hint: '"in the centre" 로 씬 오브젝트를 중앙에 고정하세요.' },
+  { key: 'face readable', re: /face readable/i, hint: '"face readable" 이 없으면 마스코트가 썸네일에서 안 보일 크기로 줄어듭니다.' },
+  { key: 'a single', re: /\ba single\b/i, hint: '"a single <object>" 로 오브젝트를 하나로 못박으세요. 없으면 배경이 채워집니다.' },
+];
 
 /**
  * 마스코트가 "씬 동작의 주어"인지 판정할 때 찾는 동사.
@@ -110,6 +138,12 @@ export function checkImagePrompt(prompt, opts = {}) {
         '마스코트가 씬 동작의 주어가 아닙니다. 정체성·감정·포즈·씬을 한 문장으로 묶으세요 ' +
         '("… mascot (…), worried, standing before …"). 별도 문장으로 크기를 서술하면 구석으로 밀립니다.');
     }
+  }
+
+  // 1-b. 스테이징 문구 — 마스코트를 크게·중앙에 두는 실효 수단.
+  //      EP-0091(발행, 정상) 5/5 보유 vs EP-0092(드리프트) 0/5. 빠지면 구석으로 밀린다.
+  for (const s of STAGING_PHRASES) {
+    if (!s.re.test(p)) add('STAGING_PHRASE_MISSING', BLOCK, `"${s.key}" 가 없습니다. ${s.hint}`);
   }
 
   // 2. 구조 — BACKGROUND 분리 + 고정 꼬리

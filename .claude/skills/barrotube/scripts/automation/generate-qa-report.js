@@ -30,6 +30,7 @@ import {
   formatPolicySection,
 } from './lib/qa-policy-detect.js';
 import { checkEpisodePrompts } from './lib/image-prompt-contract.js';
+import { matchIntroOutro } from './lib/qa-frame-match.js';
 
 /**
  * image_prompt 계약 결과를 QA 리포트에 싣는다.
@@ -227,6 +228,43 @@ async function main() {
   }
 
   const checks = [];
+
+  // 인트로·아웃트로 카드 존재 — 없으면 BLOCK.
+  //
+  // 위 target 계산이 카드 부재 시 목표 길이를 그만큼 줄여버려서, 카드가 빠져도
+  // Duration 검사가 통과해 버린다. 실제로 EP-2026-0092 가 아웃트로 없이 QA PASS 로
+  // 게시 직전까지 갔다(2026-08-14, 사용자가 렌더 결과를 보고 발견). 길이 정합성만으로는
+  // 구조적으로 못 잡으므로 파일 존재를 따로 확인한다. 발행본 0086·0087·0090·0091 은
+  // 4편 모두 두 카드를 갖고 있다 — 이게 채널 표준이다.
+  const introCardFound = ['45_intro.png', '47_thumbnail.png']
+    .find(f => existsSync(join(baseDir, f)));
+  const endcardFound = ['48_outro.png', '48_endcard.png']
+    .find(f => existsSync(join(baseDir, f)));
+  checks.push({
+    item: 'Intro/Endcard cards',
+    mark: (introCardFound && endcardFound) ? OK : FAIL,
+    val: `intro ${introCardFound || '없음'} · endcard ${endcardFound || '없음'}`,
+  });
+
+  // 카드가 디스크에 있다고 렌더에 붙은 건 아니다 — 실제 프레임과 카드 그림을 비교한다.
+  // 메타데이터만 보는 검사는 "붙였다고 치는" 상태를 구분하지 못한다.
+  if (introCardFound && endcardFound && actualDur >= 3) {
+    const fm = matchIntroOutro({ videoPath, baseDir, durationSec: actualDur });
+    const parts = [];
+    let framesOk = true;
+    for (const [slot, label] of [['intro', '인트로'], ['outro', '아웃트로']]) {
+      const r = fm[slot];
+      if (!r) continue;
+      if (!r.checked) { parts.push(`${label} 확인불가(${r.reason})`); continue; }
+      if (!r.matched) framesOk = false;
+      parts.push(`${label} diff ${r.diff}${r.matched ? '' : ' ❌'}`);
+    }
+    checks.push({
+      item: 'Intro/Endcard in render',
+      mark: framesOk ? OK : FAIL,
+      val: parts.join(' · ') || '비교 불가',
+    });
+  }
 
   // Duration (format별 tolerance, outro slot + 렌더 부가 구간 반영)
   const dDiff = Math.abs(actualDur - target);

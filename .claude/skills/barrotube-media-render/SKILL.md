@@ -375,6 +375,28 @@ source reel has `60_qa_report.images.json: ok` and otherwise left as "human must
   Grok **videos** and ChatGPT estuary URLs need this download+Finder path.)
 - **CapCut 2 vs CapCut.** Open drafts with CapCut 2. The older CapCut app may show an
   update-required dialog for projects created by newer CapCut.
+- **Attach the character sheet, or stop. Never fall back to a text-only description.**
+  2026-08-14: all three codex attachment paths failed (extension file access blocked,
+  clipboard isolated from the automation context, `setInputFiles` not attempted first),
+  the agent silently used the DNA text instead, and every scene came out with a fat body,
+  an invented suit and a painterly style. The measured body/head width ratio was 0.85~1.0
+  against a published baseline of 0.57~0.68. **Prompt wording cannot fix a missing sheet** —
+  five rounds of prompt edits changed nothing until the sheet was actually attached.
+  Order: Playwright hidden file input → composer file picker → clipboard → **stop and report**.
+- **`setInputFiles` returning is not attachment.** Wait for `Remove image` or the thumbnail.
+- **ChatGPT: select the 이미지 만들기 tool every time.** A plain prompt routes to the normal
+  answer path — generation hangs or returns something off-spec. The reference used to say
+  "click the chip **or** start the prompt with 'Create a…'"; that `or` was the loophole.
+- **ChatGPT composer: a newline submits.** Type the whole prompt on one line, or the first
+  paragraph gets sent alone and the rest is lost.
+- **Grok Imagine: press Enter to submit.** Clicking the submit arrow intermittently drops
+  the typed prompt (the composer clears, the image stays attached, nothing generates).
+  Download lives in the post-details panel, not on the player.
+- **Stale `playwright-mcp` processes break tab control.** 10 instances (some 10 days old)
+  were holding the same user-data-dir; every browser step timed out with
+  "탭 제어가 반복 시간 초과". `pkill -f playwright-mcp` before a long browser run.
+- **Grok motion clips have no audio track — that is fine.** `render-direct.js` probes with
+  `probeHasAudio()` and mixes TTS only when the clip is silent.
 
 ## Output
 
