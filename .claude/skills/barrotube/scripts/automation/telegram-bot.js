@@ -57,17 +57,31 @@ function logLine(msg) {
   console.log(line.trim());
 }
 
+/**
+ * fetch 가 아니라 curl 을 쓴다. api.telegram.org 는 A·AAAA 를 둘 다 주는데 이 네트워크의
+ * IPv6 경로가 죽어 있고, undici 는 --dns-result-order=ipv4first 도 무시해 ETIMEDOUT 이
+ * 난다(2026-08-14 실측). notify.js·lib/guards.sh 와 같은 이유·같은 방식이다.
+ * fetch 로 두면 봇이 getUpdates 부터 못 돌아 데몬이 통째로 죽는다.
+ *
+ * getUpdates 는 long-polling(timeout 30s)이므로 curl 타임아웃을 그보다 넉넉히 잡는다.
+ */
 async function tg(method, body) {
-  const res = await fetch(`${API}/bot${BOT_TOKEN}/${method}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Telegram ${method}: ${res.status} ${err.slice(0, 200)}`);
+  const waitSec = Number(body && body.timeout) || 0;
+  const out = spawnSync('curl', [
+    '-sS', '-4', '-m', String(waitSec + 20), '-X', 'POST',
+    `${API}/bot${BOT_TOKEN}/${method}`,
+    '-H', 'Content-Type: application/json',
+    '--data-binary', '@-',
+  ], { input: JSON.stringify(body), encoding: 'utf-8' });
+
+  if (out.status !== 0) {
+    throw new Error(`Telegram ${method}: curl exit ${out.status} ${(out.stderr || '').slice(0, 160)}`);
   }
-  return res.json();
+  try {
+    return JSON.parse(out.stdout);
+  } catch {
+    throw new Error(`Telegram ${method}: 응답 파싱 실패 ${String(out.stdout).slice(0, 160)}`);
+  }
 }
 
 async function reply(chatId, text, opts = {}) {

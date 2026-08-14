@@ -105,6 +105,16 @@ cmd_install() {
       script_path="${BARROTUBE_HOME}/lib/doctor-cli.sh"
       extra_args=""
       ;;
+    publish-resume)
+      # 승인은 났는데 아직 안 올라간 EP 를 이어서 게시한다.
+      # auto-pipeline 은 승인 토큰이 없으면 텔레그램으로 알리고 정상 종료한다. 사람이
+      # 폰에서 /approve 를 눌러도 그때는 크론이 끝나 있어 게시가 안 이어졌다.
+      # 두 슬롯 뒤에 각각 한 번씩 돈다:
+      #   bash install-cron.sh install publish-resume "07:30,17:30"
+      # 승인을 만들지 않고 확인만 한다 — 사람 게이트는 그대로 남는다.
+      script_path="${BARROTUBE_HOME}/lib/publish-resume.sh"
+      extra_args=""
+      ;;
     telegram-bot)
       # Long-polling daemon — RunAtLoad=true, KeepAlive=true, time_spec 불필요
       script_path="${BARROSKILLS_HOME}/scripts/automation/telegram-bot.js"
@@ -114,7 +124,7 @@ cmd_install() {
       ;;
     *)
       echo "❌ 알 수 없는 routine: $routine" >&2
-      echo "사용 가능: us-close | kr-close | competitor-scan | weekly-marketing | doctor-daily | telegram-bot"
+      echo "사용 가능: us-close | kr-close | competitor-scan | weekly-marketing | doctor-daily | telegram-bot | publish-resume"
       exit 1
       ;;
   esac
