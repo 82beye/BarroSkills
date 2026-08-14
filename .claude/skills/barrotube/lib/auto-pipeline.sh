@@ -115,15 +115,23 @@ run_with_timeout() {
 
 media_assets_ready() {
   local base="$1" id path hash hashes="" missing=""
+  # 모션 클립을 로컬(HyperFrames)로 만들면 브라우저 단계는 스틸만 책임진다.
+  # 클립은 produce-episode 의 S6c 가 만들고 QA 의 Motion liveness 가 지킨다.
+  # BT_MOTION_ENGINE=none 이면 예전처럼 여기서 Grok 클립까지 요구한다.
+  local motion_engine="${BT_MOTION_ENGINE:-hyperframes}"
   for id in 001 002 003 004 005; do
     path="${base}/40_assets/images/scene_${id}.png"
     [ -s "$path" ] || missing="${missing}${missing:+, }images/scene_${id}.png"
+
+    [ "$motion_engine" = "none" ] || continue
 
     path="${base}/40_assets/videos/scene_${id}.mp4"
     if [ ! -s "$path" ] || ! ffprobe -v error "$path" >/dev/null 2>&1; then
       missing="${missing}${missing:+, }videos/scene_${id}.mp4"
     elif [ "$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name \
         -of csv=p=0 "$path" 2>/dev/null | head -1)" != "aac" ]; then
+      # Grok 은 'Video audio' 를 켜야 오디오가 실린다 — 매번 빠뜨리던 항목이라 여기서 막는다.
+      # (HyperFrames 클립은 설계상 무음이고 render-direct 가 TTS 만 믹스한다.)
       missing="${missing}${missing:+, }videos/scene_${id}.mp4(AAC audio)"
     else
       hash=$(shasum -a 256 "$path" | awk '{print $1}')
@@ -382,7 +390,12 @@ fi
 # ─────────────────────────────────────────────────
 # Stage B — Phase 7: media-render (브라우저, 하이브리드)
 # ─────────────────────────────────────────────────
-log_stage "🎨 Phase 7 — ChatGPT 이미지 → Grok 모션 클립 (브라우저)"
+MOTION_ENGINE="${BT_MOTION_ENGINE:-hyperframes}"
+if [ "$MOTION_ENGINE" = "none" ]; then
+  log_stage "🎨 Phase 7 — ChatGPT 이미지 → Grok 모션 클립 (브라우저)"
+else
+  log_stage "🎨 Phase 7 — ChatGPT 이미지 (브라우저) · 모션 클립은 로컬 ${MOTION_ENGINE}"
+fi
 
 MEDIA_BASE="${EP_DIR}/platforms/${PLATFORM}"
 
@@ -415,6 +428,22 @@ else
     echo "  ⚠ 클립보드 적재 실패 — 시트 첨부가 안 되면 마시가 드리프트한다"
   fi
 
+  # 모션 클립을 로컬에서 만들면 브라우저는 스틸만 담당한다 — Grok 은 열지도 않는다.
+  # 로그인·유료 모달·일일 쿼터가 걸리던 절반이 여기서 사라진다.
+  if [ "$MOTION_ENGINE" = "none" ]; then
+    MOTION_PATH_LINE="  모션 클립  ${MEDIA_BASE_REAL}/40_assets/videos/scene_NNN.mp4"
+    MOTION_STEP_LINE="2. 위 이미지가 모두 저장된 뒤에만 Chrome의 Grok Imagine에서 각 scene_NNN.png를 첨부해 영상 5개를 한 번에 하나씩 생성·저장하고 ffprobe한다."
+    MOTION_RULES="Grok은 image-to-video 9:16/720p/10s만 사용한다. 매 컷 전 Video audio 버튼이 aria-pressed=true인지 확인한다.
+Grok 로컬 이미지 선택이 확장 파일 접근 제한으로 막히면 해당 PNG를 macOS 클립보드에 넣어 Cmd+V로 첨부하고 계속한다. 파일 URL 권한 때문에 중단하거나 운영자에게 다시 묻지 마라.
+첨부 완료는 filename이 아니라 Remove image/thumbnail로 판정하고, 다운로드 뒤 H.264 세로 영상+AAC 오디오를 ffprobe한다.
+AAC가 없으면 완료로 세지 말고 Video audio를 켠 뒤 같은 컷을 재생성한다. 결제·구독은 절대 하지 마라.
+영상 5개 저장 후 SHA-256을 비교해 중복 바이트가 있으면 해당 뒤쪽 컷을 재생성한다."
+  else
+    MOTION_PATH_LINE=""
+    MOTION_STEP_LINE="2. 모션 클립은 만들지 마라. Grok Imagine 을 열 필요가 없다 — 저장된 스틸로 로컬 HyperFrames 가 만든다."
+    MOTION_RULES=""
+  fi
+
   # 로그인된 Chrome을 Codex 브라우저 플러그인으로 제어한다. 성공 판정은 에이전트 응답이
   # 아니라 아래의 파일/ffprobe 게이트만 신뢰한다.
   MEDIA_PROMPT="barrotube-media-render 스킬을 사용해 ${EP_ID} 브라우저 자산만 완성해라.
@@ -436,7 +465,7 @@ else
 
 저장 경로 (반드시 이 경로 그대로):
   씬 이미지  ${MEDIA_BASE_REAL}/40_assets/images/scene_NNN.png        (1080x1920 9:16)
-  모션 클립  ${MEDIA_BASE_REAL}/40_assets/videos/scene_NNN.mp4
+${MOTION_PATH_LINE}
   인트로     ${MEDIA_BASE_REAL}/45_intro.png
   썸네일     ${MEDIA_BASE_REAL}/47_thumbnail.png
 
@@ -446,7 +475,7 @@ else
    확인한 뒤에만 전송한다. 칩 없이 일반 프롬프트로 보내지 마라 — 일반 응답 경로로 라우팅돼
    생성이 멈추거나 규격 밖 이미지가 나온다(2026-08-14 실측). 도구 메뉴에 항목이 없으면
    임의로 진행하지 말고 【이미지 만들기 도구 없음】 이라고 보고하고 중단한다.
-2. 위 이미지가 모두 저장된 뒤에만 Chrome의 Grok Imagine에서 각 scene_NNN.png를 첨부해 영상 5개를 한 번에 하나씩 생성·저장하고 ffprobe한다.
+${MOTION_STEP_LINE}
 3. 기존 정상 파일은 재생성하지 않는다. CapCut·FFmpeg·QA·메타데이터·게시 작업은 하지 않는다.
 
 브라우저 이미지 수락 기준:
@@ -466,11 +495,7 @@ else
 이미지는 전부 브라우저(ChatGPT)로 만든다. Gemini·gpt-image-1 같은 이미지 API는 쓰지 마라.
 ChatGPT 공유·다운로드 버튼이 미디어 뷰어에 없으면 중단하지 말고 references/chatgpt-image.md 의 programmatic download 폴백으로 현재 생성 이미지 Blob 다운로드를 실행해 저장·검증한 뒤 계속한다.
 각 생성 요청 직전에 marker 파일을 만들고 Downloads 후보는 marker보다 새 파일만 수락한다. Chrome History의 이전 실행 파일을 최신 결과로 복사하지 마라.
-Grok은 image-to-video 9:16/720p/10s만 사용한다. 매 컷 전 Video audio 버튼이 aria-pressed=true인지 확인한다.
-Grok 로컬 이미지 선택이 확장 파일 접근 제한으로 막히면 해당 PNG를 macOS 클립보드에 넣어 Cmd+V로 첨부하고 계속한다. 파일 URL 권한 때문에 중단하거나 운영자에게 다시 묻지 마라.
-첨부 완료는 filename이 아니라 Remove image/thumbnail로 판정하고, 다운로드 뒤 H.264 세로 영상+AAC 오디오를 ffprobe한다.
-AAC가 없으면 완료로 세지 말고 Video audio를 켠 뒤 같은 컷을 재생성한다. 결제·구독은 절대 하지 마라.
-영상 5개 저장 후 SHA-256을 비교해 중복 바이트가 있으면 해당 뒤쪽 컷을 재생성한다.
+${MOTION_RULES}
 
 인트로 타이틀은 저장 전 한글 철자를 확대 검수해라 (AI 렌더 오타 사례 있음).
 로그인 판정은 URL이나 이전 worker 문장만으로 하지 마라. 기존 탭에서 프로필+composer를 직접 확인한다.

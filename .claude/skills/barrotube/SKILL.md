@@ -64,7 +64,7 @@ args가 있으면 곧장 해당 흐름으로:
 | 1 | 주제 검색·분석 → 전략·팩트체크 → 스크립트 | `10_market_research.md`, `20_strategy.md`, `30_script.md`, `35_factcheck.md` 생성. 최신 사실 검색은 `agent-reach`로 수행하고 HIGH 팩트체크는 중단한다. |
 | 2 | 스크립트 → TTS·길이 동기화 | `40_assets/tts/scene_NNN.wav`와 동기화된 스크립트 생성. |
 | 3 | 캐릭터 시트 첨부 → ChatGPT 씬 이미지 | `바로경제_캐릭터시트.png`를 각 생성 전에 첨부해 `40_assets/images/scene_NNN.png`에 저장. |
-| 4 | 씬 이미지 → Grok 9:16 영상 | 각 이미지를 Grok Imagine에 첨부해 `40_assets/videos/scene_NNN.mp4`로 저장. |
+| 4 | 씬 이미지 → 모션 클립 | 로컬 HyperFrames가 승인된 스틸을 움직여 `40_assets/videos/scene_NNN.mp4`로 저장 (브라우저 불필요, `references/MOTION.md`). Grok image→video는 `BT_MOTION_ENGINE=none`일 때만. |
 | 5 | 인트로·아웃트로 추가 → 최종 렌더·QA·메타 | ChatGPT에서 `45_intro.png`, `48_outro.png`를 생성·검수하고 FFmpeg/CapCut으로 `55_render/video.mp4`를 만든다. QA 통과 후 `70_publish_meta.json`을 생성한다. |
 | 6 | 발행 여부 확인 → YouTube 발행 | QA 통과본·제목·설명·예약 시각을 요약해 발행 여부만 묻는다. 승인 시 S10 토큰을 만들고 S11로 업로드한다. |
 
@@ -130,8 +130,11 @@ export PAPERCLIP_DISABLED=1
    PD가 브라우저를 조작해 생성하고 **기존 산출물 경로에 그대로 저장**
    (v2 레이아웃은 `platforms/<platform>/` 하위):
    - 씬 이미지 (ChatGPT): `40_assets/images/scene_NNN.png` (1080×1920 세로)
-   - 모션 클립 (Grok image→video): `40_assets/videos/scene_NNN.mp4`
-     — 신규 Shorts는 씬 이미지 5장과 이를 첨부해 만든 Grok 클립 5개(5/5)가 모두 있어야 S6c 완료
+   - 모션 클립: `40_assets/videos/scene_NNN.mp4` — 신규 Shorts는 5/5 가 있어야 S6c 완료.
+     **기본은 로컬 HyperFrames** (`generate-motion.js`, 브라우저·비용 없음, 1080×1920,
+     길이는 TTS 에 정확히 일치). 이미지가 다 있는데 클립만 없으면 S6c 가 이 엔진을 먼저
+     돌린다 — 예전에는 여기서 exit 3 으로 멈추고 사람을 기다렸다.
+     Grok image→video 로 되돌리려면 `BT_MOTION_ENGINE=none`. 근거·게이트: `references/MOTION.md`
    - **인트로 카드 (ChatGPT): `45_intro.png`** — 에피소드 타이틀 대형 골드 타이포 +
      BarroTube 배지 + 다크 시네마틱 배경, 9:16. **저장 전 타이틀 철자를 확대 검수**
      (AI 한글 렌더 오타 방지 — 실사례: 메타→머타). S7 렌더가 2초 무음 인트로로 prepend.

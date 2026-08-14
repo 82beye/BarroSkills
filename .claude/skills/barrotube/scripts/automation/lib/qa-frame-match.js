@@ -29,7 +29,7 @@ const GRID = 24;
 export const FRAME_DIFF_THRESHOLD = 0.08;
 
 /** 프레임 한 장을 GRID×GRID 그레이스케일 밝기 배열로 만든다. */
-function fingerprint(inputPath, seekSec = null) {
+export function fingerprint(inputPath, seekSec = null) {
   const args = [];
   if (seekSec !== null) args.push('-ss', String(seekSec));
   args.push('-i', inputPath, '-frames:v', '1',
@@ -49,7 +49,7 @@ function fingerprint(inputPath, seekSec = null) {
  * (빨강 단색 vs 파랑 단색 → diff 0). 검은 화면이 카드로 통과하는 것도 같은 이유다.
  * 그래서 밝기 평균 차이를 같은 비중으로 더한다.
  */
-function diff(a, b) {
+export function diff(a, b) {
   const mean = (v) => v.reduce((s, x) => s + x, 0) / v.length;
   const [ma, mb] = [mean(a), mean(b)];
   let shape = 0;

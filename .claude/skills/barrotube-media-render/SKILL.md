@@ -52,8 +52,13 @@ topic, write the reel script first, then render.
    (v2 레이아웃은 `EP-YYYY-NNNN/platforms/<platform>/` 하위):
    - 씬 이미지 → `40_assets/images/scene_NNN.png`
    - 모션 클립 → `40_assets/videos/scene_NNN.mp4`
-   - **신규 Shorts S6c 완료 게이트:** ChatGPT 씬 이미지 5장과 각 이미지를 첨부해 만든
-     Grok image-to-video 클립 5개가 모두 검증되어야 한다(각 5/5).
+   - **신규 Shorts S6c 완료 게이트:** ChatGPT 씬 이미지 5장 + 모션 클립 5개(각 5/5).
+     모션 클립의 **기본 엔진은 로컬 HyperFrames** 다 — 브라우저가 필요 없다.
+     `node scripts/automation/generate-motion.js --episode <dir> --platform shorts`
+     (barrotube 스킬). 승인된 스틸 자체를 헤드리스 크롬으로 움직이므로 캐릭터 드리프트가
+     0 이고 길이가 TTS 에 정확히 맞는다. Grok image-to-video 는 `BT_MOTION_ENGINE=none`
+     일 때 또는 피사체 자체가 움직여야 하는 컷에서 명시적으로 쓴다. 근거·게이트·실측은
+     `barrotube/references/MOTION.md`.
    - **인트로 카드 → `45_intro.png`** — 타이틀 대형 골드 타이포 + 채널 배지 +
      다크 배경, 9:16. **저장 전 타이틀 철자를 확대(zoom) 검수** — AI 한글 렌더
      오타가 실제로 발생한다(실사례: "메타"→"머타"). 오타면 재생성.
@@ -397,6 +402,13 @@ source reel has `60_qa_report.images.json: ok` and otherwise left as "human must
   "탭 제어가 반복 시간 초과". `pkill -f playwright-mcp` before a long browser run.
 - **Grok motion clips have no audio track — that is fine.** `render-direct.js` probes with
   `probeHasAudio()` and mixes TTS only when the clip is silent.
+- **Grok clips are 720x1264 / 10.04s — always.** The scene is retimed to the TTS length, so a
+  14.8s scene plays its 10.04s clip at **0.68×** (visible slow motion) and the 720-wide frame is
+  upscaled to 1080. Measured across EP-0091/0092, all ten clips. The local HyperFrames engine
+  renders 1080x1920 at the exact scene length, so neither happens.
+- **A file in `videos/` is not proof of motion.** `render-direct.js` turns Ken Burns *off* when a
+  clip exists, so a still-frame clip ships a frozen scene — and a count-only check passes it 5/5.
+  QA now compares the clip's own first/last frames (`Motion liveness`, BLOCK).
 
 ## Output
 
