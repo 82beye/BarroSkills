@@ -22,6 +22,10 @@ export async function generateIntroV10({
   maxRetries = 2,
   mood = 'tense breaking-news alert',
   size = '1024x1536',   // 2026-06-27 B-2: 호출자(generate-intro.js)가 format별로 주입. long=1536x1024, shorts=1024x1536
+  // 2026-08-14: 발행본 인트로(EP-0091·0092)에는 마시가 있다. 그 카드들은 브라우저에서
+  // 캐릭터시트를 붙여 만들었고 이 경로를 거치지 않았다. channel 을 주면 같은 시트를
+  // 붙여 마스코트를 넣는다 — 안 주면 기존처럼 타이포·그래픽만 있는 카드가 나온다.
+  channel = null,
 }) {
   if (!headline) throw new Error('generateIntroV10: headline required');
 
@@ -35,11 +39,14 @@ export async function generateIntroV10({
   for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
     console.log(`   v10 attempt ${attempt}/${maxRetries + 1}: enrich → generate → verify`);
 
-    const enriched = await enrichPrompt({ topic, visualHint, headline, keyword, mood, useMascot: false });
+    const enriched = await enrichPrompt({ topic, visualHint, headline, keyword, mood, useMascot: !!channel });
     totalCost += enriched.cost_usd;
     lastEnrichLen = enriched.prompt.length;
 
-    await generateImageOpenAI({ prompt: enriched.prompt, outPath, size, quality: 'high', costContext: { stage: 'S6d', engine: 'v10' } });
+    await generateImageOpenAI({
+      prompt: enriched.prompt, outPath, size, quality: 'high', channel,
+      costContext: { stage: 'S6d', engine: 'v10' },
+    });
     totalCost += 0.17;
 
     const verdict = await verifyImageText({ imagePath: outPath, expectedTextSet });

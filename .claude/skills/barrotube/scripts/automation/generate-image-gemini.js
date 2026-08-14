@@ -368,7 +368,17 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         let charPrefix;
         let dnaUsed;
         if (SCENE_DNA_MODE === 'minimal' && !scene.character_override) {
-          const minimalMascotClause = `MASCOT POLICY for this scene: the BarroTube mascot is ABSENT by default. Optionally, a tiny mascot accent (max 8% of frame area, low opacity around 70%, in the bottom-right or bottom-left corner) is permitted only if it adds personality without competing with the dominant SCENE CONTENT. The dominant subject is the topic itself (chart/infographic/illustration), not the mascot.`;
+          // 2026-08-14: 이 절과 image_prompt 계약이 정반대를 말하고 있었다.
+          // 계약(image-prompt-contract.js)은 마스코트가 씬 동작의 **주어**일 것을 BLOCK 으로
+          // 요구하는데, 여기서는 "ABSENT by default, 구석에 작은 액센트 허용"이라고 보냈다.
+          // 두 지시를 함께 받은 모델은 둘 다 그린다 — 중앙에 하나, 오른쪽 아래에 또 하나
+          // (EP-2026-0093 씬2 실측). 발행본 EP-0091·0092 는 브라우저 경로라 이 코드를
+          // 거치지 않아서 여태 드러나지 않았다.
+          // 대본이 마스코트를 주어로 쓴 씬이면 계약 쪽을 따른다.
+          const promptNamesMascot = /마시|mascot/i.test(scene.image_prompt || '');
+          const minimalMascotClause = promptNamesMascot
+            ? `MASCOT POLICY for this scene: the mascot described below is the subject of the scene action and the central figure. Draw EXACTLY ONE mascot. Do not add a second smaller mascot anywhere as a corner accent, sticker, logo or watermark.`
+            : `MASCOT POLICY for this scene: the BarroTube mascot is ABSENT by default. Optionally, a tiny mascot accent (max 8% of frame area, low opacity around 70%, in the bottom-right or bottom-left corner) is permitted only if it adds personality without competing with the dominant SCENE CONTENT. The dominant subject is the topic itself (chart/infographic/illustration), not the mascot.`;
           charPrefix = framingOnlyPrefix
             ? `${minimalMascotClause}\n\n${framingOnlyPrefix}`
             : minimalMascotClause;
@@ -443,6 +453,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
             outPath,
             size: aspectRatio === '16:9' ? '1536x1024' : '1024x1536',
             quality: 'high',
+            channel: meta.channel_id || null,   // 캐릭터 시트를 레퍼런스로 첨부 (gemini 분기와 동일)
             costContext: {
               episode: meta.episode_id || null,
               stage: 'S6c',
