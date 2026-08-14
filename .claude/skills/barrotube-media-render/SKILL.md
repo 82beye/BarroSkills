@@ -272,9 +272,40 @@ duration instead of looping it. `--allow-stills` is an explicit legacy-only exce
 its output must fail publish QA.
 
 - `55_render/video.mp4` — FFmpeg master merge for QA and draft input.
+- `55_render/pilot_captions.mp4` — optional HyperFrames caption pass (see below).
 - CapCut draft under `~/Movies/CapCut/User Data/Projects/com.lveditor.draft/<project>/`.
 - `56_capcut_export/video.mp4` — final CapCut export.
 - `distribution/{reels,tiktok,youtube}/video.mp4` symlinks to the CapCut export.
+
+### Caption layer — HyperFrames (pilot, opt-in)
+
+Burned-in captions are PNGs baked by a Python/PIL script, because this ffmpeg build has no
+libass/drawtext. That leaves exactly one possible effect: the colour changes. Animated
+captions — word pop, per-word activation, size change, coloured chips — are impossible there.
+
+HyperFrames renders the caption layer in headless Chrome instead, so anything CSS can do works:
+
+```bash
+# 1) render WITHOUT captions, 2) lay that video under a HyperFrames caption composition
+node ../barrotube/scripts/automation/pilot-variety-captions.js \
+  --episode workspace/episodes/EP-YYYY-NNNN --platform shorts --keep-base
+```
+
+Two things matter for anyone extending this:
+
+- **Put the finished render underneath, not the scene clips.** Scene clips alone drop the intro
+  card, outro pad, endcard and the ducked BGM — the sample stops resembling what ships.
+  `render-direct.js` takes `BT_SUBTITLE_MODE=none` for exactly this; without it the captions
+  double up.
+- **A `<video>` background beats an alpha overlay.** The first build rendered captions to an
+  alpha WebM and composited with ffmpeg; VP9-with-alpha encoding was the slowest step in the
+  whole pipeline. HyperFrames accepts `<video>` as a clip, so it is one pass and the source
+  audio survives (measured `hasAudio=true`, AAC in the output). Note `--resolution` cannot be
+  combined with alpha output, but is fine on this path.
+
+Style, measured colours, the karaoke sweep and the traps: `../barrotube/references/CAPTIONS.md`.
+Still a pilot — it writes `55_render/pilot_captions.mp4` alongside the normal render rather than
+replacing it.
 
 ## Reel batch mode (render a whole reel)
 
