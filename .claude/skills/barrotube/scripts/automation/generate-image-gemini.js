@@ -33,13 +33,30 @@ import { resolveImageEngine } from './lib/image-engine-config.js';
 const DEFAULT_MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image-preview';
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
-export async function generateImageGemini({ prompt, outPath, aspectRatio = '9:16', resolution = '2K', model = DEFAULT_MODEL, costContext = {} }) {
+/**
+ * 캐릭터 시트를 레퍼런스 이미지로 함께 보낸다.
+ *
+ * DNA 텍스트만으로는 비율이 안 잡힌다 — 2026-08-14 실측: "slim capsule body" 라고 써도
+ * 몸통이 머리만큼 넓게 나왔다. 시트를 붙이면 모델이 비율을 추론하지 않고 베낀다.
+ * 브라우저(ChatGPT) 경로가 계정 제한으로 막혔을 때 이 경로가 같은 품질을 내려면 필수다.
+ */
+function sheetPart(channel) {
+  const p = resolve('workspace', 'docs', `${channel === 'econ-daily' ? '바로경제' : channel}_캐릭터시트.png`);
+  if (!existsSync(p)) return null;
+  return { inlineData: { mimeType: 'image/png', data: readFileSync(p).toString('base64') } };
+}
+
+export async function generateImageGemini({ prompt, outPath, aspectRatio = '9:16', resolution = '2K', model = DEFAULT_MODEL, channel = null, costContext = {} }) {
   const apiKey = getSecret('GOOGLE_AI_API_KEY');
   if (!apiKey) throw new Error('GOOGLE_AI_API_KEY not set in .env');
 
   const url = `${API_BASE}/models/${model}:generateContent?key=${apiKey}`;
+  const sheet = channel ? sheetPart(channel) : null;
+  const requestParts = sheet
+    ? [sheet, { text: `Use the attached official character sheet as the exact reference for the mascot — identical body proportions, limb thickness, face, eyes, cheeks and colours. Do not re-invent the character.\n\n${prompt}` }]
+    : [{ text: prompt }];
   const body = {
-    contents: [{ parts: [{ text: prompt }] }],
+    contents: [{ parts: requestParts }],
     generationConfig: {
       responseModalities: ['IMAGE'],
       imageConfig: { aspectRatio, imageSize: resolution },
@@ -438,6 +455,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
             outPath,
             aspectRatio,
             resolution,
+            channel: meta.channel_id || null,   // 캐릭터 시트를 레퍼런스로 첨부
             costContext: {
               episode: meta.episode_id || null,
               stage: 'S6c',

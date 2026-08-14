@@ -85,12 +85,19 @@ function detectSilences(path, thresholdDb = -50, minDuration = 0.10) {
  * 못 찾으면 null — 그때는 자르지 않고 원본을 그대로 쓴다(내용을 잃는 것보다 낫다).
  */
 function findTailCut(rawPath, duration) {
+  // 마지막 공백부터 역순으로 훑는다. 필러 직전 공백이 항상 마지막이라는 보장이 없다 —
+  // 필러 뒤에 또 공백이 생기면 마지막 공백은 필러 "뒤"가 되고, 그 기준으로 자르면
+  // 필러가 그대로 남는다(2026-08-14 EP-0092 씬2·4 실측: 대본에 없는 "네" 가 들렸다).
   const silences = detectSilences(rawPath);
-  const last = silences[silences.length - 1];
-  if (!last) return null;
-  const tailAfter = duration - last.end;      // 공백 뒤에 남은 소리 = 필러여야 한다
-  if (tailAfter > 0.8 || last.start < duration * 0.5) return null;
-  return last.start + Math.min(QWEN_TAIL_KEEP, (last.end - last.start) * 0.85);
+  for (let i = silences.length - 1; i >= 0; i--) {
+    const s = silences[i];
+    const tailAfter = duration - s.end;       // 이 공백 뒤에 남은 소리 = 필러여야 한다
+    if (s.start < duration * 0.5) break;      // 앞쪽 절반은 본문이다
+    if (tailAfter > 0.05 && tailAfter <= 0.8) {
+      return s.start + Math.min(QWEN_TAIL_KEEP, (s.end - s.start) * 0.85);
+    }
+  }
+  return null;
 }
 
 /**
@@ -259,24 +266,33 @@ export async function generateTTSQwen({
     if (!existsSync(rawPath)) throw new Error('Qwen3-TTS 가 wav 를 내놓지 않았다');
 
     rawDuration = probeDuration(rawPath);
-    if (rawDuration <= maxPlausible) break;
+    const runaway = rawDuration > maxPlausible;
+    // 필러 경계를 못 찾으면 대본에 없는 "네" 가 그대로 남는다 — 실측(EP-0092 씬2·4)에서
+    // 사용자가 바로 알아챘다. 그대로 쓰느니 다시 뽑는다. 필러 위치는 매 생성마다 달라진다.
+    const noCut = findTailCut(rawPath, rawDuration) === null;
+    if (!runaway && !noCut) break;
 
     if (attempt === QWEN_MAX_ATTEMPTS) {
-      throw new Error(`Qwen3-TTS 가 ${QWEN_MAX_ATTEMPTS}회 모두 폭주했다 `
-        + `(${text.length}자 → ${rawDuration.toFixed(1)}초, 상한 ${maxPlausible.toFixed(1)}초). `
-        + '문장을 짧게 끊거나 --speaker 를 바꿔라.');
+      if (runaway) {
+        throw new Error(`Qwen3-TTS 가 ${QWEN_MAX_ATTEMPTS}회 모두 폭주했다 `
+          + `(${text.length}자 → ${rawDuration.toFixed(1)}초, 상한 ${maxPlausible.toFixed(1)}초). `
+          + '문장을 짧게 끊거나 --speaker 를 바꿔라.');
+      }
+      throw new Error(`Qwen3-TTS 필러 경계를 ${QWEN_MAX_ATTEMPTS}회 모두 못 찾았다 — `
+        + '그대로 쓰면 대본에 없는 어구가 들린다. 문장 끝을 바꾸거나 QWEN_TAIL_FILLER 를 조정하라.');
     }
-    console.warn(`  ⚠ 생성 폭주 (${text.length}자 → ${rawDuration.toFixed(1)}초) — 재생성 ${attempt}/${QWEN_MAX_ATTEMPTS - 1}`);
+    console.warn(runaway
+      ? `  ⚠ 생성 폭주 (${text.length}자 → ${rawDuration.toFixed(1)}초) — 재생성 ${attempt}/${QWEN_MAX_ATTEMPTS - 1}`
+      : `  ⚠ 필러 경계 미검출 — 재생성 ${attempt}/${QWEN_MAX_ATTEMPTS - 1}`);
   }
 
   try {
     // 1) 필러를 잘라낸다. 뒤쪽은 여기서만 건드린다 — 무음 제거로 뒤를 깎으면
     //    애써 얻은 여운이 다시 사라진다(-45dB 기준이 릴리스를 무음으로 본다).
+    // 위 루프가 cutAt 이 null 인 결과를 이미 걸러냈으므로 여기선 항상 자른다.
     const cutAt = findTailCut(rawPath, rawDuration);
-    const cutArgs = cutAt
-      ? ['-t', cutAt.toFixed(3), '-af', `afade=t=out:st=${(cutAt - QWEN_TAIL_FADE).toFixed(3)}:d=${QWEN_TAIL_FADE}`]
-      : ['-af', 'anull'];
-    if (!cutAt) console.warn('  ⚠ 필러 경계를 못 찾았다 — 자르지 않고 그대로 쓴다');
+    const cutArgs = ['-t', cutAt.toFixed(3),
+      '-af', `afade=t=out:st=${(cutAt - QWEN_TAIL_FADE).toFixed(3)}:d=${QWEN_TAIL_FADE}`];
     execFileSync('ffmpeg', ['-y', '-v', 'error', '-i', rawPath, ...cutArgs, trimPath]);
 
     // 2) 앞쪽 여백과 문장 사이 공백만 정리한다. 끝의 여운(< QWEN_MAX_PAUSE)은 살아남는다.

@@ -42,18 +42,28 @@ test('the ending is protected — filler is spoken, then cut, and never re-trimm
     '뒤에서부터 무음을 깎으면 한국어 종결어미의 여운(-45dB 이하)이 잘린다');
 });
 
-test('a cut that cannot be located leaves the audio alone', () => {
-  // 경계를 못 찾았는데 감으로 자르면 내용을 잃는다. 그때는 그대로 두는 게 맞다.
+test('a cut that cannot be located forces a regeneration, never a silent pass-through', () => {
+  // 2026-08-14 회귀: 경계를 못 찾으면 "자르지 않고 그대로 쓴다" 로 두었더니 대본에 없는
+  // 필러("네")가 EP-0092 씬2·4 에 그대로 실렸다. 사용자가 렌더 결과를 듣고 발견했다.
+  // 그대로 내보내느니 다시 뽑고, 3회 모두 실패하면 멈춘다.
   const fn = SRC.slice(SRC.indexOf('function findTailCut'), SRC.indexOf('export function loadCloneRef'));
   assert.match(fn, /return null/, 'detection must be able to fail');
-  assert.match(SRC, /cutAt\s*\?/, 'the caller must branch on a failed detection');
+  assert.match(SRC, /const noCut = findTailCut\(rawPath, rawDuration\) === null/,
+    'the retry loop must treat a missing boundary as a failure');
+  assert.match(SRC, /필러 경계를 \$\{QWEN_MAX_ATTEMPTS\}회 모두 못 찾았다/,
+    'exhausting retries must throw, not ship the filler');
+  assert.doesNotMatch(SRC, /자르지 않고 그대로 쓴다/, 'the silent pass-through must be gone');
+
+  // 마지막 공백만 보면 필러 뒤에 또 공백이 생겼을 때 필러가 남는다 — 역순으로 훑어야 한다.
+  assert.match(fn, /for \(let i = silences\.length - 1; i >= 0; i--\)/,
+    'boundary search must walk silences backwards');
 });
 
 test('runaway generation is detected and retried a bounded number of times', () => {
   // ryan 화자가 123자를 63.8초로 뱉은 적이 있다(정상 ~16초). 조용히 넘기면 규격이 깨진다.
   assert.match(SRC, /const QWEN_MIN_RATE = /, 'a plausibility floor must exist');
   assert.match(SRC, /attempt <= QWEN_MAX_ATTEMPTS/, 'retries must be bounded');
-  assert.match(SRC, /rawDuration <= maxPlausible/, 'the guard must compare against text length');
+  assert.match(SRC, /rawDuration > maxPlausible/, 'the guard must compare against text length');
 });
 
 test('clone needs both the reference audio and its transcript', () => {

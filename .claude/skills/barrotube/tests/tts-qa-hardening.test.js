@@ -62,6 +62,10 @@ scenes:
 ---
 `);
   writeFileSync(join(assets, 'images/scene_001.png'), 'present');
+  // 인트로·아웃트로 카드는 채널 표준이고 QA 가 존재를 BLOCK 으로 검사한다.
+  // 2026-08-14: 이 검사가 없어서 EP-0092 가 아웃트로 없이 PASS 로 게시 직전까지 갔다.
+  writeFileSync(join(dir, '45_intro.png'), 'present');
+  writeFileSync(join(dir, '48_outro.png'), 'present');
   const motion = join(assets, 'videos/scene_001.mp4');
   writeFileSync(motion, 'present');
 
@@ -69,6 +73,8 @@ scenes:
     const result = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', ...args], { encoding: 'utf-8' });
     assert.equal(result.status, 0, result.stderr);
   };
+  // 씬 TTS 는 scene target_seconds(2s) 에 맞춘다. 아래 렌더 영상만 인트로·아웃트로를
+  // 포함한 전체 길이(7.5s)다 — 둘을 같이 늘리면 TTS sync 검사가 깨진다.
   runFfmpeg([
     '-f', 'lavfi', '-i', 'sine=frequency=1000:sample_rate=44100:duration=1',
     '-c:a', 'pcm_s16le', join(assets, 'tts/scene_001.wav'),
@@ -76,8 +82,8 @@ scenes:
 
   const video = join(render, 'video.mp4');
   const renderVideo = (volume) => runFfmpeg([
-    '-f', 'lavfi', '-i', 'color=c=black:s=64x64:r=30:d=1',
-    '-f', 'lavfi', '-i', 'sine=frequency=1000:sample_rate=44100:duration=1',
+    '-f', 'lavfi', '-i', 'color=c=black:s=64x64:r=30:d=7.5',
+    '-f', 'lavfi', '-i', 'sine=frequency=1000:sample_rate=44100:duration=7.5',
     '-filter:a', `volume=${volume}`,
     '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
     '-c:a', 'aac', '-b:a', '128k', '-ac', '1', '-shortest', video,
@@ -94,7 +100,8 @@ scenes:
     assert.match(report, new RegExp(`\\| ${row} \\|`));
   }
   assert.match(report, /bundled-alert:/);
-  assert.match(report, /target 3\.00s \[scenes 2\.00s \+ intro 0s \+ pad 1s \+ endcard 0s\]/);
+  // 인트로 2s + 아웃트로 2.5s 가 목표 길이에 포함된다 (카드가 픽스처에 있으므로).
+  assert.match(report, /target 7\.50s \[scenes 2\.00s \+ intro 2s \+ pad 1s \+ endcard 2\.5s\]/);
   assert.match(report, /\*\*PASS\*\*/);
 
   rmSync(motion);

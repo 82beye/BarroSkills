@@ -15,13 +15,19 @@ const MASCOT_FULL =
   'on a separate rounded pear-shaped body, white mitten hands and rounded shoe-feet, big solid ' +
   'black eyes with white highlights, orange (#FF9A1F) blush cheeks, no nose or ears)';
 
-/** 0069 형태: 마스코트가 씬 동작의 주어 */
+/**
+ * 기준점: EP-2026-0091 발행본 씬1 — 실제로 정상 이미지를 만든 프롬프트다.
+ *
+ * 이전 기준점(EP-0069)은 스테이징 문구가 없었고, 그 형태를 따라간 EP-0092 는
+ * 마시가 정장을 입고 화면 30% 로 줄고 배경이 회화풍으로 채워졌다(2026-08-14 실측).
+ * 발행본 5컷이 100% 갖고 있던 문구를 기준점으로 올린다.
+ */
 const GOOD =
-  `[palette:bearish] ${MASCOT_FULL}, shocked and worried, standing in front of a giant glowing ` +
-  'stock chart where a tall green record-high bar is immediately followed by a steep red arrow ' +
-  'crashing straight down. BACKGROUND: deep dark navy-indigo (#1E3A5F) cinematic financial ' +
-  'newsroom, red (#E63946) warning glow on the crashing arrow, orange-gold (#F4A261) accent on ' +
-  `the record bar, faint candlestick textures at low contrast, ${CANONICAL_TAIL}`;
+  `[palette:bearish] ${MASCOT_FULL}, alarmed, standing before a single monumental split market ` +
+  'dial in the centre, face readable, planting its rounded shoe-feet while one white mitten hand ' +
+  'points toward the uneven needle, the unified dial rising in a bright stepped arc on one side ' +
+  'and barely dipping on the other. BACKGROUND: deep navy abstract exchange hall, alert red ' +
+  `accent on the dial rim, faint paper-grain texture at low contrast, ${CANONICAL_TAIL}`;
 
 /** 0070 형태: 마스코트를 서술 대상으로 밀어냄 + 금지문 + 프레임% + 시트에 없는 의상 */
 const BAD =
@@ -63,7 +69,7 @@ test('고정 꼬리의 "no readable text or numbers" 는 금지어로 세지 않
 });
 
 test('의상은 EP 전체에서 1컷까지만', () => {
-  const suited = GOOD.replace('shocked and worried',
+  const suited = GOOD.replace('alarmed',
     'wearing the dark navy business suit and tie from the sheet, worried');
   const one = checkEpisodePrompts([{ sceneId: 'S1', prompt: suited }, { sceneId: 'S2', prompt: GOOD }]);
   assert.ok(!codes(one.violations).has('WARDROBE_OVERUSE'));
@@ -110,10 +116,10 @@ test('빈 프롬프트는 EMPTY 로 막는다', () => {
 // 대본용 마스코트 절은 스스로 계약을 통과해야 한다.
 test('MASCOT_CLAUSE 는 계약 안에서 실제로 사용 가능하다', () => {
   const built = `[palette:bearish] ${MASCOT_CLAUSE}, shocked and worried, standing before a ` +
-    'giant glowing board where one index soars green while another bleeds red. ' +
-    'BACKGROUND: deep dark navy-indigo (#1E3A5F) cinematic financial newsroom, ' +
-    'red (#E63946) warning glow on the falling line, orange-gold (#F4A261) accent on the ' +
-    `rising bar, faint candlestick textures at low contrast, ${CANONICAL_TAIL}`;
+    'single glowing index board in the centre, face readable, planting its rounded shoe-feet ' +
+    'while one white mitten hand points at the falling line, the unified board splitting into ' +
+    'one rising and one bleeding half. BACKGROUND: deep navy abstract newsroom, alert red ' +
+    `accent on the falling line, faint candlestick texture at low contrast, ${CANONICAL_TAIL}`;
 
   assert.ok(built.length <= BOUNDS.maxChars,
     `조립 결과 ${built.length}자 — 상한 ${BOUNDS.maxChars}자를 넘으면 모든 컷이 BLOCK 된다`);
@@ -123,7 +129,12 @@ test('MASCOT_CLAUSE 는 계약 안에서 실제로 사용 가능하다', () => {
 
 test('MASCOT_CLAUSE 는 캐릭터 DNA 의 핵심 시각 요소를 유지한다', () => {
   // DNA 가 v13 으로 바뀌었는데 이 절만 낡으면 컷 간 캐릭터가 드리프트한다.
-  for (const token of ['마시', '바로경제', 'round head', 'pear-shaped', 'mitten', '#FF9A1F']) {
+  //
+  // 2026-08-14: 'pear-shaped' 를 'slim capsule' 로 교체했다. 배 모양은 아래가 불룩한
+  // 형태라 모델이 마시를 뚱뚱하게 그렸는데(EP-0092 전 컷), 정본 캐릭터시트
+  // (docs/바로경제_캐릭터시트.png §1·§2)의 몸통은 좁은 캡슐이고 팔다리는 막대처럼 가늘다.
+  // 즉 이 테스트가 잘못된 체형을 고정하고 있었다.
+  for (const token of ['마시', '바로경제', 'round head', 'slim capsule', 'thin stick limbs', 'mitten', '#FF9A1F']) {
     assert.ok(MASCOT_CLAUSE.includes(token), `마스코트 절에 "${token}" 가 없다`);
   }
 });
