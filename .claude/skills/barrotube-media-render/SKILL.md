@@ -272,7 +272,7 @@ duration instead of looping it. `--allow-stills` is an explicit legacy-only exce
 its output must fail publish QA.
 
 - `55_render/video.mp4` — FFmpeg master merge for QA and draft input.
-- `55_render/pilot_captions.mp4` — optional HyperFrames caption pass (see below).
+- `55_render/video.mp4` is produced by the HyperFrames caption pass by default (see below).
 - CapCut draft under `~/Movies/CapCut/User Data/Projects/com.lveditor.draft/<project>/`.
 - `56_capcut_export/video.mp4` — final CapCut export.
 - `distribution/{reels,tiktok,youtube}/video.mp4` symlinks to the CapCut export.
@@ -287,7 +287,7 @@ HyperFrames renders the caption layer in headless Chrome instead, so anything CS
 
 ```bash
 # 1) render WITHOUT captions, 2) lay that video under a HyperFrames caption composition
-node ../barrotube/scripts/automation/pilot-variety-captions.js \
+node ../barrotube/scripts/automation/render-with-captions.js \
   --episode workspace/episodes/EP-YYYY-NNNN --platform shorts --keep-base
 ```
 
@@ -304,8 +304,10 @@ Two things matter for anyone extending this:
   combined with alpha output, but is fine on this path.
 
 Style, measured colours, the karaoke sweep and the traps: `../barrotube/references/CAPTIONS.md`.
-Still a pilot — it writes `55_render/pilot_captions.mp4` alongside the normal render rather than
-replacing it.
+
+This is the **default** S7 path (`BT_CAPTION_ENGINE=hyperframes`); it writes the usual
+`55_render/video.mp4`, so QA, approval and publish are unchanged. `BT_CAPTION_ENGINE=pil` goes
+back to the Python PNG subtitles. Motion still comes from **Grok** — this layer only draws text.
 
 ## Reel batch mode (render a whole reel)
 

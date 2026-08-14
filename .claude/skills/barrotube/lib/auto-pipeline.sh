@@ -115,15 +115,14 @@ run_with_timeout() {
 
 media_assets_ready() {
   local base="$1" id path hash hashes="" missing=""
-  # 모션 클립을 로컬(HyperFrames)로 만들면 브라우저 단계는 스틸만 책임진다.
-  # 클립은 produce-episode 의 S6c 가 만들고 QA 의 Motion liveness 가 지킨다.
-  # BT_MOTION_ENGINE=none 이면 예전처럼 여기서 Grok 클립까지 요구한다.
-  local motion_engine="${BT_MOTION_ENGINE:-hyperframes}"
+  # 모션은 Grok 이 정본이라 여기서 클립까지 요구한다. BT_MOTION_ENGINE=local-only 일 때만
+  # 스틸만 보고, 클립은 produce-episode 의 S6c(로컬 HyperFrames)가 만든다.
+  local motion_engine="${BT_MOTION_ENGINE:-grok}"
   for id in 001 002 003 004 005; do
     path="${base}/40_assets/images/scene_${id}.png"
     [ -s "$path" ] || missing="${missing}${missing:+, }images/scene_${id}.png"
 
-    [ "$motion_engine" = "none" ] || continue
+    [ "$motion_engine" != "local-only" ] || continue
 
     path="${base}/40_assets/videos/scene_${id}.mp4"
     if [ ! -s "$path" ] || ! ffprobe -v error "$path" >/dev/null 2>&1; then
@@ -390,11 +389,15 @@ fi
 # ─────────────────────────────────────────────────
 # Stage B — Phase 7: media-render (브라우저, 하이브리드)
 # ─────────────────────────────────────────────────
-MOTION_ENGINE="${BT_MOTION_ENGINE:-hyperframes}"
-if [ "$MOTION_ENGINE" = "none" ]; then
-  log_stage "🎨 Phase 7 — ChatGPT 이미지 → Grok 모션 클립 (브라우저)"
+# 모션은 Grok 이 정본이다 — 피사체가 실제로 움직이므로 화면이 산다. 로컬 HyperFrames 는
+# 브라우저가 막혔을 때(로그인·쿼터·유료 모달) 파이프라인이 멈추지 않게 하는 폴백이고,
+# produce-episode 의 S6c 가 클립이 비어 있을 때만 돌린다.
+# BT_MOTION_ENGINE=local-only 로 두면 브라우저에 Grok 을 아예 요구하지 않는다.
+MOTION_ENGINE="${BT_MOTION_ENGINE:-grok}"
+if [ "$MOTION_ENGINE" = "local-only" ]; then
+  log_stage "🎨 Phase 7 — ChatGPT 이미지 (브라우저) · 모션 클립은 로컬 HyperFrames"
 else
-  log_stage "🎨 Phase 7 — ChatGPT 이미지 (브라우저) · 모션 클립은 로컬 ${MOTION_ENGINE}"
+  log_stage "🎨 Phase 7 — ChatGPT 이미지 → Grok 모션 클립 (브라우저)"
 fi
 
 MEDIA_BASE="${EP_DIR}/platforms/${PLATFORM}"
@@ -430,7 +433,7 @@ else
 
   # 모션 클립을 로컬에서 만들면 브라우저는 스틸만 담당한다 — Grok 은 열지도 않는다.
   # 로그인·유료 모달·일일 쿼터가 걸리던 절반이 여기서 사라진다.
-  if [ "$MOTION_ENGINE" = "none" ]; then
+  if [ "$MOTION_ENGINE" != "local-only" ]; then
     MOTION_PATH_LINE="  모션 클립  ${MEDIA_BASE_REAL}/40_assets/videos/scene_NNN.mp4"
     MOTION_STEP_LINE="2. 위 이미지가 모두 저장된 뒤에만 Chrome의 Grok Imagine에서 각 scene_NNN.png를 첨부해 영상 5개를 한 번에 하나씩 생성·저장하고 ffprobe한다."
     MOTION_RULES="Grok은 image-to-video 9:16/720p/10s만 사용한다. 매 컷 전 Video audio 버튼이 aria-pressed=true인지 확인한다.
