@@ -312,26 +312,38 @@ async function main() {
     const motionExists = () => sceneIds.length > 0
       && sceneIds.every(id => exists(join(p.assetsDir, 'videos', `scene_${id}.mp4`)));
     let motionDone = motionExists();
-    if (sceneEngine === 'media-render') {
-      // 이미지는 있는데 모션 클립만 없으면 여기서 멈추던 자리다. 브라우저(Grok)에
-      // 로그인·쿼터·유료 모달이 걸리면 무인 실행이 그대로 끝났다. 이제 로컬
-      // HyperFrames 로 승인된 스틸을 직접 움직여 만든다 — 브라우저·비용 없음,
-      // 캐릭터 드리프트 없음, 길이는 TTS 에 정확히 맞음. references/MOTION.md 참조.
-      const motionEngine = (process.env.BT_MOTION_ENGINE || 'hyperframes').toLowerCase();
-      if (imgDone && !motionDone && platform === 'shorts' && motionEngine !== 'none') {
-        try {
-          runTracked(absEp, episodeId, 'S6c', 'S6c Motion Clips (HyperFrames)', '08-image-generator',
-            'scripts/automation/generate-motion.js', [
-              '--episode', relEp,
-              '--platform', platform,
-            ]);
-        } catch (e) {
-          // 로컬 엔진이 죽어도 스택만 던지고 끝내지 않는다 — 아래의 "무엇을 하면 되는지"
-          // 안내까지 가야 사람이 이어받을 수 있다.
-          console.error(`\n⚠️  로컬 모션 엔진 실패: ${e.message}`);
-        }
-        motionDone = motionExists();
+
+    // 이미지는 있는데 모션 클립만 없으면 여기서 멈추던 자리다. 브라우저(Grok)에
+    // 로그인·쿼터·유료 모달이 걸리면 무인 실행이 그대로 끝났다. 이제 로컬
+    // HyperFrames 로 승인된 스틸을 직접 움직여 만든다 — 브라우저·비용 없음,
+    // 캐릭터 드리프트 없음, 길이는 TTS 에 정확히 맞음. references/MOTION.md 참조.
+    //
+    // 이 블록은 sceneEngine 분기 **밖**에 있어야 한다. 스틸을 누가 구웠는지(브라우저냐
+    // API 냐)는 모션 필요 여부와 무관한데, media-render 분기 안에 있던 탓에
+    // BT_IMAGE_ENGINE=openai 로 우회하면 videos/ 가 빈 채로 통과해 슬라이드쇼가 나왔다
+    // (2026-08-15 EP-0094 실측).
+    const motionEngine = (process.env.BT_MOTION_ENGINE || 'hyperframes').toLowerCase();
+    const ensureMotion = () => {
+      const stillsReady = sceneIds.length > 0
+        && sceneIds.every(id => exists(join(p.imagesDir, `scene_${id}.png`)));
+      if (!stillsReady || motionDone || platform !== 'shorts' || motionEngine === 'none') return;
+      try {
+        runTracked(absEp, episodeId, 'S6c', 'S6c Motion Clips (HyperFrames)', '08-image-generator',
+          'scripts/automation/generate-motion.js', [
+            '--episode', relEp,
+            '--platform', platform,
+          ]);
+      } catch (e) {
+        // 로컬 엔진이 죽어도 스택만 던지고 끝내지 않는다 — 아래의 "무엇을 하면 되는지"
+        // 안내까지 가야 사람이 이어받을 수 있다.
+        console.error(`\n⚠️  로컬 모션 엔진 실패: ${e.message}`);
       }
+      motionDone = motionExists();
+    };
+
+    ensureMotion();   // 스틸이 이미 있는 경우(media-render·재실행)
+
+    if (sceneEngine === 'media-render') {
       if (imgDone && (platform !== 'shorts' || motionDone)) {
         console.log(`\n⏭  S6c Images/Motion: 산출물 ${sceneIds.length}/${sceneIds.length} 존재 (skip)`);
       } else {
@@ -350,6 +362,7 @@ async function main() {
           '--out-dir', imgDirArg,
           '--force',
         ]);
+      ensureMotion();   // 방금 구운 스틸로 — 위 호출은 스틸이 없어서 그냥 지나갔다
     } else {
       console.log(`\n⏭  S6c Images: 이미 있음 (skip)`);
     }

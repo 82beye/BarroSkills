@@ -27,9 +27,10 @@
  * 참조 문서: workspace/channels/{channel}/intro-thumbnail-guide.md
  */
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { parse as parseYAML } from 'yaml';
+import sharp from 'sharp';
 import {
   generateImageGemini,
   loadCharacterDna,
@@ -41,9 +42,44 @@ import {
   resolveFiguresForBrief,
 } from './lib/public-figures.js';
 import { composeThumbnail } from './lib/thumbnail-composer.js';
+// 인트로 카드와 **같은 파생 규칙**을 쓴다. 썸네일만 다른 문안 로직을 두면 두 카피가
+// 갈라지고, 갈라지는 순간 어느 쪽이 정본인지 아무도 모르게 된다.
+import { deriveIntro } from './generate-cards.js';
 import { detectSentimentPalette } from './lib/sentiment.js';
 import { resolveImageEngine } from './lib/image-engine-config.js';
 import { getSecret } from './config-loader.js';
+
+// YouTube thumbnails.set 은 2 MiB 를 넘으면 400 invalidImage 로 거절한다. 업로드는
+// 이미 끝난 뒤라 영상은 살아 있고 썸네일만 조용히 빠진다 — 게시 후에야 알게 되는
+// 종류의 실패다(2026-08-15 EP-0094: 2,129,031 B, 상한을 31,879 B 초과).
+// 승인 토큰이 이 파일의 SHA-256 을 묶으므로 축소는 반드시 **승인 전**, 여기서 끝낸다.
+const YT_THUMBNAIL_MAX_BYTES = 2 * 1024 * 1024;
+const YT_THUMBNAIL_TARGET_BYTES = 1.9 * 1024 * 1024;   // 재인코딩 오차 여유
+
+export async function enforceThumbnailSizeLimit(outPath, { maxBytes = YT_THUMBNAIL_MAX_BYTES } = {}) {
+  let bytes = statSync(outPath).size;
+  if (bytes <= maxBytes) return { changed: false, bytes };
+
+  const original = bytes;
+  // 1) 팔레트 양자화. 일러스트 화풍(평면 채색 + 굵은 아웃라인)이라 색 수가 적어
+  //    보통 여기서 끝난다. 2) 그래도 넘치면 폭을 줄인다.
+  for (const [scale, quality] of [[1, 90], [1, 80], [0.85, 85], [0.72, 85], [0.6, 85]]) {
+    const img = sharp(outPath);
+    const { width } = await img.metadata();
+    const buf = await sharp(outPath)
+      .resize(scale === 1 ? undefined : Math.round(width * scale))
+      .png({ compressionLevel: 9, effort: 10, palette: true, quality })
+      .toBuffer();
+    if (buf.length <= YT_THUMBNAIL_TARGET_BYTES) {
+      writeFileSync(outPath, buf);
+      bytes = buf.length;
+      console.log(`   🗜  썸네일 축소: ${(original / 1048576).toFixed(2)} → ${(bytes / 1048576).toFixed(2)} MiB `
+        + `(scale ${scale}, quality ${quality}) — YouTube 상한 2 MiB`);
+      return { changed: true, bytes };
+    }
+  }
+  throw new Error(`썸네일이 2 MiB 아래로 줄지 않습니다 (${(original / 1048576).toFixed(2)} MiB). ${outPath}`);
+}
 
 // 스킬 루트 기준 경로. resolve('config/…') 는 CWD 의존이라
 // launchd 처럼 CWD 가 다른 실행 환경에서 조용히 깨진다.
@@ -380,6 +416,32 @@ async function main() {
     featured_person: briefThumb.featured_person || specSeriesEntry?.featured_person || null,
     brand_logos: briefThumb.brand_logos || specSeriesEntry?.brand_logos || null,
   };
+
+  // headline 이 없으면 이미지 모델이 **후킹 문구에서 숫자를 직접 골라 직접 그린다**.
+  // 2026-08-15 EP-2026-0094: CPI 는 3.4% 인데 썸네일에 「물가 3,0%」 를 그려 넣었고,
+  // vision 검증은 철자만 보므로 그대로 통과해 게시까지 갔다. 인트로·아웃트로에서 이미
+  // 없앤 실패 유형이라(글자는 HyperFrames 가 얹는다) 썸네일도 같은 원칙으로 막는다:
+  // 문안을 대본에서 파생시켜 **항상** v2(결정론 합성) 경로를 타게 한다.
+  if (!v2spec.headline_text) {
+    const derived = deriveIntro({}, fm.scenes || []);
+    const headline = (derived?.title || '').replace(/\*\*/g, '').trim();
+    if (headline) {
+      v2spec.headline_text = headline;
+      // 숫자는 subtitle_text(아라비아 숫자 정본)에서만 뽑는다. narration 은 한글 수사라
+      // "삼점사" 같은 게 딸려온다.
+      if (!v2spec.keyword_number) {
+        const subs = (fm.scenes || []).map(s => s.subtitle_text || '').join(' ');
+        const num = subs.match(/\d+(?:[.,]\d+)?\s*(?:%|퍼센트|조원|억원|포인트|bp)/);
+        if (num) v2spec.keyword_number = num[0].replace(/\s+/g, '');
+      }
+      console.log(`   🧱 headline 파생(대본 hook): "${headline}"`
+        + `${v2spec.keyword_number ? ` / 숫자 "${v2spec.keyword_number}"` : ''}`
+        + ` — 글자는 합성, 모델은 배경만 그린다`);
+    } else {
+      console.warn('   ⚠ headline 파생 실패 — 모델이 글자를 그리는 레거시 경로로 진행 (오타·오수치 위험)');
+    }
+  }
+
   const isV2 = !!v2spec.headline_text;
 
   const prompt = buildThumbnailPrompt({
@@ -454,6 +516,7 @@ async function main() {
       });
       console.log(`✅ Thumbnail saved (${engUsed}): ${outPath}`);
     }
+    await enforceThumbnailSizeLimit(outPath);
   } catch (e) {
     console.error(`❌ Thumbnail generation failed: ${e.message}`);
     process.exit(1);

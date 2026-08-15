@@ -124,6 +124,14 @@ await page.keyboard.press('Escape');
 
 - **Free tier still generates images** — but quality/size and daily limits vary. If a
   generation stalls or errors, re-screenshot and report rather than spamming send.
+- **Daily limit lands mid-batch, not at the start.** 2026-08-15 실측: 씬 2장을 만든 뒤
+  응답 아래에 「내일 AM 10:18까지 기능이 제한됩니다. 응답 품질이 낮을 수 있고 일부 도구는
+  사용할 수 없습니다」 + 「Pro로 업그레이드」 가 붙고 이미지 도구가 막혔다. **업그레이드·결제는
+  절대 하지 마라.** 만든 것까지 저장하고 「ChatGPT 일일 한도」 라고 보고하면 된다 —
+  auto-pipeline Phase 7 이 남은 씬을 gpt-image-1 + 캐릭터 시트(`/v1/images/edits`) 로 메운다.
+- **Programmatic download 은 `alt` 로 고른다, 크기로 고르지 마라.** 첨부한 캐릭터 시트가
+  1024×1535, 생성 이미지가 941×1672 라 면적 차이가 0.1% 도 안 된다 — 가장 큰 이미지를
+  집으면 시트를 내려받는다. `/생성된 이미지/.test(img.alt)` 로 거른 뒤 마지막 것을 쓴다.
 - **Do NOT curl the image URL from terminal.** `https://chatgpt.com/backend-api/estuary/...`
   usually requires browser cookies and returns 403 outside the browser context.
 - **Do NOT return image bytes/base64 through the tool.** The output filter blocks

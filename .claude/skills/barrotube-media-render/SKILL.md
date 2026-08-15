@@ -450,6 +450,16 @@ source reel has `60_qa_report.images.json: ok` and otherwise left as "human must
   "click the chip **or** start the prompt with 'Create a…'"; that `or` was the loophole.
 - **ChatGPT composer: a newline submits.** Type the whole prompt on one line, or the first
   paragraph gets sent alone and the rest is lost.
+- **ChatGPT 무료 한도는 배치 중간에 걸린다.** 2026-08-15 실측: 씬 2장 뒤에 「내일 AM 10:18까지
+  기능이 제한됩니다」 + Pro 업그레이드 배너가 뜨고 이미지 도구가 막혔다. **결제하지 마라.**
+  스틸 엔진은 이 순서로 내려간다 — ChatGPT 「이미지 만들기」 → **Grok Imagine 「이미지」**
+  (`references/grok-image.md`, 시트 첨부 + `@Image1` 참조, 1008×1792 출력) → gpt-image-1 API
+  (`/v1/images/edits` 로 같은 시트 첨부, auto-pipeline Phase 7 이 자동 수행) → Gemini.
+  Gemini 는 텍스트 DNA 뿐이라 드리프트가 있다 — 최후 수단이다.
+- **Grok Imagine 은 첨부만으로 시트를 안 쓴다.** 프롬프트에서 `@` → `Image 1` 로 명시
+  참조해야 한다. 그리고 첨부하는 순간 종횡비가 Auto 로 리셋되니 매 컷 9:16 을 다시 잡아라
+  (메뉴는 좌표가 한 행씩 밀린다 — ref 로 클릭). 다운로드는 JPEG 이고 CORS 때문에
+  programmatic blob 폴백이 0 바이트를 준다.
 - **Grok Imagine: press Enter to submit.** Clicking the submit arrow intermittently drops
   the typed prompt (the composer clears, the image stays attached, nothing generates).
   Download lives in the post-details panel, not on the player.

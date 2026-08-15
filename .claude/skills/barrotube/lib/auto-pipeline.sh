@@ -113,8 +113,13 @@ run_with_timeout() {
   return $rc
 }
 
+# $2 = full(기본) | stills
+#   full   — 인트로 카드·썸네일까지 있어야 "브라우저 단계 통째로 건너뛰기" 가 성립한다.
+#   stills — 브라우저가 **실제로 필요한** 것만 본다. 인트로 카드는 generate-cards.js 가,
+#            썸네일은 generate-thumbnail.js 가 Phase 8 에서 씬 이미지로부터 만든다.
+#            그 둘이 없다고 파이프라인을 세울 이유가 없다.
 media_assets_ready() {
-  local base="$1" id path hash hashes="" missing=""
+  local base="$1" mode="${2:-full}" id path hash hashes="" missing=""
   # 모션은 Grok 이 정본이라 여기서 클립까지 요구한다. BT_MOTION_ENGINE=local-only 일 때만
   # 스틸만 보고, 클립은 produce-episode 의 S6c(로컬 HyperFrames)가 만든다.
   local motion_engine="${BT_MOTION_ENGINE:-grok}"
@@ -122,7 +127,13 @@ media_assets_ready() {
     path="${base}/40_assets/images/scene_${id}.png"
     [ -s "$path" ] || missing="${missing}${missing:+, }images/scene_${id}.png"
 
-    [ "$motion_engine" != "local-only" ] || continue
+    # stills 모드는 이름 그대로 스틸만 본다 — 브라우저가 정말 필요한 건 시트를 붙이는
+    # 스틸뿐이고, 클립은 Phase 8 의 ensureMotion()(로컬 HyperFrames)이 스틸을 누가
+    # 구웠든 채운다. 여기서 Grok 클립까지 요구하면 API 폴백으로 스틸을 살려도 그 다음
+    # 게이트에서 다시 선다.
+    if [ "$mode" = "stills" ] || [ "$motion_engine" = "local-only" ]; then
+      continue
+    fi
 
     path="${base}/40_assets/videos/scene_${id}.mp4"
     if [ ! -s "$path" ] || ! ffprobe -v error "$path" >/dev/null 2>&1; then
@@ -140,9 +151,11 @@ media_assets_ready() {
       hashes="${hashes}${hashes:+$'\n'}${hash}"
     fi
   done
-  for path in 45_intro.png 47_thumbnail.png; do
-    [ -s "${base}/${path}" ] || missing="${missing}${missing:+, }${path}"
-  done
+  if [ "$mode" = "full" ]; then
+    for path in 45_intro.png 47_thumbnail.png; do
+      [ -s "${base}/${path}" ] || missing="${missing}${missing:+, }${path}"
+    done
+  fi
   MEDIA_ASSETS_MISSING="$missing"
   [ -z "$missing" ]
 }
@@ -495,7 +508,11 @@ ${MOTION_STEP_LINE}
 - 방향성을 다루는 씬·인트로·썸네일은 레버·다이얼·갈림길·스위치·화살표 중 하나의 방향 트리거를 중심 오브젝트로 둔다.
 - 인트로·썸네일은 sibling EP 중 최근 완료본 최대 3개의 실제 이미지를 먼저 비교해 캐릭터 크기·헤드라인 위치·배경 톤을 맞춘다.
 
-이미지는 전부 브라우저(ChatGPT)로 만든다. Gemini·gpt-image-1 같은 이미지 API는 쓰지 마라.
+이미지는 브라우저로 만든다. 이미지 API(Gemini·gpt-image-1)는 네가 직접 호출하지 마라 — 필요하면 이 파이프라인이 뒤에서 알아서 폴백한다.
+ChatGPT 가 일일 한도에 걸리면(「내일 AM HH:MM까지 기능이 제한됩니다」 배너 + 이미지 도구 사라짐) 결제하지 말고 남은 컷을 Grok Imagine 이미지 모드로 이어서 만들어라. 절차는 references/grok-image.md 다. 요약:
+  grok.com/imagine → 옵션 바 【이미지】 확인 → 숨은 file input 에 시트 주입 → 종횡비가 Auto 로 리셋되므로 【9:16 수직】을 ref 클릭으로 다시 선택(좌표는 한 행씩 밀린다) → 프롬프트에서 @ 를 눌러 【Image 1】을 골라 시트를 명시 참조 → 생성 → 우상단 액션 패널의 ⬇ 로 저장(~/Downloads/grok-image-<postId>.jpg, postId 를 URL 과 대조) → PIL 로 PNG 변환해 저장 경로에 넣는다. 출력은 1008x1792 다.
+  Grok 에서 programmatic blob 다운로드는 CORS 때문에 0 바이트가 나온다 — 반드시 ⬇ 버튼을 써라.
+  SuperGrok 구독 모달이 뜨면 결제하지 말고 닫은 뒤 「Grok 쿼터 소진」 이라고 보고하고 중단해라.
 ChatGPT 공유·다운로드 버튼이 미디어 뷰어에 없으면 중단하지 말고 references/chatgpt-image.md 의 programmatic download 폴백으로 현재 생성 이미지 Blob 다운로드를 실행해 저장·검증한 뒤 계속한다.
 각 생성 요청 직전에 marker 파일을 만들고 Downloads 후보는 marker보다 새 파일만 수락한다. Chrome History의 이전 실행 파일을 최신 결과로 복사하지 마라.
 ${MOTION_RULES}
@@ -514,10 +531,33 @@ ChatGPT 탭이 여러 개면 하나의 로그아웃 탭만 보고 중단하지 �
       -C "$PROJECT_ROOT" --add-dir "$EP_REAL" --add-dir "$DATA_REAL/workspace/docs" \
       --add-dir "$DATA_REAL/workspace/channels/econ-daily" --add-dir "$HOME/Downloads" \
       exec --ephemeral "$MEDIA_PROMPT" \
-    || halt_for_human "Phase 7 media-render" "브라우저 작업 실패 또는 타임아웃(${MEDIA_RENDER_TIMEOUT}s). Chrome 로그인·ChatGPT/Grok 한도·Codex 로그를 확인하고 재개하세요."
+    || echo "  ⚠ 브라우저 작업 실패 또는 타임아웃(${MEDIA_RENDER_TIMEOUT}s) — API 폴백을 시도합니다"
 
-  media_assets_ready "$MEDIA_BASE" \
-    || halt_for_human "Phase 7 media-render" "브라우저 작업 후 필수 자산이 불완전합니다: ${MEDIA_ASSETS_MISSING}"
+  # 브라우저가 못 채운 씬 스틸을 이미지 API 로 메운다.
+  #
+  # 브라우저가 정본인 이유는 화질이 아니라 **캐릭터 시트를 첨부할 수 있어서** 인데,
+  # gpt-image-1 의 /v1/images/edits 도 같은 시트를 첨부한다. 2026-08-15 EP-0094 실측:
+  # ChatGPT 무료 한도(다음날 10:18까지 제한)에 걸려 2장에서 멈췄고, 나머지 3장을 이
+  # 경로로 구웠더니 마시가 온모델로 나왔다(둥근 머리·검은 눈·주황 볼·미튼 손).
+  # 무인 실행이 확장 권한이나 일일 한도에 걸려 통째로 서는 것보다 낫다.
+  #
+  # 인트로 카드·썸네일은 여기서 만들지 않는다 — Phase 8 의 generate-cards.js /
+  # generate-thumbnail.js 가 씬 스틸로부터 결정론적으로 만든다.
+  if ! media_assets_ready "$MEDIA_BASE" stills; then
+    echo "  🛟 API 폴백 (gpt-image-1 + 캐릭터 시트): ${MEDIA_ASSETS_MISSING}"
+    audit "media_render_api_fallback" "WARN" "ep=$EP_ID missing=${MEDIA_ASSETS_MISSING}"
+    notify_telegram "🛟 <b>${EP_ID}</b> 브라우저 이미지 실패 — API 폴백으로 진행\n누락: ${MEDIA_ASSETS_MISSING}"
+    # 서브셸 + export. `VAR=v func` 는 함수 호출이라 자식 node 로 export 되는지가
+    # 셸 모드에 따라 갈린다 — 여기서 조용히 gemini 로 새면 폴백의 의미가 없다.
+    (
+      export BT_IMAGE_ENGINE=openai
+      run_or_echo node scripts/automation/generate-image-gemini.js \
+        --script "${MEDIA_BASE}/30_script.md" --out-dir "${MEDIA_BASE}/40_assets/images"
+    ) || echo "  ⚠ 씬 이미지 API 폴백도 실패"
+  fi
+
+  media_assets_ready "$MEDIA_BASE" stills \
+    || halt_for_human "Phase 7 media-render" "브라우저·API 폴백 후에도 씬 자산이 불완전합니다: ${MEDIA_ASSETS_MISSING}"
 fi
 
 # ─────────────────────────────────────────────────

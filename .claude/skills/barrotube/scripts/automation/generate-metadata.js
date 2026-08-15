@@ -268,7 +268,17 @@ async function main() {
     '',
     `[BRIEF]`, brief.slice(0, 800), '',
     `[SCRIPT SCENES]`,
-    fm.scenes.map(s => `- [${s.role}] ${s.narration}`).join('\n'),
+    // narration 은 TTS 정본이라 숫자가 한글 수사다("국채 삼십년물", "이천이십일년").
+    // 그게 설명문·태그로 그대로 새면 읽기도 나쁘고 검색도 안 된다 — 2026-08-15 EP-0094
+    // 는 태그에 "이천일년" 이 박혀서 나갔다. subtitle_text 가 같은 사실의 아라비아 숫자
+    // 표기이므로 함께 준다.
+    fm.scenes.map(s => (s.subtitle_text
+      ? `- [${s.role}] ${s.narration}\n      (표기용 숫자: ${s.subtitle_text})`
+      : `- [${s.role}] ${s.narration}`)).join('\n'),
+    '',
+    `[표기 규칙] 제목·설명·태그의 숫자·연도·퍼센트는 반드시 아라비아 숫자로 쓴다`,
+    `(예: "삼점사 퍼센트"→"3.4%", "이천일년"→"2001년", "에이아이"→"AI").`,
+    `대본 narration 의 한글 수사 표기를 그대로 옮기지 마라. 태그에도 한글 수사 숫자를 넣지 마라.`,
     '',
     refs ? `[NEWS REFERENCES]\n${refs}\n` : '',
     `[TASK]`,
