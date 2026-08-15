@@ -531,9 +531,53 @@ ChatGPT 탭이 여러 개면 하나의 로그아웃 탭만 보고 중단하지 �
       -C "$PROJECT_ROOT" --add-dir "$EP_REAL" --add-dir "$DATA_REAL/workspace/docs" \
       --add-dir "$DATA_REAL/workspace/channels/econ-daily" --add-dir "$HOME/Downloads" \
       exec --ephemeral "$MEDIA_PROMPT" \
-    || echo "  ⚠ 브라우저 작업 실패 또는 타임아웃(${MEDIA_RENDER_TIMEOUT}s) — API 폴백을 시도합니다"
+    || echo "  ⚠ 브라우저 작업 실패 또는 타임아웃(${MEDIA_RENDER_TIMEOUT}s) — Grok 패스로 넘어갑니다"
 
-  # 브라우저가 못 채운 씬 스틸을 이미지 API 로 메운다.
+  # ── 2차 브라우저 패스 — Grok Imagine 이미지 ────────────────────────────────
+  #
+  # 1차는 ChatGPT 다. 그게 일일 한도(배치 **중간**에 걸린다)나 확장 파일첨부 권한으로
+  # 죽으면 브라우저 팔이 통째로 끝나서, Grok 은 시도조차 못 하고 API 로 떨어졌다.
+  # Grok 은 로그인만 돼 있으면 같은 시트를 붙여 같은 품질을 낸다 — 2026-08-15 실측:
+  # 1008x1792(정확히 9:16), 마시 온모델, 유료 모달 없음, 프레이밍은 오히려 더 좋았다.
+  #
+  # 프롬프트를 1차처럼 길게 쓰지 않는다. 목적은 하나 — "빠진 스틸만 채워라". 길수록
+  # 에이전트가 QA·렌더 같은 남의 일까지 하려다 시간을 태운다.
+  if ! media_assets_ready "$MEDIA_BASE" stills && [ "${BT_SKIP_GROK_IMAGE:-0}" != "1" ]; then
+    echo "  🎨 2차 브라우저 패스 — Grok Imagine: ${MEDIA_ASSETS_MISSING}"
+    audit "media_render_grok_pass" "WARN" "ep=$EP_ID missing=${MEDIA_ASSETS_MISSING}"
+    notify_telegram "🎨 <b>${EP_ID}</b> ChatGPT 이미지 실패 — Grok Imagine 으로 재시도\n누락: ${MEDIA_ASSETS_MISSING}"
+
+    GROK_PROMPT="barrotube-media-render 스킬의 references/grok-image.md 절차 그대로, ${EP_ID} 의 **빠진 씬 스틸만** Grok Imagine 으로 채워라. 다른 일은 하지 마라.
+
+빠진 것: ${MEDIA_ASSETS_MISSING}
+대본(씬별 image_prompt): ${MEDIA_BASE_REAL}/30_script.md
+캐릭터 시트: ${CHARACTER_SHEET_REAL}
+저장 경로: ${MEDIA_BASE_REAL}/40_assets/images/scene_NNN.png   (이미 있는 정상 파일은 건드리지 마라)
+
+컷마다 이 순서를 지켜라. 하나라도 빠지면 결과가 규격 밖으로 나온다.
+1. grok.com/imagine 을 열고 옵션 바에서 【이미지】가 선택돼 있는지 확인한다.
+2. 숨은 file input 에 캐릭터 시트를 주입한다 (input[type=file] 을 찾아 그 ref 로 업로드). 컴포저에 썸네일이 뜨고 플레이스홀더가 「…이미지를 참조하려면 @」로 바뀌어야 첨부된 것이다.
+3. ★ 종횡비를 다시 【9:16 수직】으로 잡는다. 첨부하는 순간 Auto 로 리셋되고, Auto 는 시트 비율(2:3)을 따라가 세로 규격이 깨진다. 메뉴는 좌표 클릭이 한 행씩 밀리니 반드시 ref 로 클릭하고, 옵션 바 pill 이 9:16 인지 확대해 확인한다.
+4. ★ 프롬프트에서 @ 를 눌러 【Image 1】을 골라 시트를 명시 참조한다. 첨부만 해서는 시트를 안 쓴다 — ChatGPT 와 다른 점이다. 그 뒤에 해당 씬의 image_prompt 를 붙인다.
+5. 생성이 끝나면 우상단 액션 패널을 열고 맨 아랫줄 ⬇ 로 저장한다. 파일명은 ~/Downloads/grok-image-<postId>.jpg 이고 postId 가 지금 URL 의 것과 같은지 대조한다.
+6. PIL 로 PNG 변환해 위 저장 경로에 넣는다: Image.open(jpg).convert('RGB').save(png)
+7. file 로 크기를 확인한다. 1008x1792 가 정상이다.
+
+programmatic blob 다운로드는 쓰지 마라 — assets.grok.com 이 CORS 로 막아 0 바이트가 나온다(실측). 반드시 ⬇ 버튼이다.
+SuperGrok 구독 모달이 뜨면 결제·무료 체험 절대 하지 말고 닫은 뒤 「Grok 쿼터 소진」 이라고 보고하고 멈춰라. 파이프라인이 이미지 API 로 이어받는다.
+운영자는 이 cron 의 브라우저 파일 첨부·생성 실행을 이미 허용했다. 로그인·캡차·결제 차단이 아니면 다시 묻지 말고 계속한다.
+컷당 재생성은 최대 2회다. 3번째 결과는 치명적 결함(마스코트 부재·글자 렌더·다른 캐릭터)이 아니면 채택하고 다음 컷으로 간다. 완벽한 0장보다 수락 가능한 5장이 낫다."
+
+    run_with_timeout "${BT_GROK_IMAGE_TIMEOUT:-1800}" codex \
+        -a never -s workspace-write -m "${BT_MEDIA_RENDER_MODEL:-gpt-5.6-terra}" \
+        -c model_reasoning_effort="${BT_MEDIA_RENDER_REASONING:-medium}" \
+        -C "$PROJECT_ROOT" --add-dir "$EP_REAL" --add-dir "$DATA_REAL/workspace/docs" \
+        --add-dir "$DATA_REAL/workspace/channels/econ-daily" --add-dir "$HOME/Downloads" \
+        exec --ephemeral "$GROK_PROMPT" \
+      || echo "  ⚠ Grok 이미지 패스 실패 — API 폴백으로 넘어갑니다"
+  fi
+
+  # 브라우저(ChatGPT·Grok)가 둘 다 못 채운 씬 스틸을 이미지 API 로 메운다.
   #
   # 브라우저가 정본인 이유는 화질이 아니라 **캐릭터 시트를 첨부할 수 있어서** 인데,
   # gpt-image-1 의 /v1/images/edits 도 같은 시트를 첨부한다. 2026-08-15 EP-0094 실측:

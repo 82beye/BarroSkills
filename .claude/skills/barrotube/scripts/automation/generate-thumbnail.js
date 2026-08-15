@@ -28,7 +28,7 @@
  */
 
 import { readFileSync, existsSync, statSync, writeFileSync } from 'node:fs';
-import { join, resolve, dirname } from 'node:path';
+import { join, resolve, dirname, basename } from 'node:path';
 import { parse as parseYAML } from 'yaml';
 import sharp from 'sharp';
 import {
@@ -55,6 +55,25 @@ import { getSecret } from './config-loader.js';
 // 승인 토큰이 이 파일의 SHA-256 을 묶으므로 축소는 반드시 **승인 전**, 여기서 끝낸다.
 const YT_THUMBNAIL_MAX_BYTES = 2 * 1024 * 1024;
 const YT_THUMBNAIL_TARGET_BYTES = 1.9 * 1024 * 1024;   // 재인코딩 오차 여유
+
+/**
+ * 썸네일 배경으로 쓸 씬 스틸을 고른다.
+ * insight → hook → 아무거나 순. insight 컷이 그 회차에서 가장 극적인 그림이라
+ * 썸네일로 제일 잘 붙는다(2026-08-15 EP-0094 실측: 밧줄 잡은 insight 컷 채택).
+ */
+export function pickSceneStill(imagesDir, scenes) {
+  const idOf = (s) => String(s.scene_id).padStart(3, '0');
+  const ordered = [
+    ...scenes.filter(s => s.role === 'insight'),
+    ...scenes.filter(s => s.role === 'hook'),
+    ...scenes,
+  ];
+  for (const s of ordered) {
+    const p = join(imagesDir, `scene_${idOf(s)}.png`);
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
 
 export async function enforceThumbnailSizeLimit(outPath, { maxBytes = YT_THUMBNAIL_MAX_BYTES } = {}) {
   let bytes = statSync(outPath).size;
@@ -493,15 +512,28 @@ async function main() {
 
   try {
     if (isV2) {
-      const baseOutPath = join(baseDir, '47_thumbnail.base.png');
-      const baseEngine = await renderThumbnailImage({
-        useOpenAI: useOpenAIThumb,
-        prompt,
-        outPath: baseOutPath,
-        aspectRatio,
-        episodeId: fm.episode_id || null,
-        note: 'thumbnail-base',
-      });
+      let baseOutPath = join(baseDir, '47_thumbnail.base.png');
+      let baseEngine;
+      try {
+        baseEngine = await renderThumbnailImage({
+          useOpenAI: useOpenAIThumb,
+          prompt,
+          outPath: baseOutPath,
+          aspectRatio,
+          episodeId: fm.episode_id || null,
+          note: 'thumbnail-base',
+        });
+      } catch (e) {
+        // v2 에서 base 는 **배경 그림일 뿐**이다 — 글자는 composeThumbnail 이 얹는다.
+        // 이미지 API 가 죽었다고(한도·크레딧 소진·키 없음) 썸네일 없이 게시할 이유가 없다.
+        // 승인된 씬 스틸을 그대로 배경으로 쓴다. 그 스틸이 브라우저(ChatGPT·Grok)로
+        // 구워진 것이면 화풍·캐릭터가 이미 그 회차와 일치한다 — 오히려 더 붙는다.
+        const still = pickSceneStill(join(baseDir, '40_assets', 'images'), fm.scenes || []);
+        if (!still) throw e;
+        baseOutPath = still;
+        baseEngine = `scene-still-fallback(${basename(still)})`;
+        console.warn(`   ⚠ base 이미지 생성 실패 → 씬 스틸을 배경으로 사용: ${e.message.slice(0, 100)}`);
+      }
       console.log(`   📸 Base image (${baseEngine}): ${baseOutPath}`);
       const result = await composeThumbnail({ baseImagePath: baseOutPath, spec: v2spec, outPath });
       console.log(`✅ Thumbnail (v2 composer, ${result.layers} layers): ${outPath}`);
@@ -523,4 +555,9 @@ async function main() {
   }
 }
 
-main().catch(e => { console.error('❌', e.message); process.exit(1); });
+// CLI 로 부를 때만 main. 가드가 없으면 pickSceneStill·enforceThumbnailSizeLimit 을
+// import 하는 것만으로 usage 를 뱉고 종료해서 테스트도 재사용도 불가능했다.
+// (generate-cards.js·generate-metadata.js 와 같은 관례)
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch(e => { console.error('❌', e.message); process.exit(1); });
+}
