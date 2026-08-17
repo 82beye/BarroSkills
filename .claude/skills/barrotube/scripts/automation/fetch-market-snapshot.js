@@ -148,9 +148,12 @@ function loadSlot(slotName) {
   return slot;
 }
 
-function previousWeekday(date) {
+// us-close 는 06:00 KST 에 돈다 — 직전 ET 세션은 언제나 "전날"이다.
+// 주말을 건너뛰며 되짚으면 월요일이 금요일 종가를 새 종가로 보는데, 그 종가는 토요일 편에서
+// 이미 다뤘다. EP-2026-0096(월) 대본이 금요일 마감을 "오늘"이라 써서 팩트체크에 걸렸다.
+function previousDay(date) {
   const d = new Date(`${date}T00:00:00Z`);
-  do d.setUTCDate(d.getUTCDate() - 1); while ([0, 6].includes(d.getUTCDay()));
+  d.setUTCDate(d.getUTCDate() - 1);
   return d.toISOString().slice(0, 10);
 }
 
@@ -159,7 +162,11 @@ function resolveContentMode(slotName, date, quotes = [], requireClosed = []) {
   if (day === 0) return { content_mode: 'sunday_preopen', expected_session_date: null };
   if (day === 6) return { content_mode: 'closed_market_issue', expected_session_date: null };
 
-  const expected = slotName === 'us-close' ? previousWeekday(date) : date;
+  const expected = slotName === 'us-close' ? previousDay(date) : date;
+  // 직전 세션일이 주말이면 새 종가가 없다 — us-close 월요일(전날=일요일)이 여기 걸린다.
+  if ([0, 6].includes(new Date(`${expected}T00:00:00Z`).getUTCDay())) {
+    return { content_mode: 'closed_market_issue', expected_session_date: null };
+  }
   const required = quotes.filter((q) => requireClosed.includes(q.symbol));
   const noFreshClose = required.length === requireClosed.length && required.length > 0
     && required.every((q) => /^\d{4}-\d{2}-\d{2}/.test(q.traded_at || '')

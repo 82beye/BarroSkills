@@ -388,14 +388,51 @@ else
     || fail_with_alert "Phase 6 factcheck" "run-factcheck.js 실패"
 fi
 
+# 게이트가 걸리면 곧장 사람을 부르지 않는다 — 리포트가 claim 마다 `수정 제안` 을 써 주므로
+# 그걸 적용하고 다시 검증한다. guards.factcheck_max_rewrites 만큼 시도하고 그래도 남으면 halt.
+# (2026-08-17: 이 루프가 없어서 8/16·8/17 이틀 연속 EP 가 여기서 멈추고 게시가 0건이 됐다.)
+factcheck_gate_blocks() {
+  [ -s "$FACTCHECK_PATH" ] || return 1
+  local high med grounded
+  high=$(sed -n 's/^high_risk_count:[[:space:]]*//p' "$FACTCHECK_PATH" | head -1)
+  med=$(sed -n 's/^med_risk_count:[[:space:]]*//p' "$FACTCHECK_PATH" | head -1)
+  grounded=$(sed -n 's/^grounded:[[:space:]]*//p' "$FACTCHECK_PATH" | head -1)
+  case "${high:-0}" in ''|*[!0-9]*) high=0 ;; esac
+  case "${med:-0}" in ''|*[!0-9]*) med=0 ;; esac
+  # HIGH 는 근거가 없는 주장이다 — 이 줄이 없어서 run-factcheck 의 pass:false 가
+  # 파이프라인 어디에서도 막히지 않았다 (파일 머리의 "5. Fact-check HIGH 자동 회귀" 는 문서만 있었다).
+  if [ "$high" -gt 0 ]; then return 0; fi
+  { [ "$med" -gt 0 ] && [ "$grounded" != "true" ]; } || \
+    { grep -q '^### \[MED\]' "$FACTCHECK_PATH" && grep -q '\*\*검증 결과\*\*: 부정확' "$FACTCHECK_PATH"; }
+}
+
 if [ "$DRY_RUN" = "0" ] && [ -s "$FACTCHECK_PATH" ]; then
-  MED_COUNT=$(sed -n 's/^med_risk_count:[[:space:]]*//p' "$FACTCHECK_PATH" | head -1)
-  GROUNDED=$(sed -n 's/^grounded:[[:space:]]*//p' "$FACTCHECK_PATH" | head -1)
-  case "${MED_COUNT:-0}" in ''|*[!0-9]*) MED_COUNT=0 ;; esac
-  if { [ "$MED_COUNT" -gt 0 ] && [ "$GROUNDED" != "true" ]; } || \
-     { grep -q '^### \[MED\]' "$FACTCHECK_PATH" && grep -q '\*\*검증 결과\*\*: 부정확' "$FACTCHECK_PATH"; }; then
-    halt_for_human "Phase 6 factcheck" \
-      "MED 부정확 또는 미접지(grounded=false) 주장이 있습니다. 수치·최상급 표현을 중립 문구로 고치고 팩트체크를 다시 실행하세요."
+  FC_MAX_REWRITES=$(json_get "$AUTONOMY_FILE" "d.get('guards',{}).get('factcheck_max_rewrites',2)")
+  case "${FC_MAX_REWRITES:-}" in ''|*[!0-9]*) FC_MAX_REWRITES=2 ;; esac
+  FC_REWRITES=0
+
+  while factcheck_gate_blocks; do
+    if [ "$FC_REWRITES" -ge "$FC_MAX_REWRITES" ]; then
+      halt_for_human "Phase 6 factcheck" \
+        "MED 부정확 또는 미접지(grounded=false) 주장이 ${FC_MAX_REWRITES}회 재작성 후에도 남았습니다. 수치·최상급 표현을 중립 문구로 고치고 팩트체크를 다시 실행하세요."
+    fi
+    FC_REWRITES=$((FC_REWRITES + 1))
+    echo "   ↻ 팩트체크 지적 반영 재작성 ${FC_REWRITES}/${FC_MAX_REWRITES}"
+    audit "auto_pipeline_factcheck_rewrite" "WARN" "slot=$SLOT ep=$EP_ID attempt=$FC_REWRITES"
+
+    node scripts/automation/revise-script-factcheck.js \
+      --episode "$EP_DIR" --platform "$PLATFORM" \
+      || halt_for_human "Phase 6 재작성" \
+           "MED 부정확 또는 미접지(grounded=false) 주장을 대본에 반영하지 못했습니다. 대본을 손보고 재개하세요."
+
+    node scripts/automation/run-factcheck.js \
+      --episode "$EP_ID" --platform "$PLATFORM" --force \
+      || fail_with_alert "Phase 6 factcheck" "재작성 후 run-factcheck.js 실패"
+  done
+
+  if [ "$FC_REWRITES" -gt 0 ]; then
+    echo "   ✅ 재작성 ${FC_REWRITES}회로 팩트체크 게이트 통과"
+    audit "auto_pipeline_factcheck_recovered" "INFO" "slot=$SLOT ep=$EP_ID rewrites=$FC_REWRITES"
   fi
 fi
 

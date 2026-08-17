@@ -15,7 +15,7 @@
     "auto_pipeline_enabled": true,
     "budget_alert_threshold_pct": 80,
     "budget_block_threshold_pct": 90,
-    "factcheck_max_rewrites": 2,
+    "factcheck_max_rewrites": 3,
     "qa_min_score": 60,
     "serial_processing_enforced": true,
     "accept_new_issues": true
@@ -36,6 +36,12 @@
       "action": "publish_remains_human_only=false",
       "by": "operator (대화에서 명시 지시: 예약 게시까지 스스로 완료)",
       "note": "게시는 private+publishAt 예약이며 업로드 전 텔레그램 30분 거부 창구가 있다. QA·팩트체크 게이트는 그대로 유지."
+    },
+    {
+      "at": "2026-08-17T10:05:00+09:00",
+      "action": "factcheck_max_rewrites=3",
+      "by": "orchestrator (Phase 6 재작성 루프 실장)",
+      "note": "이 값은 오래 선언만 돼 있고 소비하는 코드가 없었다. auto-pipeline Phase 6 에 루프를 붙이며 실측: EP-2026-0096 이 게이트를 벗어나는 데 3라운드가 걸렸다(날짜·편향 → HIGH 미검증 수치 → emphasis_tokens·단정). 재작성 1회는 claude -p 1콜 + 팩트체크 1콜이라 06:00→08:00 발행 창에 여유가 있다."
     }
   ]
 }

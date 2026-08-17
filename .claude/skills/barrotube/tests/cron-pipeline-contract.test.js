@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { resolveContentMode } from '../scripts/automation/fetch-market-snapshot.js';
+import { parseFactcheckFindings } from '../scripts/automation/revise-script-factcheck.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const AUTO = join(ROOT, 'lib', 'auto-pipeline.sh');
@@ -103,6 +104,65 @@ test('cron pipeline keeps browser assets, render, and publish in fail-closed ord
   assert.ok(capIdx > 0 && pilIdx > 0, '두 경로가 모두 살아 있어야 한다');
 });
 
+test('factcheck findings drive a rewrite loop before a human is paged', () => {
+  // guards.factcheck_max_rewrites 와 AUTO-PIPELINE.md 는 오래전부터 "2회 시도 후 escalation" 이라
+  // 적어 뒀는데 정작 루프가 코드에 없었다. 그래서 8/16·8/17 EP 가 Phase 6 에서 바로 멈췄다.
+  // 설정·문서만 남고 코드가 사라지는 그 실패 모드를 여기서 고정한다.
+  const guards = JSON.parse(readFileSync(join(ROOT, 'config', 'autonomy-pause.json'), 'utf8')).guards;
+  assert.equal(typeof guards.factcheck_max_rewrites, 'number');
+
+  const source = readFileSync(AUTO, 'utf8');
+  assert.match(source, /factcheck_max_rewrites/, '재작성 상한을 설정에서 읽어야 한다');
+  assert.match(source, /while factcheck_gate_blocks; do/, '게이트가 걸리면 루프를 돌아야 한다');
+  assert.match(source, /revise-script-factcheck\.js/);
+  assert.match(source, /run-factcheck\.js[\s\S]{0,120}--force/, '재작성 뒤 팩트체크를 다시 굴려야 한다');
+
+  // run-factcheck 는 pass:false(HIGH 존재)여도 exit 0 이다 — 게이트가 high_risk_count 를
+  // 직접 보지 않으면 근거 없는 주장이 그대로 렌더·게시까지 간다.
+  assert.match(source, /high_risk_count/, 'HIGH 를 게이트가 직접 세야 한다');
+  assert.match(source, /if \[ "\$high" -gt 0 \]; then return 0; fi/);
+
+  // 상한에 닿기 전에 halt 하면 루프가 있으나 마나다.
+  const loopStart = source.indexOf('while factcheck_gate_blocks; do');
+  const haltInLoop = source.indexOf('halt_for_human "Phase 6 factcheck"', loopStart);
+  const guardCheck = source.indexOf('"$FC_REWRITES" -ge "$FC_MAX_REWRITES"', loopStart);
+  assert.ok(guardCheck > loopStart && guardCheck < haltInLoop,
+    'halt 은 재작성 상한을 넘긴 뒤에만 일어나야 한다');
+
+  // 리바이저는 심각도가 아니라 판정으로 고른다 — LOW 부정확이 남으면 게이트는 계속 걸리는데
+  // 고칠 대상이 없어 루프가 상한까지 헛돈다.
+  const reviser = readFileSync(join(ROOT, 'scripts', 'automation', 'revise-script-factcheck.js'), 'utf8');
+  assert.match(reviser, /FIXABLE_VERDICTS = \['부정확', '미확인'\]/);
+});
+
+test('factcheck reviser reads real reports and skips verified claims', () => {
+  const md = [
+    '### [MED] Scene 001: "지수는 오늘 내렸습니다"',
+    '- **주장**: 지수는 오늘 내렸습니다',
+    '- **검증 결과**: 부정확',
+    '- **근거**: 실제로는 지난 금요일 마감이다',
+    '- **수정 제안**: "지수는 지난 금요일 내렸습니다."',
+    '- **위험 사유**: 방영일과 거래일이 다르다',
+    '',
+    '### [MED] Scene 003: "안도감이 심리를 밀어 올렸습니다"',
+    '- **주장**: 안도감이 심리를 밀어 올렸습니다',
+    '- **검증 결과**: 미확인',
+    '- **수정 제안**: "~라는 해석이 나옵니다."',
+    '',
+    '### [LOW] Scene 002: "에스앤피는 영점일칠 퍼센트 빠졌습니다"',
+    '- **주장**: 에스앤피는 영점일칠 퍼센트 빠졌습니다',
+    '- **검증 결과**: 사실',
+    '- **근거**: 교차 확인됨',
+  ].join('\n');
+
+  const found = parseFactcheckFindings(md);
+  assert.equal(found.length, 2, '사실로 판정된 주장은 고치지 않는다');
+  assert.deepEqual(found.map((f) => f.scene_id), ['001', '003']);
+  assert.deepEqual(found.map((f) => f.verdict), ['부정확', '미확인']);
+  assert.equal(found[0].suggestion, '지수는 지난 금요일 내렸습니다.', '수정 제안의 감싼 따옴표를 벗겨야 한다');
+  assert.match(found[0].evidence, /지난 금요일 마감/);
+});
+
 test('closed markets switch research to current issues and Sunday pre-open mode', () => {
   const routines = JSON.parse(readFileSync(ROUTINES, 'utf8'));
   for (const slot of Object.values(routines.slots)) {
@@ -166,6 +226,11 @@ test('market snapshot resolves weekends and exchange holidays without a calendar
   assert.equal(resolveContentMode('us-close', '2026-08-09', quotes('2026-08-07'), required).content_mode, 'sunday_preopen');
   assert.equal(resolveContentMode('us-close', '2026-08-11', quotes('2026-08-10'), required).content_mode, 'market_close');
   assert.equal(resolveContentMode('us-close', '2026-09-08', quotes('2026-09-04'), required).content_mode, 'closed_market_issue');
+
+  // 월요일 06:00 KST 는 직전 세션이 일요일 — 새 종가가 없다. 금요일 종가는 토요일 편이 이미 썼다.
+  // 여기서 market_close 로 새면 대본이 이틀 묵은 수치를 "오늘"이라 쓴다 (EP-2026-0096).
+  assert.equal(resolveContentMode('us-close', '2026-08-17', quotes('2026-08-14'), required).content_mode, 'closed_market_issue');
+  assert.equal(resolveContentMode('us-close', '2026-08-18', quotes('2026-08-17'), required).content_mode, 'market_close');
   assert.equal(resolveContentMode('kr-close', '2026-08-17', [
     { symbol: 'KOSPI', traded_at: '2026-08-14T18:59:00+09:00' },
     { symbol: 'KOSDAQ', traded_at: '2026-08-14T18:59:00+09:00' },
