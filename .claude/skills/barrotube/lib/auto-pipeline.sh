@@ -685,15 +685,33 @@ SuperGrok 구독 모달이 뜨면 결제·무료 체험 절대 하지 말고 닫
     notify_telegram "🛟 <b>${EP_ID}</b> 브라우저 이미지 실패 — API 폴백으로 진행\n누락: ${MEDIA_ASSETS_MISSING}"
     # 서브셸 + export. `VAR=v func` 는 함수 호출이라 자식 node 로 export 되는지가
     # 셸 모드에 따라 갈린다 — 여기서 조용히 gemini 로 새면 폴백의 의미가 없다.
+    API_FALLBACK_LOG=$(mktemp)
     (
       export BT_IMAGE_ENGINE=openai
       run_or_echo node scripts/automation/generate-image-gemini.js \
         --script "${MEDIA_BASE}/30_script.md" --out-dir "${MEDIA_BASE}/40_assets/images"
-    ) || echo "  ⚠ 씬 이미지 API 폴백도 실패"
+    ) > "$API_FALLBACK_LOG" 2>&1 || echo "  ⚠ 씬 이미지 API 폴백도 실패"
+    cat "$API_FALLBACK_LOG"
+    # 폴백이 "실패" 로만 끝나면 운영자가 로그를 파야 원인을 안다. 크레딧 고갈은 코드로
+    # 못 푸는 유일한 사유라 halt 문구에 그대로 실어 보낸다 — 그래야 충전이 답인 걸 안다.
+    # (2026-08-17: OpenAI·Gemini·FAL 세 곳이 동시에 고갈 상태였고 아무 신호도 없었다.)
+    if grep -qiE 'insufficient_quota|credit_balance_exhausted|credits are depleted|RESOURCE_EXHAUSTED|Reason: TOP_UP' "$API_FALLBACK_LOG"; then
+      IMAGE_API_EXHAUSTED=1
+      audit "image_api_exhausted" "RED" "ep=$EP_ID 이미지 API 크레딧 고갈"
+    fi
+    rm -f "$API_FALLBACK_LOG"
   fi
 
-  media_assets_ready "$MEDIA_BASE" stills \
-    || halt_for_human "Phase 7 media-render" "브라우저·API 폴백 후에도 씬 자산이 불완전합니다: ${MEDIA_ASSETS_MISSING}"
+  if ! media_assets_ready "$MEDIA_BASE" stills; then
+    HALT_DETAIL="브라우저·API 폴백 후에도 씬 자산이 불완전합니다: ${MEDIA_ASSETS_MISSING}"
+    if [ "${IMAGE_API_EXHAUSTED:-0}" = "1" ]; then
+      HALT_DETAIL="${HALT_DETAIL}
+
+⛔ 이미지 API 크레딧 고갈 — 코드로 못 풉니다. 충전해야 폴백이 살아납니다.
+   OpenAI: platform.openai.com/settings/organization/billing"
+    fi
+    halt_for_human "Phase 7 media-render" "$HALT_DETAIL"
+  fi
 fi
 
 # ─────────────────────────────────────────────────

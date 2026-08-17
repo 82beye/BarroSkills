@@ -76,6 +76,14 @@ topic, write the reel script first, then render.
      localhost fetch는 CSP에 막힌다 — **macOS 클립보드로 우회**:
      `osascript -e 'set the clipboard to (read (POSIX file "<png>") as «class PNGf»)'`
      후 프롬프트창 클릭 + `Cmd+V`. 원본 무손실 첨부 확인됨.
+   - **첨부 가능 여부는 표면마다 다르다 — 섞어 읽지 마라.** 위 클립보드 우회는
+     **claude-in-chrome**(대화형 세션)에서 확인된 것이다. **codex 의 Chrome 표면에서는
+     세 경로가 모두 막힌다**: Playwright 숨은 input 주입(보안 정책), 컴포저 파일 선택
+     UI(선택 이벤트 미발생), Cmd+V(붙여도 썸네일·`Remove image` 안 뜸).
+     2026-08-17 auto-pipeline 무인 실행에서 codex 가 클립보드를 직접 재적재한 뒤
+     Cmd+V 까지 시도했으나 실패했다 — 두 번 연속, 서로 다른 호출에서.
+     따라서 **cron(codex) 경로는 시트 첨부를 전제할 수 없다.** 시트가 필요한 생성은
+     대화형 세션에서 하거나, 이미지 API 폴백(크레딧 필요)에 맡겨야 한다.
 
 어느 모드든 브라우저 절차(`references/`)와 가드(Gotchas)는 공통이다.
 
