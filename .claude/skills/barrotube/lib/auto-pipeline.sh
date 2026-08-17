@@ -493,6 +493,11 @@ else
 
   # 모션 클립을 로컬에서 만들면 브라우저는 스틸만 담당한다 — Grok 은 열지도 않는다.
   # 로그인·유료 모달·일일 쿼터가 걸리던 절반이 여기서 사라진다.
+  #
+  # Grok 모션은 정본이다. 끄지 않는다 — 피사체가 실제로 움직이는 것이 이 채널의 화면이고,
+  # HyperFrames 팬·줌은 브라우저가 통째로 막혔을 때의 응급 폴백일 뿐이다.
+  # 첨부가 막히면 조용히 폴백하지 말고 Phase 7 게이트에서 멈춘다(아래) — 무엇을 켜야 하는지
+  # 알려 주는 편이, 덜 사는 화면을 매일 내보내는 것보다 낫다.
   if [ "$MOTION_ENGINE" != "local-only" ]; then
     MOTION_PATH_LINE="  모션 클립  ${MEDIA_BASE_REAL}/40_assets/videos/scene_NNN.mp4"
     MOTION_STEP_LINE="2. 위 이미지가 모두 저장된 뒤에만 Chrome의 Grok Imagine에서 각 scene_NNN.png를 첨부해 영상 5개를 한 번에 하나씩 생성·저장하고 ffprobe한다."
@@ -598,8 +603,13 @@ ChatGPT 탭이 여러 개면 하나의 로그아웃 탭만 보고 중단하지 �
       -c model_reasoning_effort="${BT_MEDIA_RENDER_REASONING:-medium}" \
       -C "$PROJECT_ROOT" --add-dir "$EP_REAL" --add-dir "$DATA_REAL/workspace/docs" \
       --add-dir "$DATA_REAL/workspace/channels/econ-daily" --add-dir "$HOME/Downloads" \
-      exec --ephemeral "$MEDIA_PROMPT" 2>&1 | tee "$BROWSER_LOG" \
+      exec --ephemeral "$MEDIA_PROMPT" > "$BROWSER_LOG" 2>&1 \
     || echo "  ⚠ 브라우저 작업 실패 또는 타임아웃(${MEDIA_RENDER_TIMEOUT}s) — 다음 단계로 넘어갑니다"
+  # 파일 리다이렉트로 잡는다. `| tee` 로 잡으면 타임아웃이 무력화된다 — codex 가 죽어도
+  # 그 자식(브라우저 호스트·node_repl)이 파이프의 쓰기단을 물고 있어 tee 가 안 끝나고,
+  # run_with_timeout 의 감시 대상은 codex 라 아무도 이 대기를 깨지 못한다.
+  # 2026-08-18 EP-0098: 이 조합으로 25분을 멈춰 있다가 tee 를 수동으로 죽여야 진행됐다.
+  cat "$BROWSER_LOG"
 
   BROWSER_FAIL_REASON=""
   if grep -q '시드 대화 없음' "$BROWSER_LOG" 2>/dev/null; then
@@ -776,6 +786,24 @@ SuperGrok 구독 모달이 뜨면 결제·무료 체험 절대 하지 말고 닫
    OpenAI: platform.openai.com/settings/organization/billing"
     fi
     halt_for_human "Phase 7 media-render" "$HALT_DETAIL"
+  fi
+
+  # Grok 모션은 정본이다 — 없으면 멈춘다. 여기서 통과시키면 Phase 8 의 ensureMotion 이
+  # 조용히 HyperFrames 팬·줌으로 채우고, 피사체가 안 움직이는 화면이 그대로 게시된다
+  # (2026-08-16~18 EP-0096·0097·0098 이 전부 그렇게 나갔고, 운영자가 육안으로 발견했다).
+  # 첨부가 막히는 원인은 하나로 좁혀졌다: ChatGPT Chrome 확장의 파일 URL 접근 권한.
+  # 로컬 폴백으로 내보내려면 BT_MOTION_ENGINE=local-only 로 **명시**해야 한다.
+  if [ "$MOTION_ENGINE" != "local-only" ] && ! media_assets_ready "$MEDIA_BASE"; then
+    audit "grok_motion_missing" "RED" "ep=$EP_ID missing=${MEDIA_ASSETS_MISSING}"
+    halt_for_human "Phase 7 Grok 모션" \
+      "Grok 모션 클립이 없습니다: ${MEDIA_ASSETS_MISSING}
+
+🎬 Grok image→video 는 컷마다 스틸을 업로드해야 하는데 첨부가 막혀 있습니다.
+   Chrome 에서 켜 주세요 — 이것만 켜면 무인 실행에서도 Grok 모션이 됩니다:
+     chrome://extensions → ChatGPT 확장 → 세부정보 → 「파일 URL에 대한 액세스 허용」
+
+   켠 뒤 재개:  RESUME_EP=${EP_ID} bash ${BARROTUBE_HOME}/lib/auto-pipeline.sh --slot ${SLOT}
+   이번 회차만 로컬 팬·줌으로 내보내려면: BT_MOTION_ENGINE=local-only 를 붙여 재개하세요."
   fi
 fi
 

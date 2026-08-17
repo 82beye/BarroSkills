@@ -89,7 +89,16 @@ image-generation request so the mascot matches exactly — do not rely on text a
    const a = document.createElement('a'); a.href = URL.createObjectURL(b);
    a.download = 'scene_NNN.png'; document.body.appendChild(a); a.click(); a.remove();
    ```
-   Then move `~/Downloads/scene_NNN.png` to the target path. Verified 5/5 on 2026-08-17.
+   Then move `~/Downloads/scene_NNN.png` to the target path. Verified 5/5 on 2026-08-17
+   **with claude-in-chrome**.
+
+   **codex blocks this.** On codex's Chrome surface the page-level blob download is
+   refused ("Chrome의 안전 제약으로 페이지 내 blob 다운로드 실행은 차단됐습니다",
+   2026-08-18 EP-0098). There the working route is the browser's own read-only asset
+   export: the image is already on disk under
+   `$TMPDIR/browser-use/assets/<uuid>/<hash>` — copy that file to the target path and
+   `file` it to confirm a portrait PNG. Pick the asset written for the newest response,
+   not an older one. So: **blob fetch on claude-in-chrome, asset export on codex.**
    Pick by `alt` matching `생성된 이미지` — **never by area**: the character sheet
    (1024×1535) and a generated cut (941×1672) differ by under 0.1%, so an area sort
    grabs the sheet. If two cuts are in the thread, take the last match.

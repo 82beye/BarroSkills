@@ -156,6 +156,32 @@ test('the browser pass pins the logged-in Chrome extension, not the runtime defa
     '브라우저 원인이 크레딧 안내보다 앞서야 한다');
 });
 
+test('browser output is captured by file redirect, never by a pipe', () => {
+  // `| tee` 로 잡으면 타임아웃이 무력화된다 — codex 가 죽어도 그 자식(브라우저 호스트)이
+  // 파이프의 쓰기단을 물고 있어 tee 가 안 끝나고, run_with_timeout 의 감시 대상은 codex 라
+  // 아무도 그 대기를 깨지 못한다. 2026-08-18 EP-0098 이 25분을 이 상태로 멈춰 있었다.
+  const source = readFileSync(AUTO, 'utf8');
+  assert.match(source, /exec --ephemeral "\$MEDIA_PROMPT" > "\$BROWSER_LOG" 2>&1/);
+  assert.ok(!/\| tee "\$BROWSER_LOG"/.test(source),
+    'tee 파이프가 돌아오면 브라우저 단계가 타임아웃을 넘겨 매달린다');
+});
+
+test('Grok motion is canon — a missing clip halts instead of silently falling back', () => {
+  // HyperFrames 는 스틸에 팬·줌을 걸 뿐이고 피사체가 움직이지 않는다. 조용히 대체되면
+  // 덜 사는 화면이 매일 나간다 — EP-0096·0097·0098 이 전부 그렇게 게시됐고 운영자가
+  // 육안으로 발견했다. 폴백으로 내보내려면 BT_MOTION_ENGINE=local-only 로 명시해야 한다.
+  const source = readFileSync(AUTO, 'utf8');
+  assert.match(source, /grok_motion_missing/);
+  assert.match(source, /halt_for_human "Phase 7 Grok 모션"/);
+  assert.match(source, /파일 URL에 대한 액세스 허용/, '무엇을 켜야 하는지 알려 줘야 한다');
+  assert.match(source, /BT_MOTION_ENGINE=local-only/, '명시적 탈출구가 있어야 한다');
+
+  // 브라우저에 모션을 요구하는 지시가 살아 있어야 한다 — 이걸 끄면 애초에 Grok 을 안 연다.
+  assert.match(source, /Grok Imagine에서 각 scene_NNN\.png를 첨부해 영상 5개를/);
+  assert.ok(!/BT_GROK_MOTION/.test(source),
+    '모션을 opt-in 으로 두면 정본이 폴백으로 뒤집힌다');
+});
+
 test('the Grok image pass is opt-in because this surface cannot attach', () => {
   // Grok 이미지 절차의 2단계가 "숨은 file input 에 시트 주입" 이라 이 표면에서는 반드시
   // 실패하는데, 켜 두면 BT_GROK_IMAGE_TIMEOUT(1800s)을 통째로 태우고 "Grok 으로 재시도"
