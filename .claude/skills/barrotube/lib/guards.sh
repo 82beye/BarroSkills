@@ -136,6 +136,14 @@ guard_budget() {
     audit "guard_budget" "BLOCKED" "used_usd=$used limit_usd=$total_limit pct=$pct"
     return 1
   fi
+  # 경고선. 이 값은 선언만 돼 있고 읽는 코드가 없어서, 무인 운영 중 예산이 90% 벽에
+  # 부딪혀 생산이 서는 순간까지 아무 신호도 가지 않았다.
+  local alert_pct=$(python3 -c "import json;print(json.load(open('$AUTONOMY_FILE')).get('guards',{}).get('budget_alert_threshold_pct',80))")
+  if [ "$pct" -ge "$alert_pct" ]; then
+    echo "⚠️  월 예산 $pct% / 경고선 $alert_pct% (차단선 $block_pct%)"
+    audit "guard_budget" "WARN" "used_usd=$used limit_usd=$total_limit pct=$pct alert_at=$alert_pct"
+    notify_telegram "⚠️ <b>월 예산 ${pct}%</b>\n사용 \$${used} / 한도 \$${total_limit}\n${block_pct}% 에서 비용 작업이 차단됩니다."
+  fi
   return 0
 }
 

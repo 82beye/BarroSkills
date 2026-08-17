@@ -135,6 +135,38 @@ test('factcheck findings drive a rewrite loop before a human is paged', () => {
   assert.match(reviser, /FIXABLE_VERDICTS = \['부정확', '미확인'\]/);
 });
 
+test('every autonomy guard is either read by the live pipeline or classified', () => {
+  // 이 레포는 "설정에 노브가 있는데 읽는 코드가 없다" 를 두 번 겪었고, 둘 다 무인 운영
+  // 중에만 드러났다: factcheck_max_rewrites(8/16·8/17 이틀 정지), budget_alert_threshold_pct
+  // (90% 벽에 부딪힐 때까지 무경고). 노브를 추가하면 여기서 분류를 강제한다.
+  const guards = Object.keys(JSON.parse(readFileSync(join(ROOT, 'config', 'autonomy-pause.json'), 'utf8')).guards);
+  const live = ['lib/guards.sh', 'lib/auto-pipeline.sh']
+    .map((f) => readFileSync(join(ROOT, f), 'utf8')).join('\n');
+
+  // 안전한 쪽이 하드코딩돼 있어 끄는 경로가 없는 항목. 노브는 무효지만 동작은 항상 켜져 있다.
+  const hardcodedOn = {
+    publish_requires_telegram_window: 'wait_telegram_reject_window 를 무조건 통과시킨다',
+    publish_telegram_notify: 'notify_telegram 을 무조건 호출한다',
+    serial_processing_enforced: 'guard_in_flight 락이 항상 직렬을 강제한다',
+  };
+  // Paperclip 전용. PAPERCLIP_DISABLED=1 이라 현행 크론 경로에서는 죽은 노브다.
+  const legacyOnly = ['max_publish_per_day', 'max_new_series_per_day', 'accept_new_issues'];
+
+  const unclassified = guards.filter((k) =>
+    !live.includes(k) && !(k in hardcodedOn) && !legacyOnly.includes(k));
+  assert.deepEqual(unclassified, [],
+    `guard 가 늘었는데 읽는 코드도 분류도 없다: ${unclassified.join(', ')}`);
+
+  // 분류가 낡지 않게 — legacy 로 미룬 노브가 실제로 legacy 에서만 읽히는지 확인한다.
+  for (const k of legacyOnly) {
+    assert.ok(!live.includes(k), `${k} 가 이제 라이브 코드에서 읽힌다 — legacyOnly 에서 빼라`);
+  }
+  // 무인 운영의 생명줄 둘은 반드시 라이브 코드가 읽어야 한다.
+  for (const k of ['factcheck_max_rewrites', 'budget_alert_threshold_pct']) {
+    assert.ok(live.includes(k), `${k} 를 읽는 코드가 사라졌다`);
+  }
+});
+
 test('factcheck reviser reads real reports and skips verified claims', () => {
   const md = [
     '### [MED] Scene 001: "지수는 오늘 내렸습니다"',
