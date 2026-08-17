@@ -135,6 +135,24 @@ test('factcheck findings drive a rewrite loop before a human is paged', () => {
   assert.match(reviser, /FIXABLE_VERDICTS = \['부정확', '미확인'\]/);
 });
 
+test('a missing media-render thumbnail falls back instead of halting the render', () => {
+  // 씬 이미지는 시트를 붙여 그려야 해서 브라우저가 정본이지만, 썸네일은 이미 만들어 둔
+  // 씬 스틸을 배경으로 쓰고 글자는 로컬 합성이다 — 모델이 그릴 게 없으니 멈출 이유도 없다.
+  // 2026-08-17 EP-0096: 씬·모션·인트로를 다 만들어 놓고 여기서 exit 3 이 나 렌더를 못 했다.
+  const produce = readFileSync(PRODUCE, 'utf8');
+  const branch = produce.indexOf("if (thumbEngine === 'media-render')");
+  assert.ok(branch > 0);
+  const tail = produce.slice(branch, branch + 1400);
+  assert.match(tail, /S6e Thumbnail \(씬 스틸 폴백\)/, '누락 시 결정론 합성으로 이어져야 한다');
+  assert.ok(!/process\.exit\(3\)/.test(tail), 'media-render 썸네일 누락이 더는 파이프라인을 세우면 안 된다');
+
+  // 그 폴백이 성립하는 근거: 숫자는 헤드라인과 같은 씬에서만 뽑는다.
+  const thumb = readFileSync(join(ROOT, 'scripts', 'automation', 'generate-thumbnail.js'), 'utf8');
+  assert.match(thumb, /scenes\.find\(s => s\.role === 'hook'\)/);
+  assert.ok(!/\.map\(s => s\.subtitle_text \|\| ''\)\.join\(' '\)/.test(thumb),
+    '전 씬 subtitle 을 이어붙여 숫자를 고르면 다른 주장의 수치가 헤드라인에 붙는다');
+});
+
 test('a browser pass that runs out of context is topped up scene by scene', () => {
   // codex 한 번의 호출로 7개 자산을 다 만들라고 하면 컨텍스트를 다 쓰고 남은 컷 없이 끝난다
   // (2026-08-17 EP-0096: 170k 토큰으로 1/5장). 실패가 아니라 예산 소진이라 이어 만들면 된다.

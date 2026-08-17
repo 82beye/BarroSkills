@@ -401,15 +401,21 @@ async function main() {
 
     // S6e Thumbnail (YouTube feed thumbnail)
     if (thumbEngine === 'media-render') {
-      // 씬과 같은 규약: 브라우저로 만들어 두고, 없으면 API 로 새지 않고 멈춘다.
       if (exists(p.thumbnail)) {
         console.log(`\n⏭  S6e Thumbnail: media-render 산출물 존재 (skip) — ${p.thumbnail}`);
       } else {
-        console.error(`\n❌ S6e Thumbnail (media-render 모드): ${p.thumbnail} 이 없습니다.`);
-        console.error(`   → barrotube-media-render 스킬(브라우저)로 썸네일을 만든 뒤 재실행하세요.`);
-        console.error(`   → API 로 만들려면 명시적으로: --image-engine openai|gemini`);
-        if (!DRY_RUN) releaseLock();
-        process.exit(3);
+        // 씬 이미지와 달리 썸네일은 여기서 멈출 이유가 없다. 씬은 시트를 붙여 그려야 해서
+        // 브라우저가 정본이지만, 썸네일은 이미 만들어 둔 씬 스틸을 배경으로 쓰고 글자는
+        // generate-thumbnail 이 로컬 합성한다 — 모델이 그릴 게 없다.
+        // 2026-08-17 EP-2026-0096: 씬 5장·모션·인트로까지 다 만들어 놓고 여기서 exit 3 이
+        // 나서 렌더를 못 했다. generate-thumbnail 을 직접 부르니 API 429 두 번을 지나
+        // 씬 스틸 폴백으로 정상 산출됐다 — 그 경로가 애초에 호출되지 않았을 뿐이다.
+        console.warn(`\n⚠️  S6e Thumbnail: media-render 산출물이 없다 — 씬 스틸 기반 결정론 합성으로 진행`);
+        runTracked(absEp, episodeId, 'S6e', 'S6e Thumbnail (씬 스틸 폴백)', '08-image-generator',
+          'scripts/automation/generate-thumbnail.js', [
+            '--episode', relEp,
+            '--platform', platform,
+          ]);
       }
     } else if (!exists(p.thumbnail) || force) {
       runTracked(absEp, episodeId, 'S6e', `S6e Thumbnail (${thumbEngine})`, '08-image-generator',
