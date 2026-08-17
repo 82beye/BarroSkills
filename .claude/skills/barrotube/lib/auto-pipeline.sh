@@ -416,6 +416,14 @@ if [ "$DRY_RUN" = "0" ] && [ -s "$FACTCHECK_PATH" ]; then
       halt_for_human "Phase 6 factcheck" \
         "MED 부정확 또는 미접지(grounded=false) 주장이 ${FC_MAX_REWRITES}회 재작성 후에도 남았습니다. 수치·최상급 표현을 중립 문구로 고치고 팩트체크를 다시 실행하세요."
     fi
+    # 게이트는 걸리는데 고칠 주장이 없으면(모든 판정이 '사실') 재작성은 헛돈다.
+    # --check 는 파일만 읽으므로 비용이 없다. exit 10 = 고칠 게 있다.
+    if node scripts/automation/revise-script-factcheck.js \
+         --episode "$EP_DIR" --platform "$PLATFORM" --check; then
+      halt_for_human "Phase 6 factcheck" \
+        "MED 부정확 또는 미접지(grounded=false) 로 게이트가 걸렸는데 자동 수정 대상(부정확·미확인)이 없습니다. 리포트를 직접 보고 대본을 손보세요."
+    fi
+
     FC_REWRITES=$((FC_REWRITES + 1))
     echo "   ↻ 팩트체크 지적 반영 재작성 ${FC_REWRITES}/${FC_MAX_REWRITES}"
     audit "auto_pipeline_factcheck_rewrite" "WARN" "slot=$SLOT ep=$EP_ID attempt=$FC_REWRITES"
