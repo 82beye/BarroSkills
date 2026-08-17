@@ -13,7 +13,9 @@
     "scene_video_out": "40_assets/videos/scene_<id>.mp4",
     "intro_out": "45_intro.png",
     "notes": "기본값: S6c 씬 이미지와 S6d 인트로 카드는 media-render(ChatGPT 브라우저)로 PD가 생성해 각 경로에 저장(v2 레이아웃은 platforms/<platform>/ 하위). 인트로는 저장 전 타이틀 철자 확대 검수 필수(한글 렌더 오타 방지). 씬 모션 클립(Grok image→video)을 scene_video_out에 두면 render-direct.js가 정지 이미지 대신 자동 사용. 레거시(API): --image-engine(S6c) / --engine·BT_INTRO_ENGINE(S6d) openai|gemini.",
-    "thumbnail_out": "47_thumbnail.png"
+    "thumbnail_out": "47_thumbnail.png",
+    "chatgpt_seed_conversation": "https://chatgpt.com/c/6a82d4a1-b370-83ee-829b-8b420d271de5",
+    "seed_notes": "씬 이미지는 이 대화에서 이어서 만든다 — 맨 위 메시지에 캐릭터 시트가 첨부돼 있으므로 매 요청마다 파일을 다시 붙일 필요가 없다. codex 의 Chrome 표면은 로컬 파일 첨부가 구조적으로 막혀 있고(숨은 input·파일 선택 UI·Cmd+V 전부 실패, 2026-08-17 EP-0096·0097 실측), control-chrome 스킬이 외부 Playwright MCP 사용도 금지한다. 첨부를 요구하는 절차는 무인 실행에서 반드시 멈춘다. 시드 대화 방식은 같은 날 실측으로 캐릭터 일관성 유지 확인. 대화가 길어지면 운영자가 새로 시드해 이 URL 을 교체한다."
   },
   "_notes": {
     "values": "gemini | openai | auto | media-render(S6c 씬·S6d 인트로)",

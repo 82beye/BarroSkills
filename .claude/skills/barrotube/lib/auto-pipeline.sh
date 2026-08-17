@@ -473,6 +473,14 @@ else
   DATA_REAL="${EP_REAL%/workspace/episodes/*}"
   MEDIA_BASE_REAL="${EP_REAL}/platforms/${PLATFORM}"
   CHARACTER_SHEET_REAL="${DATA_REAL}/workspace/docs/바로경제_캐릭터시트.png"
+
+  # 시트는 첨부하지 않고 "이미 첨부돼 있는 대화"를 재사용한다 — 이 Chrome 표면은 로컬 파일
+  # 첨부가 구조적으로 막혀 있어서(2026-08-17 실측) 첨부를 전제한 절차는 무인 실행에서 반드시 선다.
+  CHATGPT_SEED_CONVERSATION="${BT_CHATGPT_SEED_CONVERSATION:-$(json_get "${BARROTUBE_HOME}/config/image-engines.json" "d.get('media_render',{}).get('chatgpt_seed_conversation','')")}"
+  if [ -z "$CHATGPT_SEED_CONVERSATION" ]; then
+    halt_for_human "Phase 7 media-render" \
+      "ChatGPT 시드 대화가 설정돼 있지 않습니다. config/image-engines.json 의 media_render.chatgpt_seed_conversation 에 캐릭터 시트가 첨부된 대화 URL 을 넣으세요 — 이 표면은 파일 첨부가 막혀 있어 시드 대화 없이는 씬 이미지를 만들 수 없습니다."
+  fi
   [ -s "$CHARACTER_SHEET_REAL" ] \
     || halt_for_human "Phase 7 media-render" "캐릭터 시트를 찾지 못했습니다: ${CHARACTER_SHEET_REAL}"
   PROJECT_ROOT=$(git -C "$BARROTUBE_HOME" rev-parse --show-toplevel 2>/dev/null) \
@@ -511,17 +519,21 @@ AAC가 없으면 완료로 세지 말고 Video audio를 켠 뒤 같은 컷을 �
 
 대본: ${EP_REAL}/platforms/${PLATFORM}/30_script.md 의 사실·중심 오브젝트·장면 동작을 유지하고,
 아래 브라우저 이미지 수락 기준을 함께 적용한다.
-캐릭터 시트: ${CHARACTER_SHEET_REAL} 를 ChatGPT 이미지 생성마다 첨부한다.
+캐릭터 시트: **파일을 첨부하지 마라.** 아래 시드 대화 맨 위 메시지에 시트가 이미 첨부돼 있다.
+  시드 대화: ${CHATGPT_SEED_CONVERSATION}
+  이 URL 을 열고, 맨 위에 캐릭터 시트 이미지가 실제로 보이는지 확인한 뒤, 그 대화에서 이어서 요청한다.
+  각 요청은 영문으로 이렇게 시작한다:
+    Same character as the character sheet attached at the top of this conversation
+    - identical proportions, face, and art style. New scene: <씬의 image_prompt>
+  이 방식이 정본인 이유: 이 Chrome 표면은 로컬 파일 첨부가 구조적으로 막혀 있다 —
+  숨은 input 주입·컴포저 파일 선택 UI·Cmd+V 가 전부 실패하고(2026-08-17 EP-0096·0097 실측,
+  서로 다른 실행에서 반복), control-chrome 스킬이 외부 Playwright MCP 사용도 금지한다.
+  첨부를 시도하느라 시간을 쓰지 마라. 시드 대화에서 이어 만들면 캐릭터 일관성이 유지된다(같은 날 실측).
+  시드 대화가 열리지 않거나 맨 위 시트가 안 보이면 「시드 대화 없음」 이라고 보고하고 중단해라.
 캐릭터 DNA: ${DATA_REAL}/workspace/channels/econ-daily/character-dna.md 의 첫 코드블록 규격을 지킨다.
-시트 첨부는 이 작업의 필수 조건이다. 아래 순서를 그대로 지켜라.
-1순위 — Playwright 의 숨은 file input 에 직접 주입한다. 확장 권한과 무관하게 동작하는 유일한 경로다.
-  page.locator('#upload-photos, input[type=file]').first().setInputFiles(시트경로)
-  setInputFiles 가 반환됐다는 것만으로 첨부로 치지 마라. Remove image 버튼이나 썸네일이 보여야 첨부다.
-2순위 — 그래도 안 되면 컴포저의 파일 선택 UI 로 같은 경로를 첨부한다.
-3순위 — 그래도 안 되면 macOS 클립보드 붙여넣기(Cmd+V). 이 환경에서는 브라우저 격리 클립보드로 막히는 것이 확인됐으니 기대하지 마라.
-캐릭터 DNA 텍스트 폴백은 금지한다. 세 경로가 모두 막히면 그 씬을 만들지 말고 즉시 중단하고
-「시트 첨부 실패」 라고 보고해라 — 시트 없이 그리면 몸통이 뚱뚱해지고 정장이 생기고 화풍이 이탈한다
-(2026-08-14 EP-0092 실측). 조용히 품질을 떨어뜨리는 것보다 멈추는 편이 낫다.
+캐릭터 DNA 텍스트만으로 그리는 것은 금지한다 — 시트 참조 없이 그리면 몸통이 뚱뚱해지고 정장이
+생기고 화풍이 이탈한다(2026-08-14 EP-0092 실측). 조용히 품질을 떨어뜨리는 것보다 멈추는 편이 낫다.
+프롬프트는 영문으로 입력해라. 한글을 타이핑하면 공백이 사라지고 뒤 문장이 잘리는 일이 있다(실측).
 운영자는 이 cron 작업의 ChatGPT/Grok 파일 첨부와 생성 실행을 이미 허용했다. 로그인·캡차·결제 차단이 아니면 같은 허용을 다시 묻지 말고 계속한다.
 
 저장 경로 (반드시 이 경로 그대로):
@@ -606,10 +618,14 @@ ChatGPT 탭이 여러 개면 하나의 로그아웃 탭만 보고 중단하지 �
 
 프롬프트: ${MEDIA_BASE_REAL}/30_script.md 에서 scene_id \"${NEXT_SCENE}\" 의 image_prompt 를 그대로 쓴다.
 저장: ${MEDIA_BASE_REAL}/40_assets/images/scene_${NEXT_SCENE}.png (9:16 세로)
-시트: ${CHARACTER_SHEET_REAL} 를 생성 요청에 첨부한다. 첨부 판정은 setInputFiles 반환이 아니라 Remove image/썸네일이 보이는지로 한다.
-  1순위 Playwright 숨은 file input 주입 → 2순위 컴포저 파일 선택 UI → 3순위 Cmd+V.
-  셋 다 막히면 그리지 말고 「시트 첨부 실패」 라고 보고하고 끝내라. 시트 없이 그리면 마시가 드리프트한다.
+시트: **첨부하지 마라.** ${CHATGPT_SEED_CONVERSATION} 을 열어라 — 맨 위 메시지에 시트가 이미 붙어 있다.
+  그 대화에서 이어서, 영문으로 이렇게 보낸다:
+    Same character as the character sheet attached at the top of this conversation
+    - identical proportions, face, and art style. New scene: <위 image_prompt>
+  이 표면은 로컬 파일 첨부가 막혀 있다(2026-08-17 실측). 첨부를 시도하느라 시간을 쓰지 마라.
+  시드 대화가 안 열리거나 맨 위 시트가 안 보이면 「시드 대화 없음」 이라고 보고하고 끝내라.
 전송 전 컴포저 도구 메뉴에서 【이미지 만들기】 칩이 붙은 것을 확인해라. 칩 없이 보내면 일반 응답으로 새어 생성이 안 된다.
+프롬프트는 영문으로 입력해라 — 한글을 타이핑하면 공백이 사라지고 뒤 문장이 잘린다(실측).
 수락 기준: 마시가 화면 세로 40~60% 의 중앙 주인공, 굵은 아웃라인+평면 채색, 배경은 흐리고 작게, 읽히는 글자 없음.
 재생성은 최대 2회. 3번째는 치명적 결함이 아니면 채택해라 — 완벽한 0장보다 수락 가능한 1장이 낫다.
 다운로드는 요청 직전 marker 파일보다 새 파일만 수락하고, alt 가 '생성된 이미지' 인 것을 고른다 (시트와 크기가 0.1% 차이라 면적으로 고르면 시트를 집는다).

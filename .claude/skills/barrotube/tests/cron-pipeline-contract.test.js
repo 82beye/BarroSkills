@@ -135,6 +135,28 @@ test('factcheck findings drive a rewrite loop before a human is paged', () => {
   assert.match(reviser, /FIXABLE_VERDICTS = \['부정확', '미확인'\]/);
 });
 
+test('the browser pass reuses a seeded conversation instead of attaching the sheet', () => {
+  // 이 Chrome 표면은 로컬 파일 첨부가 구조적으로 막혀 있다 — 숨은 input 주입·컴포저 파일
+  // 선택 UI·Cmd+V 가 전부 실패하고(EP-0096·0097, 서로 다른 실행에서 반복), control-chrome
+  // 스킬이 외부 Playwright MCP 사용도 금지한다. 첨부를 전제한 절차는 무인 실행에서 반드시 선다.
+  const source = readFileSync(AUTO, 'utf8');
+  const cfg = JSON.parse(readFileSync(join(ROOT, 'config', 'image-engines.json'), 'utf8'));
+
+  assert.match(cfg.media_render.chatgpt_seed_conversation, /^https:\/\/chatgpt\.com\/c\//,
+    '시트가 첨부된 시드 대화 URL 이 설정에 있어야 한다');
+  assert.match(source, /chatgpt_seed_conversation/, '파이프라인이 설정에서 시드 URL 을 읽어야 한다');
+  assert.match(source, /CHATGPT_SEED_CONVERSATION/);
+
+  // 첨부를 다시 요구하는 문구가 살아나면 같은 실패로 돌아간다.
+  assert.ok(!/setInputFiles/.test(source),
+    '첨부 절차가 프롬프트에 남아 있으면 에이전트가 다시 첨부를 시도하다 멈춘다');
+  assert.match(source, /파일을 첨부하지 마라/);
+
+  // 시드가 없으면 조용히 진행하지 말고 멈춰야 한다 — 시트 없이 그리면 마시가 드리프트한다.
+  const guard = source.indexOf('if [ -z "$CHATGPT_SEED_CONVERSATION" ]');
+  assert.ok(guard > 0, '시드 미설정 시 halt 해야 한다');
+});
+
 test('shipping HyperFrames motion when Grok is canon reaches a human', () => {
   // Grok 은 피사체가 실제로 움직이고 HyperFrames 는 스틸에 팬·줌을 걸 뿐이다.
   // 폴백으로 나가도 QA 는 "hyperframes 5" 라고 적기만 해서 아무도 모른 채 게시됐다.
