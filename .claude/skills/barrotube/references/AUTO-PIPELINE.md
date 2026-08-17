@@ -14,7 +14,9 @@
 [Phase 2] S0 brief 생성 (create-episode.js) — 무비용
    ↓
 [Phase 3] S4~S9 produce-episode.js --execute — 💰 비용 ~$0.5
-            (Script → Factcheck HIGH 회귀 → TTS → Image → Render → QA → Metadata)
+            (Script → TTS → Image → Render → QA → Metadata)
+            ※ Factcheck 회귀는 produce-episode 안이 아니라 그 앞 단계에 있다 —
+              auto-pipeline.sh Phase 6 이 게이트가 걸리는 동안 대본을 고쳐 재검증한다.
    ↓
 [Phase 4] QA Gate (score ≥ 60, blocker = 0)
    ↓ FAIL → Telegram 알람 + exit (publish 안 함)
@@ -37,7 +39,7 @@
 | 2 | **일일 EP 상한** | `guards.max_episodes_per_day` (=1) | 오늘 이미 publish 1편이면 exit 0 |
 | 3 | **월 예산 한도** | `guards.budget_block_threshold_pct` (=90) | 한도 90% 도달 시 exit 0 |
 | 4 | **In-flight 락** | `workspace/.in-flight.json` | 다른 EP 진행 중이면 exit 0 (stale은 자동 정리) |
-| 5 | **Fact-check HIGH 회귀** | `guards.factcheck_max_rewrites` (=2) | produce-episode 내부에서 2회 시도 후 escalation |
+| 5 | **Fact-check 자동 회귀** | `guards.factcheck_max_rewrites` (=3) | Phase 6 이 `revise-script-factcheck.js` 로 지적 문장만 고쳐 재검증, 상한 소진 시 escalation |
 | 6 | **QA Gate** | `guards.qa_min_score` (=60) | score < 60 또는 verdict=FAIL 시 publish 차단 |
 | 7 | **Telegram reject window** | `guards.publish_reject_window_minutes` (=30) | 운영자가 `/reject EP-XXXX` → exit 0 |
 | 8 | **Audit log 단계별 기록** | `logs/audit/YYYY-MM-DD.jsonl` | silent failure 즉시 탐지 |
