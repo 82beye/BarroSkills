@@ -51,7 +51,10 @@ test('cron pipeline keeps browser assets, render, and publish in fail-closed ord
     'duplicate bytes',
     'Video audio 버튼이 aria-pressed=true',
     'Remove image/thumbnail',
-    'programmatic download 폴백',
+    // 저장 방법은 "폴백"이 아니라 정본이다 — ChatGPT 미디어 뷰어에 다운로드 버튼이 없어서
+    // 버튼을 찾던 에이전트가 marker 만 반복 생성하며 루프에 빠졌다(2026-08-17 EP-0097).
+    "i.alt))",
+    "await r.blob()",
     'marker보다 새 파일만 수락한다',
     '같은 허용을 다시 묻지 말고 계속한다',
     '프로필+composer',

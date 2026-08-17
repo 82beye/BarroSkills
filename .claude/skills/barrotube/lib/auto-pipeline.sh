@@ -570,7 +570,12 @@ ChatGPT 가 일일 한도에 걸리면(「내일 AM HH:MM까지 기능이 제한
   grok.com/imagine → 옵션 바 【이미지】 확인 → 숨은 file input 에 시트 주입 → 종횡비가 Auto 로 리셋되므로 【9:16 수직】을 ref 클릭으로 다시 선택(좌표는 한 행씩 밀린다) → 프롬프트에서 @ 를 눌러 【Image 1】을 골라 시트를 명시 참조 → 생성 → 우상단 액션 패널의 ⬇ 로 저장(~/Downloads/grok-image-<postId>.jpg, postId 를 URL 과 대조) → PIL 로 PNG 변환해 저장 경로에 넣는다. 출력은 1008x1792 다.
   Grok 에서 programmatic blob 다운로드는 CORS 때문에 0 바이트가 나온다 — 반드시 ⬇ 버튼을 써라.
   SuperGrok 구독 모달이 뜨면 결제하지 말고 닫은 뒤 「Grok 쿼터 소진」 이라고 보고하고 중단해라.
-ChatGPT 공유·다운로드 버튼이 미디어 뷰어에 없으면 중단하지 말고 references/chatgpt-image.md 의 programmatic download 폴백으로 현재 생성 이미지 Blob 다운로드를 실행해 저장·검증한 뒤 계속한다.
+**저장은 아래 blob 다운로드로 한다.** ChatGPT 미디어 뷰어에는 다운로드 버튼이 없다 — 버튼을 찾지 마라(2026-08-17 실측: 못 찾아 marker 만 반복 생성하며 루프에 빠졌다). 생성이 끝나면 페이지에서 이 코드를 실행한다:
+  const img=[...document.querySelectorAll('img')].find(i=>/생성된 이미지/.test(i.alt));
+  const r=await fetch(img.src); const b=await r.blob();
+  const a=document.createElement('a'); a.href=URL.createObjectURL(b);
+  a.download='scene_NNN.png'; document.body.appendChild(a); a.click(); a.remove();
+  → ~/Downloads/scene_NNN.png 로 떨어지면 지정 경로로 옮긴다. b.size 가 0 이면 실패다.
 각 생성 요청 직전에 marker 파일을 만들고 Downloads 후보는 marker보다 새 파일만 수락한다. Chrome History의 이전 실행 파일을 최신 결과로 복사하지 마라.
 ${MOTION_RULES}
 
@@ -628,7 +633,14 @@ ChatGPT 탭이 여러 개면 하나의 로그아웃 탭만 보고 중단하지 �
 프롬프트는 영문으로 입력해라 — 한글을 타이핑하면 공백이 사라지고 뒤 문장이 잘린다(실측).
 수락 기준: 마시가 화면 세로 40~60% 의 중앙 주인공, 굵은 아웃라인+평면 채색, 배경은 흐리고 작게, 읽히는 글자 없음.
 재생성은 최대 2회. 3번째는 치명적 결함이 아니면 채택해라 — 완벽한 0장보다 수락 가능한 1장이 낫다.
-다운로드는 요청 직전 marker 파일보다 새 파일만 수락하고, alt 가 '생성된 이미지' 인 것을 고른다 (시트와 크기가 0.1% 차이라 면적으로 고르면 시트를 집는다).
+저장은 blob 다운로드로 한다. ChatGPT 미디어 뷰어에는 다운로드 버튼이 없다 — 찾지 마라. 생성이 끝나면 페이지에서:
+  const img=[...document.querySelectorAll('img')].find(i=>/생성된 이미지/.test(i.alt));
+  const r=await fetch(img.src); const b=await r.blob();
+  const a=document.createElement('a'); a.href=URL.createObjectURL(b);
+  a.download='scene_${NEXT_SCENE}.png'; document.body.appendChild(a); a.click(); a.remove();
+  → ~/Downloads/scene_${NEXT_SCENE}.png 를 저장 경로로 옮긴다. b.size 가 0 이면 실패다.
+alt 가 '생성된 이미지' 인 것을 고른다 — 시트와 크기가 0.1% 차이라 면적으로 고르면 시트를 집는다.
+같은 씬에 2회 시도해도 파일이 안 생기면 「다운로드 실패」 라고 보고하고 끝내라. marker 만 다시 만들며 돌지 마라.
 이미지 API 를 직접 호출하지 마라. 결제·구독은 절대 하지 마라. 한도 배너가 뜨면 「ChatGPT 한도」 라고 보고하고 끝내라." \
       || echo "     ⚠ 씬 ${NEXT_SCENE} 이어 만들기 실패"
 
