@@ -486,16 +486,10 @@ else
   PROJECT_ROOT=$(git -C "$BARROTUBE_HOME" rev-parse --show-toplevel 2>/dev/null) \
     || halt_for_human "Phase 7 media-render" "BarroSkills 프로젝트 루트를 찾지 못했습니다."
 
-  # 캐릭터 시트를 클립보드에 미리 올린다.
-  # codex 샌드박스 안에서는 osascript 실행이 거부돼(2026-08-14 실측 "Failed to create
-  # unified exec process") 에이전트가 스스로 클립보드를 채우지 못한다. 그러면 시트 없이
-  # 텍스트만으로 그리게 되고 마시가 드리프트한다(EP-0092: 정장·팔 소실·회화풍).
-  # 붙여넣기는 에이전트가 할 수 있으므로, 채우는 일만 여기서 대신한다.
-  if osascript -e "set the clipboard to (read (POSIX file \"${CHARACTER_SHEET_REAL}\") as «class PNGf»)" 2>/dev/null; then
-    echo "  📋 캐릭터 시트를 클립보드에 적재 (Cmd+V 첨부용)"
-  else
-    echo "  ⚠ 클립보드 적재 실패 — 시트 첨부가 안 되면 마시가 드리프트한다"
-  fi
+  # (2026-08-17) 시트를 클립보드에 미리 올리던 블록을 걷어냈다. 이 표면에서는 Cmd+V 붙여넣기가
+  # 첨부로 이어지지 않는 것이 확인됐고(EP-0096·0097, 서로 다른 실행에서 반복), 씬 이미지는
+  # 이제 시드 대화에서 이어 만들어 첨부 자체가 필요 없다. 클립보드는 공유 전역 상태라
+  # 채워 둬도 긴 실행 중 다른 작업이 덮어쓴다 — 남겨 두면 "적재 완료" 로그만 사람을 오도한다.
 
   # 모션 클립을 로컬에서 만들면 브라우저는 스틸만 담당한다 — Grok 은 열지도 않는다.
   # 로그인·유료 모달·일일 쿼터가 걸리던 절반이 여기서 사라진다.
@@ -662,7 +656,18 @@ alt 가 '생성된 이미지' 인 것을 고른다 — 시트와 크기가 0.1% 
   #
   # 프롬프트를 1차처럼 길게 쓰지 않는다. 목적은 하나 — "빠진 스틸만 채워라". 길수록
   # 에이전트가 QA·렌더 같은 남의 일까지 하려다 시간을 태운다.
-  if ! media_assets_ready "$MEDIA_BASE" stills && [ "${BT_SKIP_GROK_IMAGE:-0}" != "1" ]; then
+  # Grok 이미지 패스는 기본으로 건너뛴다 — opt-in 이다.
+  # 이 절차의 2단계가 "숨은 file input 에 캐릭터 시트를 주입" 인데, 이 Chrome 표면에서는
+  # 로컬 파일 첨부가 구조적으로 막혀 있다(2026-08-17 EP-0097 실측: "Chrome 확장 프로그램이
+  # 파일 첨부를 허용하지 않아 캐릭터 시트를 Grok 에 주입할 수 없었다"). 즉 반드시 실패하는데
+  # BT_GROK_IMAGE_TIMEOUT(기본 1800s) 을 통째로 태우고, 그 사이 "Grok 으로 재시도" 라는
+  # 텔레그램까지 나가 사람을 오도한다. 첨부가 되는 표면(대화형 claude-in-chrome 등)에서
+  # 돌릴 때만 BT_GROK_IMAGE=1 로 켠다.
+  if ! media_assets_ready "$MEDIA_BASE" stills && [ "${BT_GROK_IMAGE:-0}" != "1" ]; then
+    echo "  ⏭  Grok 이미지 패스 건너뜀 — 이 표면은 파일 첨부가 막혀 있다 (켜려면 BT_GROK_IMAGE=1)"
+    audit "media_render_grok_skipped" "INFO" "ep=$EP_ID reason=attach_unavailable"
+  fi
+  if ! media_assets_ready "$MEDIA_BASE" stills && [ "${BT_GROK_IMAGE:-0}" = "1" ]; then
     echo "  🎨 2차 브라우저 패스 — Grok Imagine: ${MEDIA_ASSETS_MISSING}"
     audit "media_render_grok_pass" "WARN" "ep=$EP_ID missing=${MEDIA_ASSETS_MISSING}"
     notify_telegram "🎨 <b>${EP_ID}</b> ChatGPT 이미지 실패 — Grok Imagine 으로 재시도\n누락: ${MEDIA_ASSETS_MISSING}"

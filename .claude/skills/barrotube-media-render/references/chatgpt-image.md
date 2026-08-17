@@ -79,15 +79,24 @@ image-generation request so the mascot matches exactly — do not rely on text a
    gone. An older portrait elsewhere in the conversation must not satisfy completion.
    Typical time: ~20–45s.
 
-6. **Download.** The verified 2026 UI path is:
-   - Hover the generated image.
-   - Click **이 이미지 공유**.
-   - In the share dialog, click **다운로드**.
-   - With Playwright MCP, wrap that click in `page.waitForEvent('download')` and call
-     `download.saveAs('/.../Image/<slug>.png')`.
-   This avoids guessing the browser Downloads path.
-   Scope the share button to the new assistant response from step 5. After `saveAs()` and
-   file validation, close the share dialog; the next batch item starts in a fresh chat.
+6. **Download — use the blob fetch. There is no download button.**
+   As of 2026-08-17 the media viewer exposes only **이 이미지 공유**; no 다운로드 entry
+   appears. An agent that hunts for one stalls: EP-2026-0097 looped re-creating its
+   marker file for ~20 minutes without ever saving a cut. Run this on the page instead:
+   ```js
+   const img = [...document.querySelectorAll('img')].find(i => /생성된 이미지/.test(i.alt));
+   const r = await fetch(img.src); const b = await r.blob();          // b.size === 0 → failed
+   const a = document.createElement('a'); a.href = URL.createObjectURL(b);
+   a.download = 'scene_NNN.png'; document.body.appendChild(a); a.click(); a.remove();
+   ```
+   Then move `~/Downloads/scene_NNN.png` to the target path. Verified 5/5 on 2026-08-17.
+   Pick by `alt` matching `생성된 이미지` — **never by area**: the character sheet
+   (1024×1535) and a generated cut (941×1672) differ by under 0.1%, so an area sort
+   grabs the sheet. If two cuts are in the thread, take the last match.
+   (Grok is the opposite — there the blob fetch returns 0 bytes on CORS and you must use
+   its ⬇ button. Do not carry one site's method over to the other.)
+   With Playwright MCP available, `page.waitForEvent('download')` + `download.saveAs()`
+   still works and avoids guessing the Downloads path.
 
 7. **Validate.** `file Image/<slug>.png` should show a portrait PNG. Typical
    ChatGPT output is `941 x 1672`.

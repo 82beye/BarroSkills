@@ -138,6 +138,20 @@ test('factcheck findings drive a rewrite loop before a human is paged', () => {
   assert.match(reviser, /FIXABLE_VERDICTS = \['부정확', '미확인'\]/);
 });
 
+test('the Grok image pass is opt-in because this surface cannot attach', () => {
+  // Grok 이미지 절차의 2단계가 "숨은 file input 에 시트 주입" 이라 이 표면에서는 반드시
+  // 실패하는데, 켜 두면 BT_GROK_IMAGE_TIMEOUT(1800s)을 통째로 태우고 "Grok 으로 재시도"
+  // 텔레그램까지 나가 사람을 오도한다 (2026-08-17 EP-0097 실측).
+  const source = readFileSync(AUTO, 'utf8');
+  assert.match(source, /BT_GROK_IMAGE:-0.*!= "1"/, '기본은 건너뛰기여야 한다');
+  assert.match(source, /media_render_grok_skipped/);
+  assert.ok(!/BT_SKIP_GROK_IMAGE/.test(source), '반전된 옛 플래그가 남으면 의미가 뒤집힌다');
+
+  // 시트를 클립보드에 미리 올리던 블록은 죽은 코드다 — 첨부 자체를 안 한다.
+  assert.ok(!/캐릭터 시트를 클립보드에 적재/.test(source),
+    '오도하는 "적재 완료" 로그가 남으면 안 된다');
+});
+
 test('the browser pass reuses a seeded conversation instead of attaching the sheet', () => {
   // 이 Chrome 표면은 로컬 파일 첨부가 구조적으로 막혀 있다 — 숨은 input 주입·컴포저 파일
   // 선택 UI·Cmd+V 가 전부 실패하고(EP-0096·0097, 서로 다른 실행에서 반복), control-chrome

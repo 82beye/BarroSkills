@@ -96,6 +96,21 @@ topic, write the reel script first, then render.
      Cmd+V 까지 시도했으나 실패했다 — 두 번 연속, 서로 다른 호출에서.
      따라서 **cron(codex) 경로는 시트 첨부를 전제할 수 없다.** 시트가 필요한 생성은
      대화형 세션에서 하거나, 이미지 API 폴백(크레딧 필요)에 맡겨야 한다.
+     외부 Playwright MCP 로 우회할 수도 없다 — codex 의 `control-chrome` 스킬이
+     "Do not use external MCP browser-control tools" 로 금지하고, 승인 모드를 `auto` 로
+     열어도 호출이 취소된다(2026-08-17 실측).
+   - **씬 이미지는 되고 Grok 모션은 안 되는 이유.** 씬 이미지는 시트 **한 장**만 있으면
+     되므로, 시트가 이미 첨부된 **시드 대화**에서 이어 요청해 첨부를 우회한다
+     (`barrotube/config/image-engines.json` 의 `media_render.chatgpt_seed_conversation`).
+     Grok image→video 는 **컷마다 다른 스틸**을 올려야 해서 같은 우회가 성립하지 않는다.
+     그래서 **무인 실행의 모션은 로컬 HyperFrames 로 나가고**, auto-pipeline 이
+     `🎞 모션 N컷이 HyperFrames 폴백` 텔레그램을 보낸다. Grok 모션이 필요하면 그 알림을
+     받은 뒤 대화형 세션에서 교체한다(EP-0096·0097 실제로 그렇게 처리).
+     같은 이유로 auto-pipeline 의 Grok **이미지** 패스는 기본 꺼져 있다 —
+     첨부가 되는 표면에서만 `BT_GROK_IMAGE=1` 로 켠다.
+   - **프롬프트는 영문으로 입력한다.** 브라우저 자동화로 한글을 타이핑하면 공백이 사라지고
+     (`이대화맨위에첨부한…`) 뒤 문장이 통째로 잘리는 일이 있다(2026-08-17 ChatGPT·실측).
+     image_prompt 는 원래 영문이므로, 앞에 붙이는 지시문만 영문으로 쓰면 된다.
 
 어느 모드든 브라우저 절차(`references/`)와 가드(Gotchas)는 공통이다.
 
