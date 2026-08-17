@@ -448,9 +448,17 @@ async function main() {
       v2spec.headline_text = headline;
       // 숫자는 subtitle_text(아라비아 숫자 정본)에서만 뽑는다. narration 은 한글 수사라
       // "삼점사" 같은 게 딸려온다.
+      //
+      // 그리고 **헤드라인과 같은 씬에서만** 뽑는다. 전 씬 subtitle 을 이어붙여 첫 숫자를
+      // 집으면 다른 주장의 수치가 헤드라인 밑에 붙는다 — 2026-08-17 EP-2026-0096 실측:
+      // 헤드라인 "SNDK 인베스터데이 후 급등"(hook, 숫자 없음) 밑에 S&P 하락률 "0.17%" 가
+      // 크게 박혀 "SNDK 가 0.17% 올랐다" 로 읽혔다. 숫자가 없으면 비워 둔다 —
+      // 틀린 숫자를 크게 박는 것보다 낫다. (deriveIntro 와 같은 방식으로 hook 을 고른다.)
       if (!v2spec.keyword_number) {
-        const subs = (fm.scenes || []).map(s => s.subtitle_text || '').join(' ');
-        const num = subs.match(/\d+(?:[.,]\d+)?\s*(?:%|퍼센트|조원|억원|포인트|bp)/);
+        const scenes = fm.scenes || [];
+        const hook = scenes.find(s => s.role === 'hook') || scenes[0] || {};
+        const num = String(hook.subtitle_text || '')
+          .match(/\d+(?:[.,]\d+)?\s*(?:%|퍼센트|조원|억원|포인트|bp)/);
         if (num) v2spec.keyword_number = num[0].replace(/\s+/g, '');
       }
       console.log(`   🧱 headline 파생(대본 hook): "${headline}"`
