@@ -796,7 +796,11 @@ SuperGrok 구독 모달이 뜨면 결제·무료 체험 절대 하지 말고 닫
   # Grok 모션은 정본이다 — 없으면 멈춘다. 여기서 통과시키면 Phase 8 의 ensureMotion 이
   # 조용히 HyperFrames 팬·줌으로 채우고, 피사체가 안 움직이는 화면이 그대로 게시된다
   # (2026-08-16~18 EP-0096·0097·0098 이 전부 그렇게 나갔고, 운영자가 육안으로 발견했다).
-  # 첨부가 막히는 원인은 하나로 좁혀졌다: ChatGPT Chrome 확장의 파일 URL 접근 권한.
+  # 첨부가 막히는 원인은 표면마다 다르다 — 2026-08-18 실측:
+  #   ChatGPT : Chrome 확장의 파일 URL 접근 권한을 켜면 풀린다(codex 가 직접 안내).
+  #   Grok    : 그 권한은 ChatGPT 확장 것이라 grok.com 에는 적용되지 않는다. 권한을 켠 뒤에도
+  #             "Grok 의 로컬 파일 선택은 확장 표면에서 열리지 않아" 로 여전히 막힌다.
+  #             현재 Grok 모션의 확실한 경로는 대화형 claude-in-chrome 의 file_upload 뿐이다.
   # 로컬 폴백으로 내보내려면 BT_MOTION_ENGINE=local-only 로 **명시**해야 한다.
   if [ "$MOTION_ENGINE" != "local-only" ] && ! media_assets_ready "$MEDIA_BASE"; then
     audit "grok_motion_missing" "RED" "ep=$EP_ID missing=${MEDIA_ASSETS_MISSING}"

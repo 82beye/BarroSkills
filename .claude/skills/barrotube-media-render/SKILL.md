@@ -99,6 +99,12 @@ topic, write the reel script first, then render.
      외부 Playwright MCP 로 우회할 수도 없다 — codex 의 `control-chrome` 스킬이
      "Do not use external MCP browser-control tools" 로 금지하고, 승인 모드를 `auto` 로
      열어도 호출이 취소된다(2026-08-17 실측).
+   - **첨부 권한은 사이트마다 갈린다 (2026-08-18 실측).** codex 가 직접 안내한
+     `chrome://extensions → ChatGPT 확장 → 세부정보 → 「파일 URL에 대한 액세스 허용」`
+     은 **ChatGPT 에만** 듣는다. 같은 권한을 켠 상태에서도 Grok 은
+     "로컬 파일 선택이 확장 표면에서 열리지 않아" 로 막힌다 — 그 확장의 관할이 아니기 때문이다.
+     즉 **Grok image→video 는 여전히 대화형 claude-in-chrome 의 `file_upload` 로만 확실하다.**
+     "권한 켜면 다 풀린다" 고 넘겨짚지 마라 — ChatGPT 와 Grok 을 따로 확인해야 한다.
    - **씬 이미지는 되고 Grok 모션은 안 되는 이유.** 씬 이미지는 시트 **한 장**만 있으면
      되므로, 시트가 이미 첨부된 **시드 대화**에서 이어 요청해 첨부를 우회한다
      (`barrotube/config/image-engines.json` 의 `media_render.chatgpt_seed_conversation`).
