@@ -24,7 +24,14 @@ save downloads directly with `download.saveAs()`.
 3. **Provide the input.**
    - **Image→video is required for BarroTube reel continuity.** Attach the ChatGPT
      still from `Image/<slug>.png`, then type a short motion prompt.
-   - If `browser_file_upload` reports no modal state, use the hidden input directly:
+   - **claude-in-chrome: copy the still into the session scratchpad first, then
+     `file_upload`.** The tool rejects the *path*, not the file — `~/BarroTubeData/...`
+     is refused, a session-shared copy is accepted (verified 2026-08-17, 4/4 uploads).
+     `find` the hidden input, then `file_upload(tabId, ref, ["<scratchpad>/scene_NNN.png"])`.
+   - **codex's Chrome surface cannot attach at all** — hidden-input injection, the
+     composer picker, and Cmd+V all fail there (measured twice, 2026-08-17). Do not
+     schedule sheet-dependent generation on the codex path; it will stop at the attach.
+   - Playwright MCP (when available) can still inject directly:
      `page.locator('input[type="file"]').first().setInputFiles(imagePath)`.
    - Wait for the `Remove image` button or attached thumbnail. The uploaded filename
      may never become an accessible button, so filename visibility is not the gate.

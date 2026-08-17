@@ -72,10 +72,22 @@ topic, write the reel script first, then render.
      레버·다이얼·갈림길·스위치·화살표 중 하나의 **방향 트리거**를 중심 오브젝트로 둔다.
    - 기존 시리즈의 인트로·썸네일은 최근 완료 EP 최대 3개의 실제 이미지를 먼저 비교해
      캐릭터 크기, 헤드라인 위치, 배경 톤을 맞춘다. 일반 템플릿으로 임의 재해석하지 않는다.
-   - **Grok 스틸 첨부(CLI/claude-in-chrome)**: `file_upload`가 호스트 경로를 거부하고
-     localhost fetch는 CSP에 막힌다 — **macOS 클립보드로 우회**:
+   - **스틸 첨부(claude-in-chrome) — 정본은 「세션 폴더로 복사 후 `file_upload`」다.**
+     `file_upload` 가 거부하는 건 파일이 아니라 **경로**다. 세션이 공유하지 않은 위치
+     (`~/BarroTubeData/...` 등)는 막히지만, 세션 스크래치패드로 **복사한 뒤** 그 경로로
+     올리면 통과한다. 2026-08-17 실측: 캐릭터 시트(1.7MB)를 스크래치패드로 복사해
+     ChatGPT 컴포저의 숨은 input 에 4회 연속 성공, 썸네일·`Remove image` 로 확인.
+     ```
+     cp <원본.png> "$SCRATCHPAD/sheet.png"
+     find(tabId, "hidden file input element for uploading attachments")  # ref 확보
+     file_upload(tabId, ref, ["$SCRATCHPAD/sheet.png"])
+     ```
+     합계 10MB 미만이어야 한다. 첨부 판정은 반환값이 아니라 썸네일/`Remove image` 로 한다.
+   - **클립보드(Cmd+V)는 폴백으로만 쓴다.** 붙기는 하지만 클립보드는 공유 전역 상태라
+     긴 실행 중 다른 작업이 덮어쓴다 — 2026-08-17 실측: 파이프라인이 시트를 적재한 뒤
+     에이전트 작업 도중 텍스트로 바뀌어 있었다(`clipboard info` 로 확인). 붙여넣기
+     직전에 반드시 다시 적재하고, 그래도 썸네일이 안 뜨면 위 `file_upload` 경로로 가라.
      `osascript -e 'set the clipboard to (read (POSIX file "<png>") as «class PNGf»)'`
-     후 프롬프트창 클릭 + `Cmd+V`. 원본 무손실 첨부 확인됨.
    - **첨부 가능 여부는 표면마다 다르다 — 섞어 읽지 마라.** 위 클립보드 우회는
      **claude-in-chrome**(대화형 세션)에서 확인된 것이다. **codex 의 Chrome 표면에서는
      세 경로가 모두 막힌다**: Playwright 숨은 input 주입(보안 정책), 컴포저 파일 선택
