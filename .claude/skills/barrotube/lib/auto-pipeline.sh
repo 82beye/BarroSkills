@@ -578,6 +578,53 @@ ChatGPT 탭이 여러 개면 하나의 로그아웃 탭만 보고 중단하지 �
       exec --ephemeral "$MEDIA_PROMPT" \
     || echo "  ⚠ 브라우저 작업 실패 또는 타임아웃(${MEDIA_RENDER_TIMEOUT}s) — Grok 패스로 넘어갑니다"
 
+  # ── 한 장씩 이어 만들기 (top-up) ────────────────────────────────────────────
+  # 위 패스는 codex 한 번의 호출로 7개 자산을 다 만들라고 요구한다. 에이전트가 컨텍스트를
+  # 다 쓰면 남은 컷을 못 만든 채 "아직 생성하지 않았습니다" 로 턴을 끝낸다 — 실패가 아니라
+  # 예산 소진이라 재시도할 여지가 있는데 그대로 Grok 으로 넘어가 버렸다.
+  # (2026-08-17 EP-0096 실측: 170k 토큰 쓰고 1/5장. 그 뒤 Grok·API 가 다 막혀 정지.)
+  # 남은 씬을 한 장씩, 매번 새 컨텍스트로 잇는다. 프롬프트에 image_prompt 를 인라인하지 않고
+  # 씬 번호만 준다 — 739자 프롬프트를 셸로 따옴표 처리하다 깨지는 것보다 낫다.
+  BT_CHATGPT_TOPUP_MAX="${BT_CHATGPT_TOPUP_MAX:-6}"
+  TOPUP_TRIES=0
+  TOPUP_STALLED=0
+  while [ "$TOPUP_TRIES" -lt "$BT_CHATGPT_TOPUP_MAX" ] \
+     && [ "$TOPUP_STALLED" -lt 2 ] \
+     && ! media_assets_ready "$MEDIA_BASE" stills; do
+    NEXT_SCENE=$(printf '%s' "$MEDIA_ASSETS_MISSING" | grep -o 'scene_[0-9]\{3\}\.png' | head -1 | sed 's/scene_\([0-9]*\)\.png/\1/')
+    [ -n "$NEXT_SCENE" ] || break
+    TOPUP_TRIES=$((TOPUP_TRIES + 1))
+    echo "  ➕ ChatGPT 이어 만들기 ${TOPUP_TRIES}/${BT_CHATGPT_TOPUP_MAX} — 씬 ${NEXT_SCENE}"
+    audit "media_render_chatgpt_topup" "INFO" "ep=$EP_ID scene=$NEXT_SCENE try=$TOPUP_TRIES"
+
+    run_with_timeout 900 codex \
+        -a never -s workspace-write -m "${BT_MEDIA_RENDER_MODEL:-gpt-5.6-terra}" \
+        -c model_reasoning_effort="${BT_MEDIA_RENDER_REASONING:-medium}" \
+        -C "$PROJECT_ROOT" --add-dir "$EP_REAL" --add-dir "$DATA_REAL/workspace/docs" \
+        --add-dir "$DATA_REAL/workspace/channels/econ-daily" --add-dir "$HOME/Downloads" \
+        exec --ephemeral "Chrome 의 로그인된 ChatGPT 로 씬 ${NEXT_SCENE} 이미지 한 장만 만들어 저장해라. 다른 씬·인트로·썸네일·영상은 건드리지 마라.
+
+프롬프트: ${MEDIA_BASE_REAL}/30_script.md 에서 scene_id \"${NEXT_SCENE}\" 의 image_prompt 를 그대로 쓴다.
+저장: ${MEDIA_BASE_REAL}/40_assets/images/scene_${NEXT_SCENE}.png (9:16 세로)
+시트: ${CHARACTER_SHEET_REAL} 를 생성 요청에 첨부한다. 첨부 판정은 setInputFiles 반환이 아니라 Remove image/썸네일이 보이는지로 한다.
+  1순위 Playwright 숨은 file input 주입 → 2순위 컴포저 파일 선택 UI → 3순위 Cmd+V.
+  셋 다 막히면 그리지 말고 「시트 첨부 실패」 라고 보고하고 끝내라. 시트 없이 그리면 마시가 드리프트한다.
+전송 전 컴포저 도구 메뉴에서 【이미지 만들기】 칩이 붙은 것을 확인해라. 칩 없이 보내면 일반 응답으로 새어 생성이 안 된다.
+수락 기준: 마시가 화면 세로 40~60% 의 중앙 주인공, 굵은 아웃라인+평면 채색, 배경은 흐리고 작게, 읽히는 글자 없음.
+재생성은 최대 2회. 3번째는 치명적 결함이 아니면 채택해라 — 완벽한 0장보다 수락 가능한 1장이 낫다.
+다운로드는 요청 직전 marker 파일보다 새 파일만 수락하고, alt 가 '생성된 이미지' 인 것을 고른다 (시트와 크기가 0.1% 차이라 면적으로 고르면 시트를 집는다).
+이미지 API 를 직접 호출하지 마라. 결제·구독은 절대 하지 마라. 한도 배너가 뜨면 「ChatGPT 한도」 라고 보고하고 끝내라." \
+      || echo "     ⚠ 씬 ${NEXT_SCENE} 이어 만들기 실패"
+
+    if media_assets_ready "$MEDIA_BASE" stills || \
+       ! printf '%s' "$MEDIA_ASSETS_MISSING" | grep -q "scene_${NEXT_SCENE}\.png"; then
+      TOPUP_STALLED=0
+    else
+      TOPUP_STALLED=$((TOPUP_STALLED + 1))
+      echo "     ↯ 씬 ${NEXT_SCENE} 이 아직 없다 (연속 무진전 ${TOPUP_STALLED}/2)"
+    fi
+  done
+
   # ── 2차 브라우저 패스 — Grok Imagine 이미지 ────────────────────────────────
   #
   # 1차는 ChatGPT 다. 그게 일일 한도(배치 **중간**에 걸린다)나 확장 파일첨부 권한으로

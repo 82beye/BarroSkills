@@ -135,6 +135,24 @@ test('factcheck findings drive a rewrite loop before a human is paged', () => {
   assert.match(reviser, /FIXABLE_VERDICTS = \['부정확', '미확인'\]/);
 });
 
+test('a browser pass that runs out of context is topped up scene by scene', () => {
+  // codex 한 번의 호출로 7개 자산을 다 만들라고 하면 컨텍스트를 다 쓰고 남은 컷 없이 끝난다
+  // (2026-08-17 EP-0096: 170k 토큰으로 1/5장). 실패가 아니라 예산 소진이라 이어 만들면 된다.
+  const source = readFileSync(AUTO, 'utf8');
+
+  const bigPass = source.indexOf('exec --ephemeral "$MEDIA_PROMPT"');
+  const topup = source.indexOf('media_render_chatgpt_topup');
+  const grok = source.indexOf('media_render_grok_pass');
+  assert.ok(bigPass > 0 && topup > bigPass && grok > topup,
+    'top-up 은 큰 패스 뒤, Grok 패스 앞에 있어야 한다');
+
+  // 무진전이면 멈춰야 한다 — 같은 씬에 codex 를 무한히 던지면 타임아웃까지 태운다.
+  assert.match(source, /TOPUP_STALLED" -lt 2/);
+  assert.match(source, /BT_CHATGPT_TOPUP_MAX:-6/);
+  // 한 번에 한 씬만. 프롬프트가 다시 커지면 같은 소진에 빠진다.
+  assert.match(source, /씬 \$\{NEXT_SCENE\} 이미지 한 장만/);
+});
+
 test('every autonomy guard is either read by the live pipeline or classified', () => {
   // 이 레포는 "설정에 노브가 있는데 읽는 코드가 없다" 를 두 번 겪었고, 둘 다 무인 운영
   // 중에만 드러났다: factcheck_max_rewrites(8/16·8/17 이틀 정지), budget_alert_threshold_pct
