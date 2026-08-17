@@ -524,6 +524,13 @@ AAC가 없으면 완료로 세지 말고 Video audio를 켠 뒤 같은 컷을 �
   서로 다른 실행에서 반복), control-chrome 스킬이 외부 Playwright MCP 사용도 금지한다.
   첨부를 시도하느라 시간을 쓰지 마라. 시드 대화에서 이어 만들면 캐릭터 일관성이 유지된다(같은 날 실측).
   시드 대화가 열리지 않거나 맨 위 시트가 안 보이면 「시드 대화 없음」 이라고 보고하고 중단해라.
+
+★ 브라우저는 반드시 **로그인된 Chrome 확장**을 명시적으로 잡아라:
+    globalThis.chrome = await agent.browsers.get(\"extension\");
+  agent.browsers.getDefault() 를 쓰지 마라. 런타임 기본값은 **in-app browser 를 우선**하는데
+  거기에는 ChatGPT 세션이 없어서 시드 대화가 로그인 화면으로 뜬다 — 2026-08-18 EP-0098 무인
+  실행이 이것 때문에 통째로 실패했다(Chrome 은 계속 떠 있었고 로그인도 유지돼 있었다).
+  로그인 화면을 봤다면 로그아웃이라고 단정하지 말고, 먼저 extension 브라우저를 다시 잡아 확인해라.
 캐릭터 DNA: ${DATA_REAL}/workspace/channels/econ-daily/character-dna.md 의 첫 코드블록 규격을 지킨다.
 캐릭터 DNA 텍스트만으로 그리는 것은 금지한다 — 시트 참조 없이 그리면 몸통이 뚱뚱해지고 정장이
 생기고 화풍이 이탈한다(2026-08-14 EP-0092 실측). 조용히 품질을 떨어뜨리는 것보다 멈추는 편이 낫다.
@@ -581,13 +588,29 @@ ChatGPT 탭이 여러 개면 하나의 로그아웃 탭만 보고 중단하지 �
   command -v codex >/dev/null 2>&1 \
     || halt_for_human "Phase 7 media-render" "codex CLI를 PATH에서 찾지 못했습니다 (launchd plist PATH 확인)."
 
+  # 에이전트가 왜 못 만들었는지는 그 출력에만 있다. 잡아 두지 않으면 halt 문구가
+  # "자산 불완전 + 크레딧 고갈" 로만 나가서, 실제 원인(로그인·시드 부재)을 가린다.
+  # 2026-08-18 EP-0098: 원인은 in-app browser 라 ChatGPT 가 로그아웃으로 보인 것인데
+  # 운영자에게는 "충전하라" 는 문구만 갔다.
+  BROWSER_LOG=$(mktemp)
   run_with_timeout "$MEDIA_RENDER_TIMEOUT" codex \
       -a never -s workspace-write -m "${BT_MEDIA_RENDER_MODEL:-gpt-5.6-terra}" \
       -c model_reasoning_effort="${BT_MEDIA_RENDER_REASONING:-medium}" \
       -C "$PROJECT_ROOT" --add-dir "$EP_REAL" --add-dir "$DATA_REAL/workspace/docs" \
       --add-dir "$DATA_REAL/workspace/channels/econ-daily" --add-dir "$HOME/Downloads" \
-      exec --ephemeral "$MEDIA_PROMPT" \
-    || echo "  ⚠ 브라우저 작업 실패 또는 타임아웃(${MEDIA_RENDER_TIMEOUT}s) — Grok 패스로 넘어갑니다"
+      exec --ephemeral "$MEDIA_PROMPT" 2>&1 | tee "$BROWSER_LOG" \
+    || echo "  ⚠ 브라우저 작업 실패 또는 타임아웃(${MEDIA_RENDER_TIMEOUT}s) — 다음 단계로 넘어갑니다"
+
+  BROWSER_FAIL_REASON=""
+  if grep -q '시드 대화 없음' "$BROWSER_LOG" 2>/dev/null; then
+    BROWSER_FAIL_REASON="시드 대화를 열지 못했습니다 — ChatGPT 가 로그인 화면으로 보였습니다.
+   대개 실제 로그아웃이 아니라 에이전트가 in-app browser 를 잡은 경우입니다.
+   Chrome 확장 세션을 확인하고, 그래도 로그아웃이면 Chrome 에서 ChatGPT 에 다시 로그인하세요.
+   시드 대화: ${CHATGPT_SEED_CONVERSATION}"
+  elif grep -q 'ChatGPT 한도' "$BROWSER_LOG" 2>/dev/null; then
+    BROWSER_FAIL_REASON="ChatGPT 이미지 일일 한도에 걸렸습니다 — 한도가 풀린 뒤 재개하세요."
+  fi
+  rm -f "$BROWSER_LOG"
 
   # ── 한 장씩 이어 만들기 (top-up) ────────────────────────────────────────────
   # 위 패스는 codex 한 번의 호출로 7개 자산을 다 만들라고 요구한다. 에이전트가 컨텍스트를
@@ -622,7 +645,9 @@ ChatGPT 탭이 여러 개면 하나의 로그아웃 탭만 보고 중단하지 �
     Same character as the character sheet attached at the top of this conversation
     - identical proportions, face, and art style. New scene: <위 image_prompt>
   이 표면은 로컬 파일 첨부가 막혀 있다(2026-08-17 실측). 첨부를 시도하느라 시간을 쓰지 마라.
-  시드 대화가 안 열리거나 맨 위 시트가 안 보이면 「시드 대화 없음」 이라고 보고하고 끝내라.
+★ 브라우저는 반드시 로그인된 Chrome 확장을 명시적으로 잡아라: globalThis.chrome = await agent.browsers.get(\"extension\");
+  getDefault() 는 in-app browser 를 우선하는데 거기엔 ChatGPT 세션이 없어 로그인 화면이 뜬다(2026-08-18 EP-0098 실패 원인).
+  시드 대화가 안 열리거나 맨 위 시트가 안 보이면, extension 브라우저를 다시 잡아 확인한 뒤에도 같으면 「시드 대화 없음」 이라고 보고하고 끝내라.
 전송 전 컴포저 도구 메뉴에서 【이미지 만들기】 칩이 붙은 것을 확인해라. 칩 없이 보내면 일반 응답으로 새어 생성이 안 된다.
 프롬프트는 영문으로 입력해라 — 한글을 타이핑하면 공백이 사라지고 뒤 문장이 잘린다(실측).
 수락 기준: 마시가 화면 세로 40~60% 의 중앙 주인공, 굵은 아웃라인+평면 채색, 배경은 흐리고 작게, 읽히는 글자 없음.
@@ -737,6 +762,13 @@ SuperGrok 구독 모달이 뜨면 결제·무료 체험 절대 하지 말고 닫
 
   if ! media_assets_ready "$MEDIA_BASE" stills; then
     HALT_DETAIL="브라우저·API 폴백 후에도 씬 자산이 불완전합니다: ${MEDIA_ASSETS_MISSING}"
+    # 브라우저가 왜 못 만들었는지를 먼저 보여 준다 — 크레딧은 그 다음이다.
+    # 브라우저가 정본이고 API 는 폴백이라, 순서가 바뀌면 운영자가 엉뚱한 데를 고친다.
+    if [ -n "${BROWSER_FAIL_REASON:-}" ]; then
+      HALT_DETAIL="${HALT_DETAIL}
+
+🌐 브라우저 실패 원인: ${BROWSER_FAIL_REASON}"
+    fi
     if [ "${IMAGE_API_EXHAUSTED:-0}" = "1" ]; then
       HALT_DETAIL="${HALT_DETAIL}
 

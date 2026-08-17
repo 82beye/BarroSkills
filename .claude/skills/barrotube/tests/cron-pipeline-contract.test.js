@@ -138,6 +138,24 @@ test('factcheck findings drive a rewrite loop before a human is paged', () => {
   assert.match(reviser, /FIXABLE_VERDICTS = \['부정확', '미확인'\]/);
 });
 
+test('the browser pass pins the logged-in Chrome extension, not the runtime default', () => {
+  // codex 의 브라우저 런타임 기본값은 in-app browser 를 우선하는데 거기엔 ChatGPT 세션이
+  // 없다. 2026-08-18 EP-0098 무인 실행이 통째로 실패한 원인이 이것이다 — Chrome 은 계속
+  // 떠 있었고 로그인도 유지돼 있었는데 에이전트는 로그인 화면을 봤다.
+  const source = readFileSync(AUTO, 'utf8');
+  assert.match(source, /agent\.browsers\.get\(\\?"extension\\?"\)/,
+    'extension 브라우저를 명시적으로 잡아야 한다');
+  assert.match(source, /getDefault\(\) 를 쓰지 마라|getDefault\(\) 는 in-app/,
+    'getDefault 금지가 프롬프트에 있어야 한다');
+
+  // 실패 원인이 halt 문구에 크레딧보다 먼저 와야 한다 — 브라우저가 정본이기 때문이다.
+  assert.match(source, /BROWSER_FAIL_REASON/);
+  const reason = source.indexOf('🌐 브라우저 실패 원인');
+  const credit = source.indexOf('⛔ 이미지 API 크레딧 고갈');
+  assert.ok(reason > 0 && credit > 0 && reason < credit,
+    '브라우저 원인이 크레딧 안내보다 앞서야 한다');
+});
+
 test('the Grok image pass is opt-in because this surface cannot attach', () => {
   // Grok 이미지 절차의 2단계가 "숨은 file input 에 시트 주입" 이라 이 표면에서는 반드시
   // 실패하는데, 켜 두면 BT_GROK_IMAGE_TIMEOUT(1800s)을 통째로 태우고 "Grok 으로 재시도"
