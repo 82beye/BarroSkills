@@ -582,6 +582,9 @@ ChatGPT 가 일일 한도에 걸리면(「내일 AM HH:MM까지 기능이 제한
   const a=document.createElement('a'); a.href=URL.createObjectURL(b);
   a.download='scene_NNN.png'; document.body.appendChild(a); a.click(); a.remove();
   → ~/Downloads/scene_NNN.png 로 떨어지면 지정 경로로 옮긴다. b.size 가 0 이면 실패다.
+  이 표면에서 blob 다운로드가 「Chrome 안전 제약」 으로 거부되면 브라우저의 읽기 전용 자산
+  내보내기를 쓴다 — 방금 응답의 이미지가 \$TMPDIR/browser-use/assets/<uuid>/<hash> 에 이미
+  떨어져 있으니 그 파일을 저장 경로로 복사하고 file 로 세로 PNG 인지 확인한다(2026-08-18 실측).
 각 생성 요청 직전에 marker 파일을 만들고 Downloads 후보는 marker보다 새 파일만 수락한다. Chrome History의 이전 실행 파일을 최신 결과로 복사하지 마라.
 ${MOTION_RULES}
 
@@ -668,6 +671,8 @@ ChatGPT 탭이 여러 개면 하나의 로그아웃 탭만 보고 중단하지 �
   const a=document.createElement('a'); a.href=URL.createObjectURL(b);
   a.download='scene_${NEXT_SCENE}.png'; document.body.appendChild(a); a.click(); a.remove();
   → ~/Downloads/scene_${NEXT_SCENE}.png 를 저장 경로로 옮긴다. b.size 가 0 이면 실패다.
+  blob 이 「Chrome 안전 제약」 으로 거부되면 \$TMPDIR/browser-use/assets/<uuid>/<hash> 에 이미
+  떨어져 있는 방금 응답의 자산을 저장 경로로 복사한다(2026-08-18 실측).
 alt 가 '생성된 이미지' 인 것을 고른다 — 시트와 크기가 0.1% 차이라 면적으로 고르면 시트를 집는다.
 같은 씬에 2회 시도해도 파일이 안 생기면 「다운로드 실패」 라고 보고하고 끝내라. marker 만 다시 만들며 돌지 마라.
 이미지 API 를 직접 호출하지 마라. 결제·구독은 절대 하지 마라. 한도 배너가 뜨면 「ChatGPT 한도」 라고 보고하고 끝내라." \
