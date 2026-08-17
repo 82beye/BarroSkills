@@ -744,6 +744,23 @@ fi
 
 audit "auto_pipeline_produced" "INFO" "slot=$SLOT ep=$EP_ID"
 
+# Grok 이 정본인데 HyperFrames 로 대체돼 나가면 화면이 죽는다 — Grok 은 피사체가 실제로
+# 움직이고, HyperFrames 는 스틸에 팬·줌을 거는 것뿐이다. QA 는 "hyperframes 5" 라고 적기만
+# 하고 아무도 안 본다. 정본이 아닌 엔진으로 나갔으면 그 사실이 사람에게 도착해야 한다.
+# (2026-08-17 EP-0096: BT_MOTION_ENGINE=local-only 로 돌린 회차가 조용히 슬라이드쇼로 나갔다.)
+if [ "$DRY_RUN" = "0" ] && [ "$MOTION_ENGINE" = "grok" ]; then
+  MOTION_MANIFEST="${MEDIA_BASE}/40_assets/videos/_engines.json"
+  if [ -s "$MOTION_MANIFEST" ]; then
+    FALLBACK_CLIPS=$(grep -c '"engine": *"hyperframes"' "$MOTION_MANIFEST" 2>/dev/null || echo 0)
+    case "${FALLBACK_CLIPS:-0}" in ''|*[!0-9]*) FALLBACK_CLIPS=0 ;; esac
+    if [ "$FALLBACK_CLIPS" -gt 0 ]; then
+      echo "  ⚠️  모션 ${FALLBACK_CLIPS}컷이 HyperFrames 폴백 — Grok 이 정본이다"
+      audit "motion_fallback_shipped" "WARN" "ep=$EP_ID hyperframes=$FALLBACK_CLIPS"
+      notify_telegram "🎞 <b>${EP_ID}</b> 모션 ${FALLBACK_CLIPS}컷이 HyperFrames 폴백입니다\nGrok 이 정본이며 폴백은 스틸 팬·줌이라 화면이 덜 삽니다.\n브라우저 세션을 확인하세요."
+    fi
+  fi
+fi
+
 # ─────────────────────────────────────────────────
 # Stage C — Phase 9: QA 게이트
 # ─────────────────────────────────────────────────

@@ -135,6 +135,20 @@ test('factcheck findings drive a rewrite loop before a human is paged', () => {
   assert.match(reviser, /FIXABLE_VERDICTS = \['부정확', '미확인'\]/);
 });
 
+test('shipping HyperFrames motion when Grok is canon reaches a human', () => {
+  // Grok 은 피사체가 실제로 움직이고 HyperFrames 는 스틸에 팬·줌을 걸 뿐이다.
+  // 폴백으로 나가도 QA 는 "hyperframes 5" 라고 적기만 해서 아무도 모른 채 게시됐다.
+  const source = readFileSync(AUTO, 'utf8');
+  assert.match(source, /_engines\.json/, '모션 엔진 매니페스트를 읽어야 한다');
+  assert.match(source, /motion_fallback_shipped/);
+  assert.match(source, /notify_telegram "🎞/, '폴백 사실이 사람에게 도착해야 한다');
+
+  // 정본이 grok 일 때만 경고한다 — local-only 로 의도해서 돌린 회차까지 울리면 소음이 된다.
+  const guard = source.indexOf('"$MOTION_ENGINE" = "grok"');
+  const notify = source.indexOf('motion_fallback_shipped');
+  assert.ok(guard > 0 && guard < notify);
+});
+
 test('a missing media-render thumbnail falls back instead of halting the render', () => {
   // 씬 이미지는 시트를 붙여 그려야 해서 브라우저가 정본이지만, 썸네일은 이미 만들어 둔
   // 씬 스틸을 배경으로 쓰고 글자는 로컬 합성이다 — 모델이 그릴 게 없으니 멈출 이유도 없다.
