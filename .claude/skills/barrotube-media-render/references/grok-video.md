@@ -100,6 +100,13 @@ await download.saveAs('/Users/beye/.../video/<slug>.mp4');
 
 ## Gotchas
 
+- **The "experiencing issues" banner is not a stop sign.** grok.com sometimes shows
+  `Grok is experiencing issues. We are working on restoring service as quickly as
+  possible.` while image→video generation still works normally. 2026-08-18: the banner
+  stayed up across reloads for over an hour, yet all five EP-0098 clips generated and
+  downloaded fine. **Try one cut before believing it.** Treat an actual failed generate
+  or a stuck 생성 중 as the real signal, not the banner.
+
 - **SuperGrok paywall.** On some accounts / when a quota is spent, clicking generate
   opens a **SuperGrok** subscription modal ($/월, "무료 체험"). **Do not pay or start a
   trial.** Close it (X, top-right), report to the user, and offer: try later, use a
