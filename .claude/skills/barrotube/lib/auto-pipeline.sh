@@ -928,19 +928,31 @@ SuperGrok 구독 모달이 뜨면 결제·무료 체험 절대 하지 말고 닫
     halt_for_human "Phase 7 Grok 모션" \
       "Grok 모션 클립이 없습니다: ${MEDIA_ASSETS_MISSING}
 
-🎬 Playwright(headless·headed 모두)로는 grok.com 에 접근할 수 없습니다.
-   ⚠️ 원인은 첨부가 아니라 Cloudflare 봇 차단입니다 — 로그인된 프로필로도
-      \"Sorry, you have been blocked\" 가 뜹니다 (2026-08-24 실측).
-      우회는 시도하지 않습니다.
-   ✅ 확실히 되는 경로: 대화형 claude-in-chrome 의 file_upload (실제 Chrome 세션).
-   🔜 근본 해법: xAI 공식 image→video API (api.x.ai/v1/videos/generations, 10s 720p).
-      XAI_API_KEY 를 .env 에 넣으면 브라우저 없이 무인 실행이 가능합니다.
+🔎 먼저 **왜 실패했는지** 보세요. 컷별 사유는 stdout 이 아니라 stderr 에 있습니다:
+     grep '❌ 씬 0' ${BARROTUBE_HOME}/logs/cron/${CRON_LOG_NAME}.err | tail -10
 
-   무인 실행으로 굽는 경로는 전용 Playwright 프로필입니다. 한 번만 로그인하면 됩니다:
-     node ${BARROTUBE_HOME}/scripts/automation/grok-motion.js --login
+💾 자주 나오는 함정 — **영상은 이미 받아져 있는데 복사만 실패한 경우**가 있습니다.
+   (2026-08-26 EP-2026-0116: Grok 생성·다운로드 5/5 성공, Finder 복사가 AppleEvent
+    타임아웃 -1712 로 5/5 실패 → \"클립이 없습니다\" 로 표시됨.)
+   ~/Downloads 에 해당 시각의 grok-video-*.mp4 가 있으면 재생성하지 말고 복사만 하세요.
+   그 뒤 아래 재개 명령이면 Phase 7 이 그대로 통과합니다.
 
-   로그인 후 재개:  RESUME_EP=${EP_ID} bash ${BARROTUBE_HOME}/lib/auto-pipeline.sh --slot ${SLOT}
-   이번 회차만 로컬 팬·줌으로 내보내려면: BT_MOTION_ENGINE=local-only 를 붙여 재개하세요."
+🖥  경로는 둘입니다. **어느 쪽이 실제로 쓰였는지는 감사 로그의 event 로 확인**하세요
+   (grok_motion_applescript / grok_motion_playwright / grok_motion_not_logged_in):
+     1순위  실제 Chrome + AppleScript — 확인: grok-motion-applescript.js --check
+     2순위  Playwright 전용 프로필     — 확인: grok-motion.js --status
+                                        로그인: grok-motion.js --login
+   ⚠️ Playwright 는 grok.com 에서 Cloudflare 에 막힌 이력이 있습니다(2026-08-24).
+      1순위가 ✅ 인데 실패했다면 --login 은 답이 아닙니다 — 위 stderr 를 보세요.
+
+🧩 45_intro.png·47_thumbnail.png 가 목록에 있어도 그건 브라우저 작업이 아닙니다.
+   씬 스틸에서 로컬로 만들 수 있습니다 (무비용):
+     node ${BARROTUBE_HOME}/scripts/automation/generate-cards.js --episode <EP> --platform ${PLATFORM} --kind both
+     node ${BARROTUBE_HOME}/scripts/automation/generate-thumbnail.js --episode <EP> --platform ${PLATFORM}
+
+   재개:  RESUME_EP=${EP_ID} bash ${BARROTUBE_HOME}/lib/auto-pipeline.sh --slot ${SLOT}
+   이번 회차만 로컬 팬·줌으로 내보내려면 BT_MOTION_ENGINE=local-only 를 붙이세요.
+   (권장하지 않습니다 — 멀쩡한 Grok 클립이 있어도 버리고 슬라이드쇼가 나갑니다.)"
   fi
 fi
 

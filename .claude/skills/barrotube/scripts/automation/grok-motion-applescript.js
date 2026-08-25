@@ -27,6 +27,8 @@ import { parseArgs } from 'node:util';
 import { createHash } from 'node:crypto';
 
 const GROK_URL = 'https://grok.com/imagine';
+/** Finder 가 바빠도 버티게 한다. 기본 AppleEvent 타임아웃(60초)이 -1712 의 원인이었다. */
+const FINDER_TIMEOUT_SEC = Number(process.env.BT_GROK_FINDER_TIMEOUT || 300);
 const CUT_DELAY_MS = Number(process.env.BT_GROK_CUT_DELAY_MS ?? 12000);
 const GEN_TIMEOUT_MS = Number(process.env.BT_GROK_TIMEOUT_MS || 6 * 60 * 1000);
 
@@ -284,16 +286,41 @@ function latestGrokDownload(sinceMs) {
   return null;
 }
 
-/** Finder 로 복사 (Bash 는 TCC 때문에 ~/Downloads 를 못 읽는다) */
+/**
+ * Finder 로 복사 (Bash 는 TCC 때문에 ~/Downloads 를 못 읽는다).
+ *
+ * AppleEvent 기본 타임아웃은 60초다. Finder 가 잠깐 바쁘면 그걸 넘겨 -1712 로 죽는데,
+ * 그때 **영상은 이미 다 받아져 있다** — 마지막 복사 한 줄 때문에 5컷이 통째로 실패로
+ * 기록된다 (2026-08-26 EP-2026-0116 us-close: 5/5 다운로드 성공, 5/5 복사 실패,
+ * 그 결과 Phase 7 이 "Grok 모션 클립이 없습니다" 로 halt). 그래서
+ *   1) with timeout 으로 여유를 주고,
+ *   2) 그래도 실패하면 fs 복사로 한 번 더 시도한다. cron(TCC 제한)에서는 이 폴백이
+ *      EPERM 으로 막히지만, 대화형 세션에서는 그대로 통과한다.
+ * 둘 다 실패할 때만 던진다.
+ */
 function finderCopy(src, destDir, name) {
   // 같은 이름이 이미 있으면 Finder 의 `set name` 이 -48 로 죽는다
   // (duplicate 는 with replacing 이라 통과하는데, 그 뒤 rename 에서 걸린다).
-  try { unlinkSync(join(destDir, name)); } catch { /* 없으면 그만 */ }
-  const s = `tell application "Finder"
-  set d to duplicate ((POSIX file ${JSON.stringify(src)}) as alias) to ((POSIX file ${JSON.stringify(destDir)}) as alias) with replacing
-  set name of d to ${JSON.stringify(name)}
-end tell`;
-  execFileSync('osascript', ['-e', s], { encoding: 'utf8' });
+  const dest = join(destDir, name);
+  try { unlinkSync(dest); } catch { /* 없으면 그만 */ }
+  const s = `with timeout of ${FINDER_TIMEOUT_SEC} seconds
+  tell application "Finder"
+    set d to duplicate ((POSIX file ${JSON.stringify(src)}) as alias) to ((POSIX file ${JSON.stringify(destDir)}) as alias) with replacing
+    set name of d to ${JSON.stringify(name)}
+  end tell
+end timeout`;
+  try {
+    execFileSync('osascript', ['-e', s], { encoding: 'utf8', timeout: (FINDER_TIMEOUT_SEC + 30) * 1000 });
+    return;
+  } catch (e) {
+    try {
+      copyFileSync(src, dest);
+      console.warn(`     ↳ Finder 복사 실패 → fs 복사로 대체 (${String(e.message).split('\n')[0].slice(0, 80)})`);
+      return;
+    } catch (e2) {
+      throw new Error(`복사 실패 — Finder: ${String(e.message).split('\n')[0].slice(0, 80)} / fs: ${e2.code || e2.message}`);
+    }
+  }
 }
 
 function loadScenes(baseDir) {
