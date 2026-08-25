@@ -91,7 +91,7 @@ function buildSystemPrompt() {
   ].join('\n');
 }
 
-function buildUserPrompt(scenes, findings) {
+function buildUserPrompt(scenes, findings, retryFeedback) {
   const byScene = new Map();
   for (const f of findings) {
     if (!byScene.has(f.scene_id)) byScene.set(f.scene_id, []);
@@ -127,6 +127,17 @@ function buildUserPrompt(scenes, findings) {
   parts.push('지적된 수치·표현이 거기 남아 있으면 반드시 함께 지워라. 씬당 1~3개.');
   parts.push('{"scenes":[{"scene_id":"001","narration":"...","subtitle_text":"...","emphasis_tokens":["...","..."]}]}');
 
+  // 직전 시도가 계약을 어겼으면 그 위반을 그대로 돌려준다. 상한은 위 씬 헤더에 이미
+  // 적혀 있지만 모델이 넘길 때가 있고(2026-08-23 EP-0110: 수치 3개/상한 2),
+  // 되먹임 없이 다시 물으면 같은 답이 온다.
+  if (retryFeedback && retryFeedback.length) {
+    parts.push('');
+    parts.push('[직전 시도가 거부된 이유 — 이번에는 반드시 지켜라]');
+    for (const line of retryFeedback) parts.push(`- ${line}`);
+    parts.push('사실 교정과 아래 제약을 동시에 만족시켜야 한다. 수치를 줄여야 하면');
+    parts.push('가장 덜 중요한 수치를 문장에서 빼라 — 지적된 수치를 되살리지는 마라.');
+  }
+
   return parts.join('\n');
 }
 
@@ -142,6 +153,9 @@ async function main() {
       platform: { type: 'string', short: 'p', default: 'shorts' },
       engine: { type: 'string' },
       check: { type: 'boolean', default: false },
+      // 계약 위반은 되먹임으로 고쳐진다 — 단발로 포기하면 파이프라인이 사람을 부른다
+      // (2026-08-23 EP-2026-0110: spoken-number-budget 1건으로 Phase 6 halt).
+      attempts: { type: 'string' },
     },
   });
 
@@ -186,34 +200,55 @@ async function main() {
   }
 
   const systemPrompt = buildSystemPrompt();
-  const userPrompt = buildUserPrompt(scenes, findings);
-  const runners = {
-    claude: () => ({ json: callClaudeCode(systemPrompt, userPrompt, 'sonnet', 600), used: 'claude' }),
-    codex: () => ({ json: callCodex(systemPrompt, userPrompt, null, 600), used: 'codex' }),
-  };
   // 체인에 여기 없는 엔진(gemini 등)이 섞이면 runEngineChain 이 폴백 도중 그 자리에서 죽는다.
   const chain = (values.engine ? [values.engine] : resolveChain(process.env.BT_SCRIPT_ENGINE_CHAIN))
-    .filter((name) => runners[name]);
+    .filter((name) => ['claude', 'codex'].includes(name));
   if (chain.length === 0) {
-    console.error(`❌ 쓸 수 있는 엔진이 없다 (지원: ${Object.keys(runners).join(', ')})`);
+    console.error('❌ 쓸 수 있는 엔진이 없다 (지원: claude, codex)');
     process.exit(1);
   }
 
-  const { json, engineUsed: used } = await runEngineChain(chain, runners);
+  const MAX_ATTEMPTS = (() => {
+    const raw = values.attempts || process.env.BT_FACTCHECK_REVISE_ATTEMPTS;
+    const n = Number.parseInt(raw, 10);
+    return Number.isFinite(n) && n > 0 ? n : 2;
+  })();
 
-  let parsed;
-  try {
-    parsed = JSON.parse(json);
-  } catch (e) {
-    console.error(`❌ 응답 JSON 파싱 실패: ${e.message}`);
-    process.exit(1);
-  }
+  let retryFeedback = [];
+  let attempt = 0;
+  // 시도마다 프롬프트를 다시 만든다 — 직전 거부 사유를 되먹여야 같은 답이 안 온다.
+  // 계약 위반은 회복 가능한 실패로 보고, 소진했을 때만 원본을 남기고 죽는다.
+  for (;;) {
+    attempt += 1;
+    const lastTry = attempt >= MAX_ATTEMPTS;
+    const giveUp = (msg) => {
+      if (lastTry) { console.error(msg); process.exit(1); }
+      console.warn(`   ↻ ${msg.replace(/^❌\s*/, '')} — 재시도 ${attempt + 1}/${MAX_ATTEMPTS}`);
+    };
 
-  const revisions = Array.isArray(parsed.scenes) ? parsed.scenes : [];
-  if (revisions.length === 0) {
-    console.error('❌ 수정된 씬이 하나도 없다');
-    process.exit(1);
-  }
+    const userPrompt = buildUserPrompt(scenes, findings, retryFeedback);
+    const runners = {
+      claude: () => ({ json: callClaudeCode(systemPrompt, userPrompt, 'sonnet', 600), used: 'claude' }),
+      codex: () => ({ json: callCodex(systemPrompt, userPrompt, null, 600), used: 'codex' }),
+    };
+
+    const { json, engineUsed: used } = await runEngineChain(chain, runners);
+
+    let parsed;
+    try {
+      parsed = JSON.parse(json);
+    } catch (e) {
+      giveUp(`❌ 응답 JSON 파싱 실패: ${e.message}`);
+      retryFeedback = ['직전 응답이 JSON 으로 파싱되지 않았다. 지정한 JSON 한 덩어리만 내라.'];
+      continue;
+    }
+
+    const revisions = Array.isArray(parsed.scenes) ? parsed.scenes : [];
+    if (revisions.length === 0) {
+      giveUp('❌ 수정된 씬이 하나도 없다');
+      retryFeedback = ['직전 응답에 scenes 배열이 비어 있었다. 지적된 씬을 실제로 고쳐서 내라.'];
+      continue;
+    }
 
   // 지적되지 않은 씬을 모델이 건드렸으면 버린다 — 통과한 씬을 다시 굴리지 않는 게 이 단계의 요점이다.
   const applied = [];
@@ -237,41 +272,47 @@ async function main() {
     if (JSON.stringify([target.narration, target.subtitle_text, target.emphasis_tokens]) !== before) applied.push(sceneId);
   }
 
-  if (applied.length === 0) {
-    console.error('❌ 적용된 수정이 없다');
-    process.exit(1);
+    if (applied.length === 0) {
+      giveUp('❌ 적용된 수정이 없다');
+      retryFeedback = ['직전 응답이 지적된 씬의 문장을 실제로 바꾸지 않았다. 원문과 다른 문장을 내라.'];
+      continue;
+    }
+
+    const digitScenes = arabicDigitScenes(nextScenes.filter((x) => applied.includes(String(x.scene_id))));
+    if (digitScenes.length) {
+      giveUp(`❌ narration 에 아라비아 숫자가 남았다 — 씬 ${digitScenes.join(', ')} (TTS 표기 정본 위반)`);
+      retryFeedback = [`씬 ${digitScenes.join(', ')} narration 에 아라비아 숫자가 남았다. 전부 한글 수사로 바꿔라.`];
+      continue;
+    }
+
+    // 고치려다 분석 밀도 계약을 깨면 이득이 없다. error 만 막고 warn 은 통과시킨다
+    // (generate-script.js 도 error 만 재작성 트리거로 쓴다).
+    const issues = validateScript(nextScenes);
+    issues.forEach((i) => console.warn(`   ${formatIssue(i)}`));
+    const errors = issues.filter((i) => i.severity === 'error');
+    if (errors.length) {
+      giveUp(`❌ 수정본이 품질 계약 error ${errors.length}건 — 원본을 남기고 중단한다`);
+      retryFeedback = errors.map((i) => formatIssue(i).replace(/^\s*[❌⚠]\s*/, ''));
+      continue;
+    }
+
+    fm.scenes = nextScenes;
+    fm.revision = (Number(fm.revision) || 1) + 1;
+    fm.factcheck_revised_at = new Date().toISOString();
+    fm.factcheck_revised_scenes = applied;
+    fm.factcheck_revised_by = `factcheck-reviser (${used}${attempt > 1 ? `, ${attempt}회차` : ''})`;
+
+    writeFileSync(p.script, ['---', stringifyYAML(fm).trim(), '---', '', body.replace(/^\n+/, '')].join('\n'), 'utf-8');
+
+    console.log(`✅ 대본 갱신: ${p.script}`);
+    console.log(`   revision ${fm.revision} · 씬 ${applied.join(', ')} · 엔진 ${used}`
+      + (attempt > 1 ? ` · 시도 ${attempt}/${MAX_ATTEMPTS}` : ''));
+    applied.forEach((id) => {
+      const sc = nextScenes.find((x) => String(x.scene_id) === id);
+      console.log(`   [${id}] ${sc.narration.length}자 · "${sc.narration.slice(0, 46)}..."`);
+    });
+    return;
   }
-
-  const digitScenes = arabicDigitScenes(nextScenes.filter((s) => applied.includes(String(s.scene_id))));
-  if (digitScenes.length) {
-    console.error(`❌ narration 에 아라비아 숫자가 남았다 — 씬 ${digitScenes.join(', ')} (TTS 표기 정본 위반)`);
-    process.exit(1);
-  }
-
-  // 고치려다 분석 밀도 계약을 깨면 이득이 없다. error 만 막고 warn 은 통과시킨다
-  // (generate-script.js 도 error 만 재작성 트리거로 쓴다).
-  const issues = validateScript(nextScenes);
-  issues.forEach((i) => console.warn(`   ${formatIssue(i)}`));
-  const errors = issues.filter((i) => i.severity === 'error');
-  if (errors.length) {
-    console.error(`❌ 수정본이 품질 계약 error ${errors.length}건 — 원본을 남기고 중단한다`);
-    process.exit(1);
-  }
-
-  fm.scenes = nextScenes;
-  fm.revision = (Number(fm.revision) || 1) + 1;
-  fm.factcheck_revised_at = new Date().toISOString();
-  fm.factcheck_revised_scenes = applied;
-  fm.factcheck_revised_by = `factcheck-reviser (${used})`;
-
-  writeFileSync(p.script, ['---', stringifyYAML(fm).trim(), '---', '', body.replace(/^\n+/, '')].join('\n'), 'utf-8');
-
-  console.log(`✅ 대본 갱신: ${p.script}`);
-  console.log(`   revision ${fm.revision} · 씬 ${applied.join(', ')} · 엔진 ${used}`);
-  applied.forEach((id) => {
-    const s = nextScenes.find((x) => String(x.scene_id) === id);
-    console.log(`   [${id}] ${s.narration.length}자 · "${s.narration.slice(0, 46)}..."`);
-  });
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

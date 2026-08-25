@@ -65,15 +65,46 @@ export function escapeHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
+/**
+ * 고아 조각 최소 길이. 이보다 짧은 조각은 알약 하나를 차지할 자격이 없다 —
+ * "신용." 한 덩어리가 화면 가운데 떠 있으면 자막이 아니라 사고로 보인다(EP-0100 실측).
+ */
+const MIN_PHRASE_CHARS = 6;
+
+/**
+ * 짧은 조각을 **앞 조각에 붙인다**. 앞뒤 중 하나를 골라야 하는데 앞이다 —
+ * 조각은 대부분 문장의 꼬리(", 신용." / "→ 피두")라서 앞에 붙어야 말이 되고,
+ * 뒤에 붙이면 다음 문구의 머리를 밀어내 리드 강조가 엉킨다.
+ * 첫 조각만 예외로 뒤에 붙인다(앞이 없으므로).
+ */
+function mergeOrphans(phrases) {
+  const out = [];
+  for (const p of phrases) {
+    if (out.length && p.replace(/\s/g, '').length < MIN_PHRASE_CHARS) {
+      out[out.length - 1] = `${out[out.length - 1]} ${p}`.replace(/\s+/g, ' ').trim();
+    } else out.push(p);
+  }
+  // 첫 조각이 짧으면 뒤에 붙인다.
+  if (out.length > 1 && out[0].replace(/\s/g, '').length < MIN_PHRASE_CHARS) {
+    out[1] = `${out[0]} ${out[1]}`.replace(/\s+/g, ' ').trim();
+    out.shift();
+  }
+  return out;
+}
+
 /** 문구를 글자수 비례로 시간 배분한다. render-direct.js 의 splitNarrationByTime 과 같은 규칙. */
 export function splitPhrases(text, totalSec) {
   // `·` 로는 쪼개지 않는다 — 레퍼런스도 "기본 칩 · 메모리 32GB · 1TB" 처럼 한 문구 안에서 쓴다.
   // 여기서 자르면 "삼성전자·" 같은 조각이 알약 하나를 차지한다.
-  const phrases = String(text || '')
+  //
+  // 쉼표는 **자릿수 구분자가 아닐 때만** 경계다. `(?<=[,→])` 로 자르던 예전 규칙은
+  // "5,000억 달러" 를 "5," + "000억 달러" 두 알약으로 쪼갰다(EP-0100 실측, 화면에
+  // 숫자 "5," 만 뜬 컷이 남았다). 쉼표 뒤가 숫자면 같은 수의 일부이므로 자르지 않는다.
+  const phrases = mergeOrphans(String(text || '')
     .split(/(?<=[.!?])\s+/)
-    .flatMap(p => (p.length > 26 && /[,→]/.test(p)
-      ? p.split(/(?<=[,→])\s*/).map(s => s.trim()).filter(Boolean)
-      : (p.trim() ? [p.trim()] : [])));
+    .flatMap(p => (p.length > 26 && /(,(?!\d)|→)/.test(p)
+      ? p.split(/(?<=,)(?!\d)\s*|(?<=→)\s*/).map(s => s.trim()).filter(Boolean)
+      : (p.trim() ? [p.trim()] : []))));
   if (!phrases.length) return [];
   const total = phrases.reduce((a, p) => a + p.length, 0) || 1;
   let t = 0;
@@ -119,15 +150,56 @@ export function layoutPhrase(phrase, forceSize = null) {
   const SIZES = forceSize ? [forceSize] : [72, 64, 58, 52];
   const perLineAt = (fontSize) => Math.floor(usable / (fontSize * 1.06));
 
-  const wrap = (perLine) => {
-    const parts = phrase.split(' ').filter(Boolean);
+  // 줄바꿈 토큰. 공백만 기준으로 자르면 "Apollo·BlackRock·Blackstone·Brookfield·Goldman·KKR"
+  // 처럼 공백 없는 나열이 **한 토큰**이 되고, 알약은 nowrap 이라 캔버스 밖으로 흘러 잘린다
+  // (EP-0100 실측: 양쪽 끝이 잘린 채 렌더됨). `·` 뒤에서도 끊을 수 있게 한다 — 구분자는
+  // 앞 토큰에 붙여야 다음 줄이 "·BlackRock" 처럼 시작하지 않는다.
+  // splitPhrases 가 `·` 를 문구 경계로 쓰지 않는 것과 상충하지 않는다: 저기는 알약을 나누는
+  // 문제고 여기는 한 알약 안에서 줄을 나누는 문제다.
+  const tokenize = (s) => s.split(/(?<=·)|\s+/).map(x => x.trim()).filter(Boolean)
+    // 구분자도 공백도 없이 한 줄을 넘기는 토큰(긴 영문 고유명사 등)은 글자 단위로 쪼갠다.
+    // 안 쪼개면 알약이 캔버스를 넘고, 넘으면 잘린다.
+    .flatMap(x => (x.length <= 24 ? [x] : x.match(/.{1,24}/g)));
+  const joinTok = (a, b) => (a.endsWith('·') ? `${a}${b}` : `${a} ${b}`);
+
+  const greedy = (parts, perLine) => {
     const out = [];
     let cur = '';
     for (const p of parts) {
-      if (cur && (`${cur} ${p}`).length > perLine) { out.push(cur); cur = p; } else cur = cur ? `${cur} ${p}` : p;
+      if (cur && joinTok(cur, p).length > perLine) { out.push(cur); cur = p; } else cur = cur ? joinTok(cur, p) : p;
     }
     if (cur) out.push(cur);
-    return out.length ? out : [phrase];
+    return out;
+  };
+
+  /**
+   * 줄 길이를 고르게 나눈다.
+   *
+   * 이 자막은 **줄마다 알약을 하나씩** 그린다. 그래서 탐욕적으로 채우면 마지막 줄에
+   * 남는 한 조각이 그대로 고아 알약이 된다 — EP-0100 에서 "자체 현금·회사채 → 외부"
+   * 아래 "신용." 만 담긴 알약이 떠 있었다. 줄 수를 그대로 두고 폭 목표만 평균으로
+   * 낮춰 다시 채우면 같은 줄 수 안에서 길이가 고르게 퍼진다.
+   */
+  const wrap = (perLine) => {
+    const parts = tokenize(phrase);
+    const first = greedy(parts, perLine);
+    if (first.length <= 1) return first.length ? first : [phrase];
+    const total = parts.reduce((n, p) => n + p.length + 1, -1);
+    const evenTarget = Math.ceil(total / first.length);
+    const balanced = greedy(parts, Math.min(perLine, Math.max(evenTarget, 4)));
+    // 같은 줄 수를 유지하면서 마지막 줄이 길어졌을 때만 채택한다.
+    const chosen = (balanced.length === first.length
+      && balanced[balanced.length - 1].length > first[first.length - 1].length) ? balanced : first;
+    // 구분자로 줄이 시작하면(" · 기업가치…") 앞줄 끝으로 넘긴다 — 구분자는 앞말에 붙는 기호다.
+    // map 안에서 앞 원소를 고치면 이미 반환된 값이라 반영되지 않는다(실측: `·` 가 사라졌다).
+    const fixed = [...chosen];
+    for (let i = 1; i < fixed.length; i++) {
+      if (/^·/.test(fixed[i])) {
+        fixed[i - 1] = `${fixed[i - 1]}·`;
+        fixed[i] = fixed[i].replace(/^·\s*/, '');
+      }
+    }
+    return fixed.filter(Boolean);
   };
 
   // 한 줄로 되면 가장 큰 크기를 쓴다.
@@ -138,6 +210,12 @@ export function layoutPhrase(phrase, forceSize = null) {
   for (const fontSize of SIZES) {
     const lines = wrap(perLineAt(fontSize));
     if (lines.length <= 2 && lines.every(l => l.length <= perLineAt(fontSize))) return { lines, fontSize };
+  }
+  // 세 줄까지는 허용한다. 예전에는 여기서 바로 최소 크기 + 무제한 줄로 떨어졌고,
+  // 토큰이 안 쪼개지면 그 한 줄이 캔버스를 넘어 잘렸다(EP-0100 실측).
+  for (const fontSize of SIZES) {
+    const lines = wrap(perLineAt(fontSize));
+    if (lines.length <= 3 && lines.every(l => l.length <= perLineAt(fontSize))) return { lines, fontSize };
   }
   const fontSize = SIZES[SIZES.length - 1];
   return { lines: wrap(perLineAt(fontSize)), fontSize };
@@ -270,7 +348,11 @@ export function buildCaptionComposition({
         border-radius: 999px;
         color: ${STYLE.base};
         line-height: 1.0;
+        /* 줄은 layoutPhrase 가 미리 끊는다. nowrap 은 그 계산이 빗나갔을 때 글자를
+           캔버스 밖으로 흘려보내 잘리게 만들었다 — 상한을 줘서 그 실패를 눈에 띄게 만든다. */
         white-space: nowrap;
+        max-width: ${CANVAS.w - 2 * 56}px;
+        overflow-wrap: anywhere;
         box-shadow: 0 10px 26px rgba(0, 0, 0, 0.38);
       }
       /* inline-block + transform 이라 확대해도 알약 폭이 흔들리지 않는다.

@@ -23,6 +23,33 @@ export const BOUNDS = {
   maxWardrobeScenes: 1,   // 한 EP에서 의상 지정은 최대 1컷 (60초 안에 갈아입으면 연속성이 깨진다)
 };
 
+/**
+ * 공인 캐리커처 — 정책 정본은 채널의
+ * `policies/public-figures-policy.md` (v1.0, 2026-04-26) 이고, 여기는 그 §4~§5 의 실행 룰이다.
+ *
+ * 왜 코드가 필요했나: 정책 §0.2 가 스스로 "정책-실행 갭"을 진단해 놓고도 실행 룰이 없었다.
+ * 그래서 (a) 인물이 중심 키워드인 씬도 익명 마스코트로만 나갔고, (b) 어쩌다 캐리커처를 써도
+ * 인물의 트레이드마크 의상("black leather jacket")이 마스코트 의상 규칙에 걸려 전 컷 BLOCK 됐다.
+ * 의상·길이·인원수 규칙이 전부 "피사체는 마스코트 하나"를 전제로 쓰였기 때문이다.
+ */
+export const CARICATURE = {
+  /** 캐리커처 절을 찾는 정규식. 이 형태를 벗어나면 아래 완화가 적용되지 않는다. */
+  clauseRe: /WITH:\s*a flat cartoon caricature of ([^,.]+)/i,
+  /**
+   * 캐리커처 컷의 길이 상한. 기본 780 은 피사체가 마스코트 하나일 때 역산한 값이고,
+   * 두 번째 피사체(이름 + 식별 단서 2~3개)가 실측 ~100자를 더 쓴다. 1024자(EP-0070,
+   * 마스코트가 구석 스티커로 렌더된 실패 지점)보다는 충분히 낮게 둔다.
+   */
+  maxChars: 880,
+  /** §5.1 한 편 안의 캐리커처 씬 수 상한 (썸네일·인트로는 §5.2 로 별도 카운트). */
+  sceneCap: { 5: 2, 7: 3 },
+};
+
+/** §4.2 — 실사풍은 모든 카테고리에서 무조건 금지 (사칭·초상권). */
+const PHOTOREALISTIC = /\b(photo-?realistic|photorealism|photograph(ic)?|real photo|digital painting|deepfake|face[- ]?swap)\b/i;
+/** §4.3 — 악마화·동물화 풍자 금지. */
+const DEMONIZING = /\b(horns?|devil|demon|as an animal|animal head|pig|rat|snake|vampire|zombie)\b/i;
+
 /** 모든 프롬프트가 끝나야 하는 고정 꼬리. 이 문장이 스타일과 안전 규칙을 동시에 고정한다. */
 export const CANONICAL_TAIL =
   'bold illustrated line art, 9:16 vertical, no readable text or numbers.';
@@ -126,6 +153,10 @@ export function checkImagePrompt(prompt, opts = {}) {
 
   if (!p) { add('EMPTY', BLOCK, 'image_prompt 가 비어 있습니다.'); return v; }
 
+  // 공인 캐리커처 컷인가. 맞으면 의상·길이 규칙이 "피사체 하나" 전제를 벗는다.
+  const caricature = p.match(CARICATURE.clauseRe);
+  const scenePart = caricature ? p.replace(CARICATURE.clauseRe, 'WITH: a caricature') : p;
+
   // 1. 마스코트가 존재하고, 씬 동작의 주어여야 한다 — 크기·배치를 정하는 유일한 실효 수단.
   const clause = mascotClause(p, opts.mascotPattern);
   if (!clause) {
@@ -174,10 +205,24 @@ export function checkImagePrompt(prompt, opts = {}) {
   }
 
   // 5. 의상 — DNA 허용은 기본 무착장 또는 네이비 정장뿐.
-  if (OFF_SHEET_WARDROBE.test(p)) {
+  //    단 캐리커처 절 안의 의상은 마스코트가 아니라 공인의 식별 단서다(정책 §4.3 "트레이드마크
+  //    의상" 권장). scenePart 로 그 절을 도려낸 뒤 검사하지 않으면 정책이 스스로를 BLOCK 한다.
+  if (OFF_SHEET_WARDROBE.test(scenePart)) {
     add('WARDROBE_OFF_SHEET', BLOCK,
-      `캐릭터 시트에 없는 의상입니다 ("${p.match(OFF_SHEET_WARDROBE)[0]}"). ` +
+      `캐릭터 시트에 없는 의상입니다 ("${scenePart.match(OFF_SHEET_WARDROBE)[0]}"). ` +
       '기본(무착장) 또는 시트의 네이비 정장만 쓸 수 있습니다.');
+  }
+
+  // 5-b. 캐리커처 안전 규칙 (정책 §4.2·§4.3) — 실사풍·악마화는 카테고리 무관 금지.
+  if (caricature) {
+    if (PHOTOREALISTIC.test(p)) {
+      add('CARICATURE_PHOTOREALISTIC', BLOCK,
+        `실사풍 표현은 금지입니다 ("${p.match(PHOTOREALISTIC)[0]}"). 정책 §4.2 — 사칭·초상권 회피.`);
+    }
+    if (DEMONIZING.test(p)) {
+      add('CARICATURE_DEMONIZING', BLOCK,
+        `악마화·동물화 풍자는 금지입니다 ("${p.match(DEMONIZING)[0]}"). 정책 §4.3.`);
+    }
   }
 
   // 6. 팔레트 태그
@@ -188,9 +233,10 @@ export function checkImagePrompt(prompt, opts = {}) {
   }
 
   // 7. 길이
-  if (p.length < BOUNDS.minChars || p.length > BOUNDS.maxChars) {
+  const maxChars = caricature ? CARICATURE.maxChars : BOUNDS.maxChars;
+  if (p.length < BOUNDS.minChars || p.length > maxChars) {
     add('LENGTH_OUT_OF_RANGE', WARN,
-      `${p.length}자 (권장 ${BOUNDS.minChars}~${BOUNDS.maxChars}자). ` +
+      `${p.length}자 (권장 ${BOUNDS.minChars}~${maxChars}자). ` +
       '짧으면 모델이 캐릭터를 추론하고, 길면 씬 묘사가 마스코트의 주의 예산을 잡아먹습니다.');
   }
 
@@ -205,11 +251,29 @@ export function checkImagePrompt(prompt, opts = {}) {
 export function checkEpisodePrompts(scenes, opts = {}) {
   const violations = [];
   let wardrobe = 0;
+  const caricatureScenes = [];
 
   for (const s of scenes) {
     const p = String(s.prompt || '').replace(/\s+/g, ' ').trim();
     violations.push(...checkImagePrompt(p, { ...opts, sceneId: s.sceneId }));
-    if (ON_SHEET_WARDROBE.test(p) || OFF_SHEET_WARDROBE.test(p)) wardrobe += 1;
+    const caric = p.match(CARICATURE.clauseRe);
+    if (caric) caricatureScenes.push({ sceneId: s.sceneId, figure: caric[1].trim() });
+    // 의상 카운트도 캐리커처 절을 뺀 본문으로 — 공인의 의상은 마스코트 연속성과 무관하다.
+    const scenePart = caric ? p.replace(CARICATURE.clauseRe, 'WITH: a caricature') : p;
+    if (ON_SHEET_WARDROBE.test(scenePart) || OFF_SHEET_WARDROBE.test(scenePart)) wardrobe += 1;
+  }
+
+  // 정책 §5.1 — 캐리커처 씬 수 상한. 마스코트가 채널 정체성이므로 인물이 편을 잡아먹으면 안 된다.
+  // 상한을 넘기려면 brief frontmatter 의 caricature_scene_limit_override 가 필요하다(§5.4).
+  const cap = CARICATURE.sceneCap[scenes.length]
+    ?? Math.max(1, Math.round(scenes.length * 0.43));
+  if (caricatureScenes.length > cap && !opts.caricatureOverride) {
+    violations.push({
+      code: 'CARICATURE_SCENE_CAP', severity: BLOCK,
+      message: `공인 캐리커처가 ${caricatureScenes.length}컷 (${scenes.length}씬 포맷 허용 ${cap}컷). ` +
+        `정책 §5.1. 초과하려면 brief 의 caricature_scene_limit_override: true 가 필요합니다. ` +
+        `해당 컷: ${caricatureScenes.map(c => c.sceneId).join(', ')}`,
+    });
   }
 
   if (wardrobe > BOUNDS.maxWardrobeScenes) {
@@ -224,6 +288,7 @@ export function checkEpisodePrompts(scenes, opts = {}) {
   return {
     ok: blocks.length === 0,
     violations,
+    caricatureScenes,
     stats: profile(scenes.map(s => s.prompt), opts),
   };
 }

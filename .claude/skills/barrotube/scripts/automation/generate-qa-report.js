@@ -32,19 +32,20 @@ import {
 import { checkEpisodePrompts } from './lib/image-prompt-contract.js';
 import { matchIntroOutro } from './lib/qa-frame-match.js';
 import { verifyMotionClip } from './lib/motion-verify.js';
+import { buildMotionContactSheet, FRAMES_PER_CLIP } from './lib/motion-contact-sheet.js';
 
 /**
  * image_prompt 계약 결과를 QA 리포트에 싣는다.
  * 실제 게이트는 이미지 생성 전에 도는 validate-image-prompts.js 이고 —
  * 여기 섹션은 발행 검토 시 "이 EP가 기준점에서 얼마나 벗어났나"를 남기는 기록이다.
  */
-function formatImagePromptSection(scenes) {
+function formatImagePromptSection(scenes, caricatureOverride = false) {
   const items = (scenes || [])
     .map(s => ({ sceneId: s.scene_id, prompt: s.image_prompt }))
     .filter(s => s.prompt);
   if (!items.length) return '## 📐 image_prompt 계약\n\n(image_prompt 없음)';
 
-  const { ok, violations, stats } = checkEpisodePrompts(items);
+  const { ok, violations, stats } = checkEpisodePrompts(items, { caricatureOverride });
   const lines = [
     '## 📐 image_prompt 계약 (lib/image-prompt-contract.js)',
     '',
@@ -399,6 +400,23 @@ async function main() {
         ? `${liveness.length}/${liveness.length} 움직임 확인${engineNote}`
         : dead.map(v => `씬 ${v.sceneId}: ${v.reasons[0]}`).join(' · '),
     });
+
+    // Motion liveness 는 "앞뒤가 다른가"만 본다. 모델이 캐릭터를 뭉개도 그건 변화라서
+    // 통과한다 — EP-2026-0100 씬7 은 끝 2초에 마스코트 얼굴이 통째로 지워졌는데 전 항목
+    // PASS 였다. 스칼라 지표로 자동 판정하려다 오탐/미탐이 갈려 실패했으므로(주석은
+    // lib/motion-contact-sheet.js), 대신 **끝 프레임을 포함한 컨택트 시트**를 남긴다.
+    // 승인 전에 이 한 장을 보는 것이 이 클래스의 유일한 실효 방어다.
+    const sheetPath = join(baseDir, '60_qa_frames.png');
+    const sheet = buildMotionContactSheet(
+      scenes.map(s => join(videosDir, `scene_${s.scene_id}.mp4`)), sheetPath);
+    checks.push({
+      item: 'Motion frames (육안 확인용)',
+      mark: sheet.ok ? OK : WARN,
+      val: sheet.ok
+        ? `60_qa_frames.png — ${sheet.clips}컷 × ${FRAMES_PER_CLIP}프레임(끝 프레임 포함). `
+          + '승인 전 캐릭터 뭉개짐·손 이상·얼굴 소실을 이 시트로 확인한다.'
+        : `시트 생성 실패: ${sheet.reason}`,
+    });
   }
 
   // Custom episode BGM wins; otherwise require the bundled persona track.
@@ -498,6 +516,7 @@ async function main() {
   // brief frontmatter + topic + hook narration 로드 → detectPolicyViolations
   // BLOCK이 1건이라도 있고 policy_override 미적용이면 verdict=FAIL + risk=HIGH 강제 (S10 차단)
   let policyResult = null;
+  let caricatureOverride = false;
   try {
     // epDir = baseDir의 ../../  (v2) 또는 baseDir 자체 (v1).
     // baseDir이 .../EP-XXXX/platforms/{long|shorts} 이면 epDir = .../EP-XXXX
@@ -518,6 +537,7 @@ async function main() {
         if (tm) topicText = tm[1].trim();
       }
     }
+    caricatureOverride = briefFM.caricature_scene_limit_override === true;
     const hookNar = (scenes.find(s => s.role === 'hook') || scenes[0])?.narration || '';
     const detectionText = `${topicText}\n${hookNar}`;
     policyResult = detectPolicyViolations({
@@ -600,7 +620,7 @@ async function main() {
     '',
     policyResult ? formatPolicySection(policyResult) : '## Public Figure Policy Checks\n\n(검출 모듈 로딩 실패 — 수동 검토 필요)',
     '',
-    formatImagePromptSection(scenes),
+    formatImagePromptSection(scenes, caricatureOverride),
     '',
     econResult
       ? `## 📐 경제 정확성 검사 (qa-economic-accuracy)\n\n**severity: ${econResult.severity}**\n` +

@@ -159,11 +159,11 @@ async function main() {
   // 명시(explicit) 값과 미지정을 구분해 S6c 기본값을 config.stages.S6c_scene에서 가져온다.
   const explicitEngine = (values['image-engine'] || process.env.BT_IMAGE_ENGINE || '').toLowerCase() || null;
   const imageEngine = explicitEngine || 'openai';
-  if (!['openai', 'gemini', 'auto', 'media-render'].includes(imageEngine)) {
-    console.error(`❌ --image-engine 는 openai|gemini|auto|media-render 중 하나여야 합니다 (받음: ${imageEngine})`);
+  if (!['openai', 'gemini', 'auto', 'media-render', 'codex'].includes(imageEngine)) {
+    console.error(`❌ --image-engine 는 openai|gemini|auto|media-render|codex 중 하나여야 합니다 (받음: ${imageEngine})`);
     process.exit(1);
   }
-  if (imageEngine === 'openai' || imageEngine === 'gemini') {
+  if (imageEngine === 'openai' || imageEngine === 'gemini' || imageEngine === 'codex') {
     process.env.BT_IMAGE_ENGINE = imageEngine;   // resolveImageEngine 이 config.stages/global 보다 우선 적용
   } else {
     // auto / media-render: S6d 인트로·S6e 썸네일 하위 스크립트는 config 단계별 설정 그대로
@@ -322,21 +322,40 @@ async function main() {
     // API 냐)는 모션 필요 여부와 무관한데, media-render 분기 안에 있던 탓에
     // BT_IMAGE_ENGINE=openai 로 우회하면 videos/ 가 빈 채로 통과해 슬라이드쇼가 나왔다
     // (2026-08-15 EP-0094 실측).
-    const motionEngine = (process.env.BT_MOTION_ENGINE || 'hyperframes').toLowerCase();
+    // 엔진 의미는 lib/auto-pipeline.sh 와 맞춘다 (BT_MOTION_ENGINE:-grok).
+    //   grok(기본) : Grok image→video — 전용 Playwright 프로필(~/.barrotube/grok-profile)
+    //   local-only : 로컬 HyperFrames (구 값 'hyperframes' 도 같게 취급)
+    //   none       : 모션 단계 생략
+    // 예전 기본값은 'hyperframes' 였는데, auto-pipeline 은 'grok' 이라 같은 EP 도 호출
+    // 경로에 따라 다른 엔진으로 구워졌다. 기본값을 grok 으로 통일한다.
+    const motionEngine = (process.env.BT_MOTION_ENGINE || 'grok').toLowerCase();
+    const useLocalMotion = motionEngine === 'local-only' || motionEngine === 'hyperframes';
     const ensureMotion = () => {
       const stillsReady = sceneIds.length > 0
         && sceneIds.every(id => exists(join(p.imagesDir, `scene_${id}.png`)));
       if (!stillsReady || motionDone || platform !== 'shorts' || motionEngine === 'none') return;
       try {
-        runTracked(absEp, episodeId, 'S6c', 'S6c Motion Clips (HyperFrames)', '08-image-generator',
-          'scripts/automation/generate-motion.js', [
-            '--episode', relEp,
-            '--platform', platform,
-          ]);
+        if (useLocalMotion) {
+          runTracked(absEp, episodeId, 'S6c', 'S6c Motion Clips (HyperFrames)', '08-image-generator',
+            'scripts/automation/generate-motion.js', [
+              '--episode', relEp,
+              '--platform', platform,
+            ]);
+        } else {
+          runTracked(absEp, episodeId, 'S6c', 'S6c Motion Clips (Grok image→video)', '08-image-generator',
+            'scripts/automation/grok-motion.js', [
+              '--episode', relEp,
+              '--platform', platform,
+            ]);
+        }
       } catch (e) {
-        // 로컬 엔진이 죽어도 스택만 던지고 끝내지 않는다 — 아래의 "무엇을 하면 되는지"
+        // 엔진이 죽어도 스택만 던지고 끝내지 않는다 — "무엇을 하면 되는지"
         // 안내까지 가야 사람이 이어받을 수 있다.
-        console.error(`\n⚠️  로컬 모션 엔진 실패: ${e.message}`);
+        console.error(`\n⚠️  모션 엔진 실패 (${motionEngine}): ${e.message}`);
+        if (!useLocalMotion) {
+          console.error('   Grok 프로필 로그인: node scripts/automation/grok-motion.js --login');
+          console.error('   이번 회차만 로컬로:  BT_MOTION_ENGINE=local-only');
+        }
       }
       motionDone = motionExists();
     };
@@ -468,7 +487,7 @@ async function main() {
     mkdirSync(p.renderDir, { recursive: true });
     if (!exists(p.video) || force) {
       if (captionEngine === 'hyperframes') {
-        runTracked(absEp, episodeId, 'S7', 'S7 Render (Grok 모션 + HyperFrames 자막)', '10-capcut-composer',
+        runTracked(absEp, episodeId, 'S7', `S7 Render (${useLocalMotion ? 'HyperFrames' : 'Grok'} 모션 + HyperFrames 자막)`, '10-capcut-composer',
           'scripts/automation/render-with-captions.js', [
             '--episode', relEp,
             '--out', renderOutArg,

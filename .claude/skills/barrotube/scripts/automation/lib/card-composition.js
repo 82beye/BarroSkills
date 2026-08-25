@@ -58,20 +58,41 @@ export function escapeHtml(s) {
  * 타이틀 한 줄의 글자 크기. 카드는 자막보다 크게 간다 — 썸네일로 축소돼도 읽혀야 한다.
  * 줄바꿈은 문안이 `|` 로 지정하거나, 없으면 공백 기준으로 균등 분할한다.
  */
+/** 도현체 실측 글자폭 ≈ 0.94em (1em 로 잡으면 줄마다 6% 씩 여백을 버린다). */
+const TITLE_EM = 0.92;
+
 export function layoutTitle(title, { maxLines = 3 } = {}) {
   const explicit = String(title).includes('|');
-  const lines = explicit
+  let lines = explicit
     ? String(title).split('|').map(s => s.trim()).filter(Boolean)
     : balance(String(title).trim(), maxLines);
-  const longest = Math.max(...lines.map(l => l.replace(/\s/g, '').length), 1);
-  const usable = CANVAS.w - 2 * 72;
-  // 한글 한 글자 ≈ 1em. 가장 긴 줄이 폭 안에 들어오는 최대 크기.
-  const fontSize = Math.max(56, Math.min(124, Math.floor(usable / longest)));
+
+  // 크기는 **가장 긴 줄** 하나로 결정된다. 그 길이를 재는 방식에 버그가 있었다 —
+  // `**강조**` 의 별표 네 개까지 글자로 세는 바람에 "진짜 약점은 **매출 70%**" 가
+  // 11자가 아니라 15자로 잡혀 카드 전체가 필요보다 36% 작게 렌더됐다(EP-0100 실측).
+  // 별표는 markupTitle 이 <em> 으로 바꿔 없애므로 폭에 기여하지 않는다.
+  // 공백을 통째로 빼면 안 된다 — 공백도 폭을 차지한다(도현체 기준 약 0.4em).
+  // 빼고 쟀더니 "담보보다 무서운 건" 이 8자로 잡혀 131px 이 나왔고, 실제 폭은 상자를
+  // 넘겨 CSS 가 줄을 접어 "건" 만 남은 고아 줄이 생겼다(EP-0100 아웃트로 실측).
+  const visibleLen = (l) => {
+    const bare = l.replace(/\*\*/g, '');
+    const spaces = (bare.match(/\s/g) || []).length;
+    return bare.replace(/\s/g, '').length + spaces * 0.4;
+  };
+  const longestOf = ls => Math.max(...ls.map(visibleLen), 1);
+
+  // 저자가 `|` 로 지정한 줄바꿈은 존중한다. 여기서 다시 쪼개면 "GPU 담보 / 5,000억 진짜"
+  // 처럼 의미 단위가 깨진다(실측). 줄 수를 늘려 크게 만드는 건 문안 생성 쪽 일이다.
+  // 0.94 는 안전 계수 — 글리프 폭이 폰트마다 조금씩 달라 딱 맞게 잡으면 한 줄이 접힌다.
+  const usable = (CANVAS.w - 2 * 56) * 0.94;
+  const fontSize = Math.max(64, Math.min(150, Math.floor(usable / (longestOf(lines) * TITLE_EM))));
   return { lines, fontSize };
 }
 
 function balance(text, maxLines) {
-  const parts = text.split(/\s+/).filter(Boolean);
+  // `**강조**` 는 한 덩어리다. 공백만 기준으로 쪼개면 "**매출" / "70%**" 처럼 마커가
+  // 줄을 넘어가고, markupTitle 의 정규식이 짝을 못 찾아 강조가 통째로 사라진다.
+  const parts = (String(text).match(/\*\*[^*]+\*\*|\S+/g) || []).filter(Boolean);
   if (parts.length <= 1) return [text];
   const target = Math.min(maxLines, Math.max(2, Math.ceil(text.length / 12)));
   const per = Math.ceil(parts.length / target);
@@ -214,8 +235,18 @@ ${fontRel ? `      @font-face {
         position: absolute; left: 0; right: 0; top: 0; height: 58%;
         background: linear-gradient(180deg, ${CARD_STYLE.scrim} 0%, ${CARD_STYLE.scrim} 46%, rgba(6,10,18,0) 100%);
       }
+      /*
+       * 타이틀 블록의 **세로 중심**을 캔버스 30% 지점에 둔다 (가운데 50% 보다 20%p 위).
+       * 예전에는 top:120px 고정이었는데 1920px 기준 6.25% 라 화면 맨 위에 붙어 보였고,
+       * 줄 수가 2줄이냐 3줄이냐에 따라 블록이 아래로 자라 위치가 들쭉날쭉했다.
+       * translateY(-50%) 로 중심을 잡으면 줄 수가 바뀌어도 시각적 위치가 고정된다.
+       *
+       * 좌우 여백은 56px — layoutTitle 이 글자 크기를 CANVAS.w - 2*56 기준으로 재므로
+       * 여기 72px 을 쓰면 계산보다 좁은 상자에 넣는 셈이라 긴 줄이 잘릴 수 있다.
+       */
       .card {
-        position: absolute; left: 72px; right: 72px; top: 120px;
+        position: absolute; left: 56px; right: 56px;
+        top: 30%; transform: translateY(-50%);
         font-family: ${FAM}; font-weight: 900; text-align: center;
       }
       /* display 는 block 이어야 한다. inline-block 으로 두면 줄들이 나란히 붙어
@@ -236,7 +267,11 @@ ${fontRel ? `      @font-face {
         position: absolute; left: 72px; right: 72px; bottom: 220px; text-align: center;
         font-family: ${FAM};
       }
-      .cta-lead { font-size: 40px; color: ${CARD_STYLE.sub}; margin-bottom: 22px; }
+      .cta-lead { font-size: 40px; color: ${CARD_STYLE.base}; margin-bottom: 22px;
+        /* 밝은 아트워크 위에서 sub 색이 씻겨 사라진다(EP-0100 아웃트로 실측 — 배경이
+           문이 열린 역광 컷이라 회색 글씨가 안 읽혔다). 버튼은 테두리가 있어 버티지만
+           이 줄은 맨몸이라, 타이틀과 같은 그림자로 배경에 무관하게 읽히게 한다. */
+        text-shadow: 0 4px 14px rgba(0,0,0,0.85), 0 0 22px rgba(0,0,0,0.6); }
       .cta-row { display: flex; gap: 20px; justify-content: center; }
       .cta-btn {
         padding: 18px 34px; border-radius: 999px; font-size: 42px;

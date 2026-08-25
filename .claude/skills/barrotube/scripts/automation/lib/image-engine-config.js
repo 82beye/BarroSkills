@@ -45,7 +45,9 @@ function loadConfig() {
 
 // 'media-render': barrotube-media-render 스킬(브라우저 ChatGPT, PD 수행)로 사전 생성.
 // API 호출 없음 — 소비 스크립트(generate-intro 등)는 산출물 존재 확인/게이트만 수행.
-const VALID = new Set(['gemini', 'openai', 'media-render']);
+// 'codex': Codex 내장 imagegen (lib/image-engines/codex-imagegen.js). ChatGPT 계정
+// 인증이라 OPENAI_API_KEY 가 없어도 되고, 브라우저 없이 무인 실행된다.
+const VALID = new Set(['gemini', 'openai', 'media-render', 'codex']);
 function norm(v) {
   if (v == null) return null;
   const s = String(v).trim().toLowerCase();
@@ -72,8 +74,9 @@ function autoDefault(stage, hasKey) {
  *   config 주입 시 config/image-engines.json 대신 사용(테스트 결정성).
  *   주의: OPENAI_API_KEY 판정은 env(process.env)만 본다. keychain 키는 스크립트
  *   진입부에서 process.env로 hydrate된 뒤 이 함수가 호출되는 것을 전제로 한다.
- * @returns {{ engine: 'gemini'|'openai', downgraded: boolean, source: string, stage: string }}
+ * @returns {{ engine: 'gemini'|'openai'|'media-render'|'codex', downgraded: boolean, source: string, stage: string }}
  *   downgraded=true → openai를 원했으나 키가 없어 gemini로 강등됨.
+ *   'codex'는 ChatGPT 계정 인증이라 키 가드를 타지 않는다(강등 없음).
  */
 export function resolveImageEngine(stage, { cliOverride, env = process.env, config } = {}) {
   const hasKey = !!env.OPENAI_API_KEY;

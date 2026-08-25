@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  BOUNDS, CANONICAL_TAIL, TEMPLATE, KNOWN_PALETTES, MASCOT_CLAUSE,
+  BOUNDS, CANONICAL_TAIL, TEMPLATE, KNOWN_PALETTES, MASCOT_CLAUSE, CARICATURE,
   checkImagePrompt, checkEpisodePrompts, profile,
 } from '../scripts/automation/lib/image-prompt-contract.js';
 
@@ -137,4 +137,59 @@ test('MASCOT_CLAUSE 는 캐릭터 DNA 의 핵심 시각 요소를 유지한다',
   for (const token of ['마시', '바로경제', 'round head', 'slim capsule', 'thin stick limbs', 'mitten', '#FF9A1F']) {
     assert.ok(MASCOT_CLAUSE.includes(token), `마스코트 절에 "${token}" 가 없다`);
   }
+});
+
+// ── 공인 캐리커처 (정책 public-figures-policy.md §2·§4·§5 의 실행 룰) ──────────────
+//
+// 정책은 2026-04-26 부터 "인물이 메인 키워드면 CHARACTERIZE" 를 요구했지만 실행 룰이 없어
+// (a) 전 EP 가 익명 마스코트로 나갔고 (b) 캐리커처를 쓰면 인물의 트레이드마크 의상이
+// 마스코트 의상 규칙에 걸려 BLOCK 됐다. 아래 테스트가 두 실패를 동시에 고정한다.
+
+const caricaturePrompt = (fig, extra = '') =>
+  `[palette:bearish] ${MASCOT_FULL}, uneasy, standing beside a single tall crate tower in the ` +
+  'centre, face readable, planting its rounded shoe-feet wide while one white mitten hand ' +
+  `reaches up to steady it. WITH: a flat cartoon caricature of ${fig}, same line-art style, ` +
+  `similar scale.${extra} BACKGROUND: deep navy abstract warehouse interior, amber accent along ` +
+  `the leaning column, subtle grid texture at low contrast, ${CANONICAL_TAIL}`;
+
+test('캐리커처 절 안의 트레이드마크 의상은 마스코트 의상 위반이 아니다', () => {
+  const p = caricaturePrompt('Jensen Huang in a black leather jacket, short silver hair');
+  assert.ok(!codes(checkImagePrompt(p)).has('WARDROBE_OFF_SHEET'),
+    '공인의 식별 의상(정책 §4.3)까지 막으면 정책이 스스로를 BLOCK 한다');
+});
+
+test('캐리커처 컷은 길이 상한이 완화된다 (피사체가 둘)', () => {
+  const p = caricaturePrompt('Jeffrey Gundlach, silver swept-back hair, dark navy suit, pointing at the crates');
+  assert.ok(p.length > BOUNDS.maxChars, `픽스처가 ${p.length}자 — 기본 상한을 넘겨야 의미가 있다`);
+  assert.ok(p.length <= CARICATURE.maxChars);
+  assert.ok(!codes(checkImagePrompt(p)).has('LENGTH_OUT_OF_RANGE'));
+});
+
+test('캐리커처에 실사풍·악마화가 들어가면 BLOCK 한다 (정책 §4.2·§4.3)', () => {
+  const photo = codes(checkImagePrompt(caricaturePrompt('Steve Eisman', ' Photorealistic rendering.')));
+  assert.ok(photo.has('CARICATURE_PHOTOREALISTIC'));
+  const demon = codes(checkImagePrompt(caricaturePrompt('Steve Eisman with horns')));
+  assert.ok(demon.has('CARICATURE_DEMONIZING'));
+});
+
+test('캐리커처 씬 수 상한 — 7씬 포맷은 3컷까지, 초과는 운영자 토큰으로만', () => {
+  const caric = i => ({ sceneId: `00${i}`, prompt: caricaturePrompt(`Figure ${i}`) });
+  const plain = i => ({ sceneId: `00${i}`, prompt: GOOD });
+  const seven = n => [...Array(n).keys()].map(i => caric(i + 1))
+    .concat([...Array(7 - n).keys()].map(i => plain(n + i + 1)));
+
+  assert.ok(checkEpisodePrompts(seven(3)).ok, '3컷은 7씬 포맷 상한 이내다');
+  const over = checkEpisodePrompts(seven(4));
+  assert.ok(!over.ok && codes(over.violations).has('CARICATURE_SCENE_CAP'));
+  assert.ok(checkEpisodePrompts(seven(4), { caricatureOverride: true }).ok,
+    'brief 의 caricature_scene_limit_override 가 있으면 통과해야 한다 (§5.4)');
+  assert.equal(checkEpisodePrompts(seven(2)).caricatureScenes.length, 2);
+});
+
+test('5씬 Shorts 는 캐리커처 2컷까지', () => {
+  const caric = i => ({ sceneId: `00${i}`, prompt: caricaturePrompt(`Figure ${i}`) });
+  const five = n => [...Array(n).keys()].map(i => caric(i + 1))
+    .concat([...Array(5 - n).keys()].map(() => ({ sceneId: 'x', prompt: GOOD })));
+  assert.ok(checkEpisodePrompts(five(2)).ok);
+  assert.ok(!checkEpisodePrompts(five(3)).ok);
 });

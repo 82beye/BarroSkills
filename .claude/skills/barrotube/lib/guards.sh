@@ -18,6 +18,40 @@ if [ -z "${BARROTUBE_HOME:-}" ]; then
 fi
 
 # ─────────────────────────────────────────────────
+# .env 의 파이프라인 설정(BT_*)을 셸 환경으로 올린다.
+#
+# launchd plist 에는 BT_* 가 없다. node 스크립트들은 config-loader 가 .env 를
+# 직접 읽어 API 키를 얻지만, BT_GROK_PROFILE·BT_MOTION_ENGINE 같은 **셸/프로세스
+# 레벨 설정**은 아무도 안 읽어서 cron 에서만 기본값으로 떨어졌다.
+# 그 탓에 cron 은 로그인 안 된 옛 프로필(~/.barrotube/grok-profile)을 보고
+# Grok 을 건너뛰었다 — 대화형에서는 사람이 .env 를 source 해서 안 보이던 갭이다
+# (2026-08-24 실측: env -i 로 재현 확인).
+#
+# API 키까지 통째로 export 하지는 않는다. 파이프라인 동작을 바꾸는 BT_* 만 올린다.
+# 이미 환경에 있는 값이 우선한다 (일회성 override 를 .env 가 덮지 않도록).
+# ─────────────────────────────────────────────────
+load_bt_env() {
+  local envfile="${BARROTUBE_HOME}/.env"
+  [ -f "$envfile" ] || return 0
+  local line key val
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      BT_*=*) ;;
+      *) continue ;;
+    esac
+    key="${line%%=*}"
+    val="${line#*=}"
+    # 앞뒤 따옴표 제거
+    val="${val%\"}"; val="${val#\"}"
+    val="${val%\'}"; val="${val#\'}"
+    # 이미 설정돼 있으면 건드리지 않는다
+    [ -n "${!key:-}" ] && continue
+    export "$key=$val"
+  done < "$envfile"
+}
+load_bt_env
+
+# ─────────────────────────────────────────────────
 # 런타임 해석 — node 를 실행 시점에 찾는다
 #
 # launchd 는 로그인 셸을 거치지 않아 PATH 가 사실상 비어 있다.

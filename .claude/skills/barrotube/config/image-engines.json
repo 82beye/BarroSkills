@@ -1,11 +1,11 @@
 {
   "version": "1.1",
   "description": "이미지 생성 엔진 전역 설정(SSOT). S6c 씬 / S6d 인트로 / S6e 썸네일 단계가 공유한다. 환경변수(BT_IMAGE_ENGINE 등)가 이 파일보다 우선한다. 'auto'=현행 호환(인트로: OPENAI_API_KEY 있으면 openai, 썸네일: gemini). 'media-render'=barrotube-media-render 스킬(브라우저 ChatGPT/Grok)로 PD가 사전 생성 — API 스크립트는 산출물 존재만 확인하고 skip한다.",
-  "global": "openai",
+  "global": "codex",
   "stages": {
-    "S6c_scene": "media-render",
-    "S6d_intro": "media-render",
-    "S6e_thumbnail": "media-render"
+    "S6c_scene": "codex",
+    "S6d_intro": "codex",
+    "S6e_thumbnail": "codex"
   },
   "media_render": {
     "skill": "barrotube-media-render",
@@ -18,11 +18,20 @@
     "seed_notes": "씬 이미지는 이 대화에서 이어서 만든다 — 맨 위 메시지에 캐릭터 시트가 첨부돼 있으므로 매 요청마다 파일을 다시 붙일 필요가 없다. codex 의 Chrome 표면은 로컬 파일 첨부가 구조적으로 막혀 있고(숨은 input·파일 선택 UI·Cmd+V 전부 실패, 2026-08-17 EP-0096·0097 실측), control-chrome 스킬이 외부 Playwright MCP 사용도 금지한다. 첨부를 요구하는 절차는 무인 실행에서 반드시 멈춘다. 시드 대화 방식은 같은 날 실측으로 캐릭터 일관성 유지 확인. 대화가 길어지면 운영자가 새로 시드해 이 URL 을 교체한다."
   },
   "_notes": {
-    "values": "gemini | openai | auto | media-render(S6c 씬·S6d 인트로)",
+    "values": "gemini | openai | codex | auto | media-render(S6c 씬·S6d 인트로)",
     "priority_high_to_low": "--image-engine(CLI) > BT_INTRO_ENGINE / BT_THUMBNAIL_ENGINE(단계별 env) > BT_INTRO_FORCE_GEMINI=1(legacy, 인트로 한정) > BT_IMAGE_ENGINE(전역 env) > config.stages[stage] > config.global > auto(현행 호환)",
     "openai_requires": "OPENAI_API_KEY (없으면 자동으로 gemini 강등)",
     "media_render_requires": "브라우저 세션(ChatGPT/Grok 로그인) — 브라우저 도구 없는 headless 실행은 불가. launchd는 Chrome/Playwright가 연결된 Codex 오케스트레이터로 스킬 절차를 수행",
-    "quick_global_switch": "전 파이프라인을 OpenAI로 전환하려면 BT_IMAGE_ENGINE=openai 또는 이 파일 global='openai'; 씬만 레거시 API로 되돌리려면 stages.S6c_scene='openai'"
+    "quick_global_switch": "전 파이프라인을 OpenAI로 전환하려면 BT_IMAGE_ENGINE=openai 또는 이 파일 global='openai'; 씬만 레거시 API로 되돌리려면 stages.S6c_scene='openai'",
+    "codex_requires": "codex CLI + ChatGPT 로그인. API 키 불필요. 브라우저 불필요(무인 실행 가능).",
+    "switched_2026_08_20": "S6c 씬 / S6d 인트로 / S6e 썸네일 전부 media-render → codex. 브라우저 첨부가 무인 실행에서 막혀 EP-0101·0102·0104 가 S6c 에서 죽은 게 직접 계기이고, 썸네일은 Gemini 429(prepayment credits) 로 계속 씬 스틸 폴백으로 새고 있었다. 인트로·아웃트로 '카드'(45_intro.png / 48_outro.png)는 generate-cards.js 가 HyperFrames 로 씬 스틸 위에 한글을 로컬 합성하므로 이미지 엔진을 타지 않는다 — 배경이 되는 씬이 codex 로 바뀌면 카드도 자동으로 따라온다. S6d 의 codex 분기는 generate-intro.js 레거시 아트 경로용."
   },
-  "_image_api_policy": "S6c/S6d/S6e 가 media-render 이면 이미지 API(gpt-image-1·Gemini)를 호출하지 않는다. 전부 브라우저(ChatGPT 이미지 → Grok 영상)로 만든다. API 로 만들려면 produce-episode.js --image-engine 으로 명시해야 한다."
+  "_image_api_policy": "S6c/S6d/S6e 가 media-render 이면 이미지 API(gpt-image-1·Gemini)를 호출하지 않는다. 전부 브라우저(ChatGPT 이미지 → Grok 영상)로 만든다. API 로 만들려면 produce-episode.js --image-engine 으로 명시해야 한다.",
+  "codex_imagegen": {
+    "adapter": "scripts/automation/lib/image-engines/codex-imagegen.js",
+    "auth": "codex CLI 의 ChatGPT 계정 로그인(`codex login status` → \"Logged in using ChatGPT\"). OPENAI_API_KEY 불필요 — gpt-image-1 이 credit_balance_exhausted 로 막힌 상태에서도 동작한다(2026-08-20 실측).",
+    "why": "브라우저 media-render 는 첨부가 무인 실행에서 막혀 EP-0101·0102·0104 가 S6c 에서 죽었다. codex 는 CLI 라 cron/배치에서 그대로 돌고, 파일을 작업 디렉터리에 직접 저장해 Downloads→History DB→Finder 우회가 필요 없다. 컷당 약 1분(브라우저 2~10분).",
+    "required_preamble": "프롬프트만 넘기면 캐릭터가 무너진다(캡슐 몸통 소실·미튼→손가락). 어댑터의 CHARACTER_LOCK/EXPOSURE_LOCK 이 매 호출에 자동으로 앞에 붙는다. 씬 프롬프트(30_script.md)에는 넣지 않는다 — image-prompt-contract 길이 밴드(640~780자)를 깨고 엔진 교체 시 무의미해진다.",
+    "measured": "EP-2026-0105 5컷 재생성: 941x1672 5/5 성공, 중복 0, 컷 간 비율 균일. 기존 브라우저 세트 대비 다이얼·표지판·레이더 가독성 우위, 배경 밝기는 열위 → EXPOSURE_LOCK 로 보정."
+  }
 }

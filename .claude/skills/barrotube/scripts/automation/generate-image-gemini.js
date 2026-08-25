@@ -447,7 +447,38 @@ if (import.meta.url === `file://${process.argv[1]}`) {
           if (_k) process.env.OPENAI_API_KEY = _k;
         }
         const sceneEng = resolveImageEngine('S6c_scene', { env: process.env });
-        if (sceneEng.engine === 'openai') {
+        if (sceneEng.engine === 'codex') {
+          // Codex 내장 imagegen. ChatGPT 계정 인증이라 OPENAI_API_KEY 가 없어도 되고
+          // 브라우저가 필요 없다 — 무인 실행에서 S6c 가 죽지 않는다.
+          // 캐릭터/노출 고정 블록은 어댑터가 붙인다 (codex-imagegen.js).
+          const { generateImageCodex } = await import('./lib/image-engines/codex-imagegen.js');
+          try {
+            generateImageCodex({
+              prompt: fullPrompt,
+              outPath,
+              channel: meta.channel_id || null,
+            });
+          } catch (codexErr) {
+            // 조용히 Gemini 로 떨어지면 운영자가 어느 엔진으로 구워졌는지 모른다.
+            // Gemini 는 텍스트 DNA 만 써서 캐릭터 드리프트 위험이 codex 보다 크다 —
+            // 그래서 config 가 codex 를 기본으로 잡아 뒀는데 폴백이 그걸 무력화한다.
+            // (2026-08-25 EP-0114: 5컷 전부 Gemini 로 나갔고 로그에 사유가 없었다.)
+            console.error(`  ⚠️  codex imagegen 실패 → Gemini 폴백 (scene_${scene.scene_id})`);
+            console.error(`     사유: ${String(codexErr.message).split('\n')[0].slice(0, 300)}`);
+            await generateImageGemini({
+              prompt: fullPrompt,
+              outPath,
+              aspectRatio,
+              resolution,
+              channel: meta.channel_id || null,
+              costContext: {
+                episode: meta.episode_id || null,
+                stage: 'S6c',
+                note: `scene_${scene.scene_id} (codex fallback)`,
+              },
+            });
+          }
+        } else if (sceneEng.engine === 'openai') {
           await generateImageOpenAI({
             prompt: fullPrompt,
             outPath,

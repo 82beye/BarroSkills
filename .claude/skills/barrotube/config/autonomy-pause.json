@@ -1,8 +1,8 @@
 {
   "status": "active",
   "version": 1,
-  "updated_at": "2026-08-14T23:59:50.771380+09:00",
-  "updated_by": "operator-autonomous-publish-2026-08-14",
+  "updated_at": "2026-08-24T22:31:57.213296+09:00",
+  "updated_by": "operator-auto-approve-2026-08-24",
   "note": "BarroSkills 자율 운영 마스터 스위치. status=paused 시 auto-pipeline + 모든 routine cron 즉시 종료. 운영자가 수동 편집 또는 Telegram /pause·/resume으로 토글.",
   "guards": {
     "max_episodes_per_day": 2,
@@ -18,7 +18,8 @@
     "factcheck_max_rewrites": 3,
     "qa_min_score": 60,
     "serial_processing_enforced": true,
-    "accept_new_issues": true
+    "accept_new_issues": true,
+    "auto_approve_on_qa_pass": true
   },
   "history": [
     {
@@ -43,5 +44,8 @@
       "by": "orchestrator (Phase 6 재작성 루프 실장)",
       "note": "이 값은 오래 선언만 돼 있고 소비하는 코드가 없었다. auto-pipeline Phase 6 에 루프를 붙이며 실측: EP-2026-0096 이 게이트를 벗어나는 데 3라운드가 걸렸다(날짜·편향 → HIGH 미검증 수치 → emphasis_tokens·단정). 재작성 1회는 claude -p 1콜 + 팩트체크 1콜이라 06:00→08:00 발행 창에 여유가 있다."
     }
-  ]
+  ],
+  "notes": {
+    "auto_approve_on_qa_pass": "true 면 QA PASS(Phase 9) 통과 시 auto-pipeline 이 S10 승인 토큰을 스스로 발급해 예약게시까지 무인 진행한다. 운영자 명시 요청으로 2026-08-24 활성화. 남는 안전장치: ①Phase 9 QA 게이트(score>=60, blocker=0) ②Phase 11 텔레그램 거부창 30분(/reject 로 취소 가능) ③업로드는 private + publishAt 예약이라 공개 전까지 되돌릴 수 있다. 끄려면 이 값을 false 로 되돌린다 — 그러면 /approve 수동 승인 방식으로 복귀한다."
+  }
 }

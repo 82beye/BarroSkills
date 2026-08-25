@@ -18,6 +18,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
+import { parse as parseYAML } from 'yaml';
 import { checkEpisodePrompts } from './lib/image-prompt-contract.js';
 
 function scriptPath(values) {
@@ -31,9 +32,41 @@ function scriptPath(values) {
 
 function readScenes(path) {
   const text = readFileSync(path, 'utf-8');
+  // YAML frontmatter 를 먼저 판다. 예전에는 정규식으로 큰따옴표 image_prompt 만 긁었는데,
+  // YAML 은 같은 값을 작은따옴표·블록 스칼라로도 쓴다 — 그러면 정규식이 0건을 반환하고
+  // 게이트가 "프롬프트 없음"으로 조용히 지나갔다 (EP-2026-0100 실측).
+  const fm = text.match(/^---\n([\s\S]*?)\n---/);
+  if (fm) {
+    try {
+      const meta = parseYAML(fm[1]);
+      const scenes = Array.isArray(meta?.scenes) ? meta.scenes : [];
+      const parsed = scenes
+        .filter(scene => typeof scene?.image_prompt === 'string' && scene.image_prompt.trim())
+        .map((scene, i) => ({
+          sceneId: String(scene.scene_id ?? `#${i + 1}`),
+          prompt: scene.image_prompt,
+        }));
+      if (parsed.length > 0) return parsed;
+    } catch { /* 깨진 YAML 은 아래 정규식 폴백으로 */ }
+  }
   const ids = [...text.matchAll(/scene_id:\s*"?([\w-]+)"?/g)].map(m => m[1]);
   return [...text.matchAll(/image_prompt:\s*"((?:[^"\\]|\\.)*)"/gs)]
     .map((m, i) => ({ sceneId: ids[i] || `#${i + 1}`, prompt: m[1] }));
+}
+
+/**
+ * brief frontmatter 의 caricature_scene_limit_override (정책 §5.4) 를 읽는다.
+ * brief 가 없거나 파싱이 깨지면 false — 상한은 기본적으로 강제되는 쪽이 안전하다.
+ */
+function readCaricatureOverride(episodeDir) {
+  if (!episodeDir) return false;
+  const brief = join(episodeDir, '00_brief.md');
+  if (!existsSync(brief)) return false;
+  const fm = readFileSync(brief, 'utf-8').match(/^---\n([\s\S]*?)\n---/);
+  if (!fm) return false;
+  try {
+    return parseYAML(fm[1])?.caricature_scene_limit_override === true;
+  } catch { return false; }
 }
 
 function main() {
@@ -59,7 +92,9 @@ function main() {
     process.exit(2);
   }
 
-  const result = checkEpisodePrompts(scenes);
+  // 정책 §5.4 — 캐리커처 씬 수 상한 초과는 brief 의 운영자 토큰으로만 통과시킨다.
+  const caricatureOverride = readCaricatureOverride(values.episode);
+  const result = checkEpisodePrompts(scenes, { caricatureOverride });
 
   if (values.json) {
     console.log(JSON.stringify({ script: path, ...result }, null, 2));
