@@ -63,6 +63,26 @@ topic, write the reel script first, then render.
      다크 배경, 9:16. **저장 전 타이틀 철자를 확대(zoom) 검수** — AI 한글 렌더
      오타가 실제로 발생한다(실사례: "메타"→"머타"). 오타면 재생성.
    - Downloads 경유 시: `move_media.py --dest-dir <dir> --slug scene_001|45_intro`
+   - **인트로 프롬프트는 손으로 쓰지 마라 — 스크립트가 찍어 준다.** 타이틀에 기업명이
+     들어 있으면 그 회사를 **연관 인물 + CI** 로 표현하는 절이 자동으로 붙는다:
+     ```
+     node ../barrotube/scripts/automation/generate-intro.js \
+       --episode <EP-dir> --platform shorts --force --print-prompt
+     ```
+     찍힌 프롬프트를 ChatGPT 에 **그대로** 붙여넣는다. 요약해서 다시 쓰면
+     `[BRAND CONTEXT]` 블록이 사라지고 예전처럼 익명 마스코트 카드가 나온다
+     (실사례: EP-2026-0114 「…**엔비디아**가 7일 연속 하락한 이유」 → 인트로에 젠슨 황도
+     NVIDIA 로고도 없이 일반 하락 차트만 나갔다).
+   - **로고는 ChatGPT 에 그리게 하지 않는다.** 프롬프트가 한 모서리를 비워 두라고만 지시하고,
+     실제 CI 는 라이선스 SVG(SimpleIcons CC0)를 생성 **후에** 얹는다 — 한글이 "메타→머타" 로
+     깨진 것과 같은 실패가 로고에서는 더 크게 난다. 두 가지 마무리 경로가 있다:
+     | 브라우저에서 만든 것 | 저장 이름 | 마무리 명령 |
+     |---|---|---|
+     | 글자 없는 아트워크 (권장) | `45_intro.base.png` | 위 `generate-intro.js` 를 `--print-prompt` 없이 다시 실행 → 헤드라인·배지·CI 를 전부 로컬 합성 |
+     | 타이틀까지 그린 최종본 | `45_intro.png` | `node ../barrotube/scripts/automation/compose-intro-brand.js --episode <EP-dir> --platform shorts` → CI 만 얹는다 |
+   - 기업 ↔ 인물·로고 매핑 정본은 `barrotube/config/brand-entities.json` 이고, 인물 사용 여부는
+     채널 정책(`policies/public-figures-policy.md` §2)이 결정한다. **한국 기업은 기본이 CI 만**이다
+     (한국 CEO = REQUIRES_LEGAL_REVIEW). 새 기업은 코드가 아니라 그 JSON 에 추가한다.
    - 씬 프롬프트 소스는 `30_script.md`의 `image_prompt`. 나머지(엔진 선택·skip
      로직)는 barrotube 쪽 `config/image-engines.json`이 관장한다.
    - **브라우저 이미지 수락 기준:** 마시는 씬 동작의 주어이자 중앙의 주인공이어야 한다.
@@ -70,6 +90,20 @@ topic, write the reel script first, then render.
      정책·비즈니스 상황에만 쓰고, 행동·CTA 씬은 크림/네이비/오렌지 계열의 상황별
      착장을 쓴다. 전 씬 정장 반복은 거부한다. 방향성을 설명하는 씬·인트로·썸네일에는
      레버·다이얼·갈림길·스위치·화살표 중 하나의 **방향 트리거**를 중심 오브젝트로 둔다.
+   - **인물이 씬의 중심 키워드면 캐리커처가 화면에 보여야 한다.** 마스코트만 그려 놓고
+     넘어가면 시청자는 누구 얘긴지 모른다. 판정 정본은 채널 정책
+     `barrotube/workspace/channels/<channel>/policies/public-figures-policy.md` §2 —
+     외국 정치인·외국 CEO·외국 경제 인사·사망/역사 인물은 **CHARACTERIZE**,
+     한국 정치인·한국 CEO·한국 경제 인사·일반인은 **마스코트 유지**(운영자 승인 시에만 예외).
+     대본의 `image_prompt` 에 `WITH: a flat cartoon caricature of …` 절이 있으면 그 컷이다.
+     - 수락 기준: 캐리커처가 **마스코트와 비슷한 크기로 같은 라인아트**로 그려졌고,
+       식별 단서(헤어 실루엣·트레이드마크 의상/색·상징 props)로 누구인지 읽히는가.
+       실사풍·사진·얼굴 정밀 묘사·뿔/동물화가 보이면 **거부하고 다시 생성**한다(§4.2·§4.3).
+     - 씬 수 상한: 5씬 포맷 2컷 / 7씬 포맷 3컷 (썸네일·인트로는 별도 카운트, §5.1·§5.2).
+       `scripts/automation/lib/image-prompt-contract.js` 의 `CARICATURE` 가 이 값을 강제하고,
+       초과는 brief 의 `caricature_scene_limit_override: true` 로만 통과한다.
+     - ChatGPT 가 실명 인물 생성을 거부하면 **결제하지 말고** Grok Imagine 「이미지」로 내려간다
+       (`references/grok-image.md`). Grok 은 공인 캐리커처에 상대적으로 관대하다.
    - 기존 시리즈의 인트로·썸네일은 최근 완료 EP 최대 3개의 실제 이미지를 먼저 비교해
      캐릭터 크기, 헤드라인 위치, 배경 톤을 맞춘다. 일반 템플릿으로 임의 재해석하지 않는다.
    - **스틸 첨부(claude-in-chrome) — 정본은 「세션 폴더로 복사 후 `file_upload`」다.**
@@ -450,6 +484,24 @@ source reel has `60_qa_report.images.json: ok` and otherwise left as "human must
   finishes silently downloads the **previous** item again (duplicate bytes). Poll to
   completion first; for images verify it's the **last unique src AND portrait** for 9:16;
   md5 a batch afterward and re-grab duplicates.
+- **탭 그룹이 재생성되면 다운로드가 조용히 죽는다 (2026-08-18 실측).** MCP 탭 그룹이 사라져
+  `tabs_context_mcp{createIfEmpty:true}` 로 새로 만들면 **같은 대화가 두 Chrome 창에 열린다**.
+  새 창 쪽 탭에서 blob 다운로드를 돌리면 예외도 안 나고 Chrome History DB 에 레코드도 안 남는다
+  — 조용한 실패다. `document.hasFocus()` 는 `true` 로 나오니 그걸로 판정하지 마라.
+  **판정은 History DB 로 한다**: 다운로드 직후 `beye82/History` 의 downloads 최신 행이
+  갱신되지 않으면 잘못된 탭이다. 복구는 원래 탭 그룹의 탭 id 로 돌아가 같은 코드를 다시 도는 것
+  (실측: 같은 blob, 같은 코드, 탭만 바꿔 즉시 성공). 작업 중 남는 탭은 `tabs_close_mcp` 로
+  정리해 창을 하나로 유지하라.
+- **모달은 지연 폭발한다.** 이미지의 공유 버튼을 프로그램적으로 클릭하면 모달이 수십 초 뒤에
+  뜨기도 한다. 그 사이 composer 에 타이핑한 프롬프트는 통째로 유실된다(EP-0100 에서 2회).
+  공유 모달은 꼭 필요할 때만 열고, 열었으면 **다음 프롬프트 전에 닫혔는지 스크린샷으로 확인**하라.
+- **최후 폴백: ChatGPT 공유 링크는 쿠키 없이 원본을 준다.** 이미지의 `이 이미지 공유` →
+  `링크 복사` 로 얻은 `https://chatgpt.com/s/<id>` 를 curl 하면 HTML 안에
+  `backend-api/estuary/public_content/enc/<base64>` URL 들이 있고, base64 를 디코드해
+  `id` 에 `#` 가 없는 것이 **원본 파일**이다(변형본은 `#unfurl`·`#md`). 그 URL 은 인증 없이
+  200 을 주고 941x1672 원본 PNG 그대로 내려온다 — 다운로드 차단·TCC 를 전부 우회한다.
+  ⚠️ 다만 이건 **해당 메시지를 공개 링크로 만드는 행위**다. 운영자 동의 없이 상시 경로로
+  쓰지 말고, 위 visibility 문제를 먼저 확인하라.
 - **Chrome multi-download block.** Two+ quick downloads trip Chrome's "여러 파일 다운로드"
   block, then **all** downloads from that site are blocked for the session (even the UI
   button). Do **one at a time, ~2s apart.** If blocked, user must allow it in the address
@@ -501,6 +553,26 @@ source reel has `60_qa_report.images.json: ok` and otherwise left as "human must
   참조해야 한다. 그리고 첨부하는 순간 종횡비가 Auto 로 리셋되니 매 컷 9:16 을 다시 잡아라
   (메뉴는 좌표가 한 행씩 밀린다 — ref 로 클릭). 다운로드는 JPEG 이고 CORS 때문에
   programmatic blob 폴백이 0 바이트를 준다.
+- **Grok 컴포저는 `type` 을 먹는다 — `execCommand('insertText')` 를 써라 (2026-08-18 실측).**
+  스틸을 첨부한 직후 컴포저를 클릭하고 타이핑하면 **글자가 하나도 안 들어간다**. 두 번,
+  세 번 클릭해도 마찬가지이고 스크린샷에는 placeholder 만 남는다. 그대로 Enter 를 치면
+  프롬프트 없이 제출돼 엉뚱한 클립이 나온다. 컴포저는 `<textarea>` 가 아니라
+  `[contenteditable="true"]` 라서 그렇다. 확실한 입력은 이것이다:
+  ```js
+  const el = document.querySelector('[contenteditable="true"]');
+  el.focus();
+  document.execCommand('insertText', false, motionPrompt);
+  ```
+  넣은 뒤 `el.innerText.length` 로 확인하고, 제출은 `computer` 의 Enter 로 한다.
+- **진행률·다운로드도 JS 로 도는 편이 빠르다.** 좌표 클릭은 레이아웃이 바뀌면 빗나가고,
+  생성이 안 끝났는데 누르면 **직전 컷이 다시 받아진다**(같은 uuid 파일 → 중복 클립).
+  ```js
+  const m = document.body.innerText.match(/생성 중\s*(\d+)%/);
+  const dl = [...document.querySelectorAll('button')].find(b => /다운로드/.test(b.textContent||''));
+  if (!m && dl) dl.click();     // 퍼센트가 사라지고 다운로드 버튼이 생겼을 때만
+  ```
+  받은 파일은 **직전 컷의 uuid 와 다른지** 확인하고 이름을 붙여라 — Chrome History DB 의
+  최신 `grok-video-*` 행이 그대로면 아직 안 받아진 것이다.
 - **Grok Imagine: press Enter to submit.** Clicking the submit arrow intermittently drops
   the typed prompt (the composer clears, the image stays attached, nothing generates).
   Download lives in the post-details panel, not on the player.

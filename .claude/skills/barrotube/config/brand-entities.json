@@ -1,0 +1,222 @@
+{
+  "version": "1.0",
+  "_comment": "기업 → (연관 인물 + CI) 매핑 정본. lib/brand-entities.js 만 이 파일을 읽는다. 타이틀에 기업명이 들어오면 인트로·썸네일이 그 회사를 '연관 인물 캐리커처 + 실제 로고'로 표현하게 하는 것이 목적이다. 새 기업을 늘릴 때 코드는 건드리지 않는다 — 여기 항목만 추가한다.",
+  "_fields": {
+    "id": "workspace/assets/manifest.json 의 brand_logos[].id 와 같아야 로고가 붙는다.",
+    "aliases": "타이틀에서 찾을 표기. 한국어는 조사(엔비디아가/는/의)와 주가·발·그룹 접미사를 자동 허용하고, 메타버스·기아차처럼 다른 낱말로 이어지면 매칭하지 않는다. 긴 alias 가 먼저 매칭된다(삼성전자 > 삼성).",
+    "logo_id": "manifest.json brand_logos[].id. 그 항목의 status 가 downloaded 이고 파일이 실제로 있어야 CI 가 합성된다 — 없으면 조용히 CI 없이 간다(notes 로 보고).",
+    "figure_id": "policies/public-figures.md 의 시드 id. 그 allowlist 에 없거나 정책 §2 카테고리가 CHARACTERIZE 가 아니면 자동으로 CI-only 로 강등된다. 여기 값을 적어 두는 것은 '의도'의 기록이지 승인이 아니다.",
+    "accent": "브랜드 색 힌트. 배경 요소 하나에만 저채도로 쓰이고 채널 팔레트가 여전히 지배한다(정책 §4.4).",
+    "context_object": "인물을 못 쓸 때(CI-only) 회사를 대신 읽히게 할 사물 하나. 이미지 모델에게 넘기는 영어 명사구."
+  },
+  "companies": [
+    {
+      "id": "nvidia",
+      "name_ko": "엔비디아",
+      "name_en": "NVIDIA",
+      "aliases": ["엔비디아", "NVIDIA", "Nvidia", "NVDA"],
+      "logo_id": "nvidia",
+      "figure_id": "huang",
+      "accent": "#76B900",
+      "context_object": "a single large GPU board with a fan shroud"
+    },
+    {
+      "id": "tesla",
+      "name_ko": "테슬라",
+      "name_en": "Tesla",
+      "aliases": ["테슬라", "Tesla", "TSLA"],
+      "logo_id": "tesla",
+      "figure_id": "musk",
+      "accent": "#CC0000",
+      "context_object": "a single sleek electric car silhouette at a charging post"
+    },
+    {
+      "id": "spacex",
+      "name_ko": "스페이스X",
+      "name_en": "SpaceX",
+      "aliases": ["스페이스X", "스페이스엑스", "SpaceX"],
+      "logo_id": "spacex",
+      "figure_id": "musk",
+      "accent": "#005288",
+      "context_object": "a single slim rocket standing on a launch pad"
+    },
+    {
+      "id": "apple",
+      "name_ko": "애플",
+      "name_en": "Apple",
+      "aliases": ["애플", "Apple", "AAPL"],
+      "logo_id": "apple",
+      "figure_id": "tim-cook",
+      "_figure_note": "팀 쿡은 allowlist(public-figures.md §2) 미등록 — 승인 전까지 CI-only 로 나간다.",
+      "accent": "#A2AAAD",
+      "context_object": "a single minimalist smartphone standing upright"
+    },
+    {
+      "id": "meta",
+      "name_ko": "메타",
+      "name_en": "Meta",
+      "aliases": ["메타", "Meta", "페이스북", "Facebook", "META"],
+      "logo_id": "meta",
+      "figure_id": "zuckerberg",
+      "_figure_note": "저커버그는 allowlist 미등록 — 승인 전까지 CI-only.",
+      "accent": "#0866FF",
+      "context_object": "a single pair of lightweight AR glasses"
+    },
+    {
+      "id": "google",
+      "name_ko": "구글",
+      "name_en": "Google",
+      "aliases": ["구글", "Google", "알파벳", "Alphabet", "GOOGL"],
+      "logo_id": "google",
+      "figure_id": null,
+      "accent": "#4285F4",
+      "context_object": "a single search bar floating above a data centre rack"
+    },
+    {
+      "id": "microsoft",
+      "name_ko": "마이크로소프트",
+      "name_en": "Microsoft",
+      "aliases": ["마이크로소프트", "Microsoft", "MSFT"],
+      "logo_id": "microsoft",
+      "figure_id": null,
+      "_figure_note": "현 CEO 사티아 나델라 미등록. 창업자 게이츠를 대신 쓰지 않는다 — 회차 맥락이 어긋난다.",
+      "accent": "#00A4EF",
+      "context_object": "a single cloud server tower with glowing status lights"
+    },
+    {
+      "id": "amazon",
+      "name_ko": "아마존",
+      "name_en": "Amazon",
+      "aliases": ["아마존", "Amazon", "AMZN"],
+      "logo_id": "amazon",
+      "figure_id": null,
+      "accent": "#FF9900",
+      "context_object": "a single stacked delivery parcel on a conveyor"
+    },
+    {
+      "id": "openai",
+      "name_ko": "오픈AI",
+      "name_en": "OpenAI",
+      "aliases": ["오픈AI", "오픈에이아이", "OpenAI"],
+      "logo_id": "openai",
+      "figure_id": null,
+      "_figure_note": "샘 올트먼 미등록 (allowlist §2.2 신규 인물은 운영자 사전 승인 필요).",
+      "accent": "#412991",
+      "context_object": "a single glowing neural-network node cluster"
+    },
+    {
+      "id": "intel",
+      "name_ko": "인텔",
+      "name_en": "Intel",
+      "aliases": ["인텔", "Intel", "INTC"],
+      "logo_id": "intel",
+      "figure_id": null,
+      "accent": "#0068B5",
+      "context_object": "a single square CPU die on a wafer"
+    },
+    {
+      "id": "tsmc",
+      "name_ko": "TSMC",
+      "name_en": "TSMC",
+      "aliases": ["TSMC", "티에스엠씨"],
+      "logo_id": "tsmc",
+      "figure_id": null,
+      "accent": "#E4002B",
+      "context_object": "a single silicon wafer held in a robotic arm"
+    },
+    {
+      "id": "asml",
+      "name_ko": "ASML",
+      "name_en": "ASML",
+      "aliases": ["ASML"],
+      "logo_id": "asml",
+      "figure_id": null,
+      "accent": "#1E4EA1",
+      "context_object": "a single EUV lithography machine seen head-on"
+    },
+    {
+      "id": "alibaba",
+      "name_ko": "알리바바",
+      "name_en": "Alibaba",
+      "aliases": ["알리바바", "Alibaba", "BABA"],
+      "logo_id": "alibaba",
+      "figure_id": null,
+      "accent": "#FF6A00",
+      "context_object": "a single shipping crate on a cross-border trade lane"
+    },
+    {
+      "id": "samsung",
+      "name_ko": "삼성전자",
+      "name_en": "Samsung Electronics",
+      "aliases": ["삼성전자", "삼성", "Samsung", "005930"],
+      "logo_id": "samsung",
+      "figure_id": "lee-jae-yong",
+      "_figure_note": "한국 CEO — 정책 §2 REQUIRES_LEGAL_REVIEW. allowlist §5.2 가 비어 있어 기본은 CI-only 이고, 시드를 넣더라도 brief 의 legal_review_approved_by 없이는 자동 강등된다.",
+      "accent": "#1428A0",
+      "context_object": "a single stack of memory chips on a wafer tray"
+    },
+    {
+      "id": "skhynix",
+      "name_ko": "SK하이닉스",
+      "name_en": "SK hynix",
+      "aliases": ["SK하이닉스", "에스케이하이닉스", "하이닉스", "SK hynix", "Hynix", "000660"],
+      "logo_id": "skhynix",
+      "figure_id": null,
+      "accent": "#EA002C",
+      "context_object": "a single HBM memory stack rising in layers"
+    },
+    {
+      "id": "hyundai",
+      "name_ko": "현대차",
+      "name_en": "Hyundai Motor",
+      "aliases": ["현대자동차", "현대차", "Hyundai", "005380"],
+      "_alias_note": "'현대' 단독은 뺐다 — 현대건설·현대백화점 등 다른 상장사와 섞인다.",
+      "logo_id": "hyundai",
+      "figure_id": "chung-euisun",
+      "_figure_note": "한국 CEO — 위 삼성과 동일하게 기본 CI-only.",
+      "accent": "#002C5F",
+      "context_object": "a single car body on an assembly line"
+    },
+    {
+      "id": "kia",
+      "name_ko": "기아",
+      "name_en": "Kia",
+      "aliases": ["기아자동차", "기아차", "기아", "Kia", "000270"],
+      "logo_id": "kia",
+      "figure_id": null,
+      "accent": "#05141F",
+      "context_object": "a single compact SUV silhouette"
+    },
+    {
+      "id": "lg",
+      "name_ko": "LG전자",
+      "name_en": "LG Electronics",
+      "aliases": ["LG전자", "엘지전자", "LG", "066570"],
+      "_alias_note": "'LG' 단독은 뒤에 한글이 이어지면(LG에너지솔루션 등) 매칭되지 않는다.",
+      "logo_id": "lg",
+      "figure_id": null,
+      "accent": "#A50034",
+      "context_object": "a single large flat display panel"
+    },
+    {
+      "id": "naver",
+      "name_ko": "네이버",
+      "name_en": "NAVER",
+      "aliases": ["네이버", "NAVER", "Naver", "035420"],
+      "logo_id": "naver",
+      "figure_id": null,
+      "accent": "#03C75A",
+      "context_object": "a single search bar with a blinking cursor"
+    },
+    {
+      "id": "kakao",
+      "name_ko": "카카오",
+      "name_en": "Kakao",
+      "aliases": ["카카오", "Kakao", "035720"],
+      "logo_id": "kakao",
+      "figure_id": null,
+      "accent": "#FEE500",
+      "context_object": "a single rounded chat bubble"
+    }
+  ]
+}

@@ -128,7 +128,12 @@ async function loadFeaturedPersonLayer(spec) {
   return { input: composed, top: top - 8, left: left - 8 };
 }
 
-async function loadBrandLogoLayers(spec) {
+/**
+ * 브랜드 로고 레이어. 캔버스 크기를 받는 이유는 인트로가 항상 1080x1920 이 아니기 때문이다 —
+ * media-render 로 만든 아트워크나 long(16:9) 인트로 위에도 같은 코드로 얹는다.
+ * 인자를 안 주면 기존 썸네일 동작 그대로다.
+ */
+export async function loadBrandLogoLayers(spec, { canvasW = CANVAS_W, canvasH = CANVAS_H } = {}) {
   if (!Array.isArray(spec.brand_logos) || spec.brand_logos.length === 0) return [];
   const manifest = loadManifest();
   const layers = [];
@@ -145,9 +150,9 @@ async function loadBrandLogoLayers(spec) {
     else svg = svg.replace(/width="\d+"/, `width="${W}"`).replace(/height="\d+"/, `height="${W}"`);
     const POS_MAP = {
       'top-left': { top: 80, left: 80 },
-      'top-right': { top: 80, left: CANVAS_W - W - 80 },
-      'bottom-left': { top: CANVAS_H - W - 200, left: 80 },
-      'bottom-right': { top: CANVAS_H - W - 200, left: CANVAS_W - W - 80 }
+      'top-right': { top: 80, left: canvasW - W - 80 },
+      'bottom-left': { top: canvasH - W - 200, left: 80 },
+      'bottom-right': { top: canvasH - W - 200, left: canvasW - W - 80 }
     };
     let pos = POS_MAP[logoSpec.position] || POS_MAP['top-right'];
     // 다중 로고 stack — top-right 자동 우측 오프셋
@@ -185,6 +190,30 @@ export function fitHeadline(text, sizes = [130, 112, 96]) {
   const lines = [parts.slice(0, best).join(' '), parts.slice(best).join(' ')];
   const longest = Math.max(...lines.map(l => l.length));
   return { lines, fontSize: Math.min(fontSize, Math.floor(usable / Math.max(1, longest))) };
+}
+
+/**
+ * 이미 완성된 이미지 위에 브랜드 CI 만 얹는다. 헤드라인·배지는 건드리지 않는다.
+ *
+ * media-render 경로(브라우저 ChatGPT)는 한글 타이틀까지 그려서 내려온다. 거기에 필요한 건
+ * 로고 한 장뿐인데, composeThumbnail 을 쓰면 헤드라인이 두 번 얹힌다. 그래서 진입점을 나눈다.
+ */
+export async function overlayBrandLogos({ baseImagePath, logoSpecs, outPath }) {
+  if (!existsSync(baseImagePath)) throw new Error(`base image not found: ${baseImagePath}`);
+  // sharp 는 같은 파일을 읽으면서 쓰면 원본이 잘린다. 덮어쓰기는 호출자가 임시 파일로 처리한다.
+  if (resolve(baseImagePath) === resolve(outPath)) {
+    throw new Error(`overlayBrandLogos: baseImagePath 와 outPath 가 같다 (${outPath})`);
+  }
+  if (!Array.isArray(logoSpecs) || logoSpecs.length === 0) {
+    return { outPath, layers: 0, skipped: true };
+  }
+  const meta = await sharp(baseImagePath).metadata();
+  const canvasW = meta.width || CANVAS_W;
+  const canvasH = meta.height || CANVAS_H;
+  const layers = await loadBrandLogoLayers({ brand_logos: logoSpecs }, { canvasW, canvasH });
+  if (!layers.length) return { outPath, layers: 0, skipped: true };
+  await sharp(baseImagePath).composite(layers).png().toFile(outPath);
+  return { outPath, layers: layers.length, skipped: false };
 }
 
 export async function composeThumbnail({ baseImagePath, spec, outPath }) {

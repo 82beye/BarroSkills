@@ -28,7 +28,7 @@
  */
 
 import { readFileSync, existsSync, statSync, writeFileSync } from 'node:fs';
-import { join, resolve, dirname, basename } from 'node:path';
+import { join, resolve, dirname, basename, isAbsolute } from 'node:path';
 import { parse as parseYAML } from 'yaml';
 import sharp from 'sharp';
 import {
@@ -41,6 +41,7 @@ import {
 import {
   resolveFiguresForBrief,
 } from './lib/public-figures.js';
+import { resolveBrandsForTitle } from './lib/brand-entities.js';
 import { composeThumbnail } from './lib/thumbnail-composer.js';
 // 인트로 카드와 **같은 파생 규칙**을 쓴다. 썸네일만 다른 문안 로직을 두면 두 카피가
 // 갈라지고, 갈라지는 순간 어느 쪽이 정본인지 아무도 모르게 된다.
@@ -168,7 +169,18 @@ function aspectForFormat(format) {
 // gpt-image-1 지원 사이즈는 1024x1536(세로)·1536x1024(가로)·1024x1024 뿐이라
 // 정확한 16:9/9:16이 아닌 근사 비율(가로 3:2 / 세로 2:3)이다. v2는 composer가
 // 1080×1920 cover로 재정렬하므로 무관하고, v1 직출력은 약간의 크롭이 생길 수 있다.
-async function renderThumbnailImage({ useOpenAI, prompt, outPath, aspectRatio, episodeId, note }) {
+async function renderThumbnailImage({ engine, useOpenAI, prompt, outPath, aspectRatio, episodeId, note, channel }) {
+  // codex: 내장 imagegen. ChatGPT 계정 인증이라 OPENAI_API_KEY 도, 브라우저도 필요 없다.
+  // Gemini 가 429(prepayment credits) 로 막혀 씬 스틸 폴백으로 새던 경로를 대체한다.
+  if (engine === 'codex') {
+    try {
+      const { generateImageCodex } = await import('./lib/image-engines/codex-imagegen.js');
+      generateImageCodex({ prompt, outPath, channel: channel || null });
+      return 'codex-imagegen';
+    } catch (e) {
+      console.warn(`   ⚠ codex imagegen 썸네일 실패 (${String(e.message).slice(0, 120)}) → Gemini 폴백`);
+    }
+  }
   if (useOpenAI) {
     try {
       const { generateImageOpenAI } = await import('./lib/image-engines/openai-gpt-image.js');
@@ -320,7 +332,7 @@ async function main() {
   }
 
   if (!opts.episode) {
-    console.error('Usage: generate-thumbnail.js --episode <dir> [--keyword "..."] [--palette NAME] [--engine gemini|openai] [--sentiment-llm] [--force]');
+    console.error('Usage: generate-thumbnail.js --episode <dir> [--keyword "..."] [--palette NAME] [--base <png>] [--engine gemini|openai] [--sentiment-llm] [--force]');
     process.exit(1);
   }
 
@@ -367,11 +379,28 @@ async function main() {
   const pfInfo = resolveFiguresForBrief(channel, briefFM, detectionText);
   // 썸네일은 1명 캐리커처만 사용 (CHARACTERIZE 우선, source=brief 우선)
   const charFigures = pfInfo.resolved.filter(r => r.treatment === 'CHARACTERIZE');
-  const primaryFigure =
+  let primaryFigure =
     charFigures.find(r => r.source === 'brief')
     || charFigures[0]
     || null;
   const blockedFigures = pfInfo.resolved.filter(r => r.blockReason);
+
+  // 타이틀이 사람이 아니라 **회사**를 말하는 경우가 흔하다 — 「…엔비디아가 7일 연속 하락한
+  // 이유」에는 '젠슨 황' 이라는 글자가 없어서 allowlist 가 아무도 못 찾는다. 기업 → 연관 인물
+  // 매핑(config/brand-entities.json)으로 그 빈칸을 메운다. 정책 게이트는 그대로 통과해야 한다.
+  // 썸네일은 시리즈 배지를 안 쓰고 헤드라인이 y=240 부터라 우상단이 비어 있다.
+  const brands = resolveBrandsForTitle(channel, briefFM, topic, { logoPosition: 'top-right' });
+  if (brands.brands.length) {
+    console.log(`   🏢 브랜드 감지: ${brands.brands.map(b => `${b.company.name_ko}(${b.mode === 'PERSON_AND_CI' ? '인물+CI' : 'CI만'})`).join(', ')}`);
+    for (const n of brands.notes) console.log(`      ↳ ${n}`);
+  }
+  if (!primaryFigure && brands.primary?.mode === 'PERSON_AND_CI') {
+    const b = brands.primary;
+    primaryFigure = {
+      id: b.figure.id, figure: b.figure, treatment: 'CHARACTERIZE',
+      sensitivity: b.sensitivity, blockReason: null, source: `brand:${b.company.id}`,
+    };
+  }
 
   // 시리즈 thumbnail_specs 자동 로드 (paperclip/config/series.json)
   // 우선순위: CLI override (--keyword/--palette) > series.json thumbnail_specs > 자동 fallback
@@ -433,7 +462,8 @@ async function main() {
     background_style: briefThumb.background_style || specSeriesEntry?.background_style || 'dark',
     mascot_emotion: briefThumb.mascot_emotion || specSeriesEntry?.mascot_emotion || null,
     featured_person: briefThumb.featured_person || specSeriesEntry?.featured_person || null,
-    brand_logos: briefThumb.brand_logos || specSeriesEntry?.brand_logos || null,
+    brand_logos: briefThumb.brand_logos || specSeriesEntry?.brand_logos
+      || (brands.logoSpecs.length ? brands.logoSpecs : null),
   };
 
   // headline 이 없으면 이미지 모델이 **후킹 문구에서 숫자를 직접 골라 직접 그린다**.
@@ -515,16 +545,32 @@ async function main() {
     }
   }
   console.log(`   Format: ${format} → aspect=${aspectRatio}`);
-  console.log(`   Engine: ${useOpenAIThumb ? 'openai-gpt-image-1 (Gemini 폴백)' : 'gemini'} (source=${thumbEngine.source})`);
+  console.log(`   Engine: ${thumbEngine.engine === 'codex' ? 'codex-imagegen (Gemini 폴백)'
+    : useOpenAIThumb ? 'openai-gpt-image-1 (Gemini 폴백)' : 'gemini'} (source=${thumbEngine.source})`);
   console.log(`   Out: ${outPath}`);
 
   try {
     if (isV2) {
       let baseOutPath = join(baseDir, '47_thumbnail.base.png');
       let baseEngine;
-      try {
+      // --base <path>: 운영자가 배경 그림을 직접 고른다. 폴백의 role 우선순위
+      // (insight → hook)가 그 회차의 핵심 컷과 어긋날 때 쓴다 (예: CI·인물이
+      // hook 컷에만 있는 회차). 지정하면 이미지 생성 자체를 건너뛴다.
+      const baseOverride = typeof opts.base === 'string'
+        ? (isAbsolute(opts.base) ? opts.base : join(baseDir, opts.base))
+        : null;
+      if (baseOverride && !existsSync(baseOverride)) {
+        console.error(`❌ --base 파일이 없습니다: ${baseOverride}`);
+        process.exit(1);
+      }
+      if (baseOverride) {
+        baseOutPath = baseOverride;
+        baseEngine = `operator-base(${basename(baseOverride)})`;
+      } else try {
         baseEngine = await renderThumbnailImage({
+          engine: thumbEngine.engine,
           useOpenAI: useOpenAIThumb,
+          channel,
           prompt,
           outPath: baseOutPath,
           aspectRatio,
@@ -547,7 +593,9 @@ async function main() {
       console.log(`✅ Thumbnail (v2 composer, ${result.layers} layers): ${outPath}`);
     } else {
       const engUsed = await renderThumbnailImage({
+        engine: thumbEngine.engine,
         useOpenAI: useOpenAIThumb,
+        channel,
         prompt,
         outPath,
         aspectRatio,

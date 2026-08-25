@@ -138,6 +138,15 @@ export PAPERCLIP_DISABLED=1
    - **인트로 카드 (ChatGPT): `45_intro.png`** — 에피소드 타이틀 대형 골드 타이포 +
      BarroTube 배지 + 다크 시네마틱 배경, 9:16. **저장 전 타이틀 철자를 확대 검수**
      (AI 한글 렌더 오타 방지 — 실사례: 메타→머타). S7 렌더가 2초 무음 인트로로 prepend.
+   - **타이틀에 기업명이 있으면 인트로·썸네일이 그 회사를 자동으로 표현한다** —
+     연관 인물은 캐리커처로 그리고(정책 게이트 통과 시), CI 로고는 라이선스 SVG 를 생성 후
+     합성한다. 프롬프트를 손으로 쓰지 말고 스크립트가 찍어 주는 것을 쓴다:
+     `node scripts/automation/generate-intro.js --episode <dir> --platform shorts --force --print-prompt`
+     매핑 정본은 `config/brand-entities.json`, 인물 허용 여부는
+     `workspace/channels/<channel>/policies/public-figures-policy.md` §2 가 결정한다
+     (**한국 기업은 기본이 CI 만** — 한국 CEO 는 REQUIRES_LEGAL_REVIEW).
+     브라우저로 만든 최종본에 CI 만 얹으려면
+     `node scripts/automation/compose-intro-brand.js --episode <dir> --platform shorts`.
    - 씬 프롬프트는 `30_script.md`의 `image_prompt` 사용. 절차는
      `barrotube-media-render` 스킬 (`references/chatgpt-image.md`, `grok-video.md`) 준수.
 
@@ -274,7 +283,12 @@ bash $BARROTUBE_HOME/lib/install-cron.sh uninstall us-close
    MED라도 `부정확` 판정이거나 `grounded: false`인 수치·최상급 표현은 TTS·제목·인트로·
    썸네일에 확대 사용하지 않는다. 중립 표현으로 고친 뒤 S6 전에 다시 검증한다.
 6. **QA FAIL**: score < 60 또는 blocker > 0이면 S11 차단. 운영자 명시 승인 필요.
-7. **Board 승인 게이트 (S10)**: AskUserQuestion 또는 `/approve` 명령으로만 통과. 자동 승인 금지.
+7. **Board 승인 게이트 (S10)**: 기본은 AskUserQuestion 또는 `/approve` 명령으로만 통과.
+   단 `config/autonomy-pause.json` 의 `guards.auto_approve_on_qa_pass=true` 이면 auto-pipeline 이
+   **Phase 9 QA PASS(score≥60, blocker=0)를 근거로** S10 토큰을 자동 발급한다
+   (운영자 명시 요청, 2026-08-24 활성화). 이때도 Phase 11 텔레그램 거부창 30분과
+   private+publishAt 예약이 남아 공개 전까지 되돌릴 수 있다. 수동 승인으로 복귀하려면 false.
+   **이 플래그와 무관하게, 수동 실행(`/barrotube`)에서는 자동 승인하지 않는다.**
 8. **Paperclip 비활성화**: `PAPERCLIP_DISABLED=1` 환경 변수 필수. 미설정 시 register-paperclip-issue.js가 외부 호출 시도 → 시간 낭비.
 9. **채널 활성화 게이트**: `channel.yaml`의 상태가 `active`이고 migration conflict가 모두 해소된 채널만 제작·발행 액션을 실행할 수 있다. `needs_review` 채널은 상태·자산·설정 조회만 허용한다.
 10. **승인 무결성**: S10 승인은 영상·metadata·QA·선택 썸네일과 채널 revision·YouTube 목적지·최종 공개 설정에 결속된다. 승인 후 어느 값이든 바뀌면 새 승인을 발급한다.

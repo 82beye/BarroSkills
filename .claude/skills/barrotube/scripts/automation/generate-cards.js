@@ -29,6 +29,8 @@ import { fileURLToPath } from 'node:url';
 import { parse as parseYAML } from 'yaml';
 
 import { buildCardComposition, loadCardConfig } from './lib/card-composition.js';
+import { resolveBrandsForTitle } from './lib/brand-entities.js';
+import { overlayBrandLogos } from './lib/thumbnail-composer.js';
 import { resolveGsap, resolveHyperframes, resolveAssetsDir, resolveScript } from './generate-motion.js';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -177,6 +179,45 @@ function renderCard({ hfBin, gsapPath, cfg, variant, bgPath, outPath }) {
   }
 }
 
+/**
+ * 타이틀에 기업명이 있으면 그 회사의 CI 를 인트로 카드 우상단에 얹는다.
+ *
+ * 카드 경로는 씬 스틸을 배경으로 쓰기 때문에 아트워크 단계에 개입할 자리가 없다 — 로고를
+ * 붙일 수 있는 표면이 여기뿐이다. 로고는 라이선스 SVG(SimpleIcons CC0)를 그대로 합성한다.
+ * 실패해도 카드 자체는 이미 완성돼 있으므로 경고만 남기고 파이프라인을 세우지 않는다.
+ */
+async function stampIntroBrand({ outPath, briefFM, meta, headline }) {
+  const channel = meta?.channel_id || briefFM?.channel_id;
+  const title = [headline, briefFM?.topic, meta?.topic].filter(Boolean).join(' \n ');
+  if (!channel || !title) return;
+  let brands;
+  try {
+    // 카드는 타이틀 블록이 화면 30% 지점이라 위쪽이 비어 있고, 스크림도 위가 가장 짙다.
+    brands = resolveBrandsForTitle(channel, briefFM || {}, title, { logoPosition: 'top-right' });
+  } catch (e) {
+    console.warn(`   ⚠ 브랜드 해석 실패 (${String(e.message).slice(0, 80)}) — CI 없이 간다`);
+    return;
+  }
+  if (!brands.logoSpecs.length) {
+    if (brands.brands.length) {
+      console.log(`   🏢 브랜드 감지: ${brands.brands.map(b => b.company.name_ko).join(', ')} — 로고 자산 없음, CI 생략`);
+      for (const n of brands.notes) console.log(`      ↳ ${n}`);
+    }
+    return;
+  }
+  const tmp = `${outPath}.brand.tmp.png`;
+  try {
+    const r = await overlayBrandLogos({ baseImagePath: outPath, logoSpecs: brands.logoSpecs, outPath: tmp });
+    if (r.skipped) { if (existsSync(tmp)) rmSync(tmp, { force: true }); return; }
+    copyFileSync(tmp, outPath);
+    rmSync(tmp, { force: true });
+    console.log(`   🏢 CI ${r.layers}개 합성: ${brands.logoSpecs.map(l => l.id).join(', ')} (SimpleIcons CC0)`);
+  } catch (e) {
+    if (existsSync(tmp)) rmSync(tmp, { force: true });
+    console.warn(`   ⚠ CI 합성 실패 (${String(e.message).slice(0, 100)}) — 카드는 그대로 둔다`);
+  }
+}
+
 export async function generateCards({ episodeDir, platform = null, kind = 'both', force = false }) {
   const hfBin = resolveHyperframes();
   const gsapPath = resolveGsap();
@@ -239,6 +280,7 @@ export async function generateCards({ episodeDir, platform = null, kind = 'both'
     if (!j.variant.title) throw new Error(`${j.name} 문안을 만들 수 없다 — brief.thumbnail 또는 대본 subtitle_text 확인`);
     const r = renderCard({ hfBin, gsapPath, cfg: j.cfg, variant: j.variant, bgPath: j.bg, outPath: j.out });
     console.log(`  ✅ ${j.name}: "${j.variant.title.replace(/\|/g, ' / ').replace(/\*\*/g, '')}" [${r.font}]`);
+    if (j.name === 'intro') await stampIntroBrand({ outPath: j.out, briefFM, meta, headline: intro.title });
     results.push({ ...j, skipped: false });
   }
   return results;

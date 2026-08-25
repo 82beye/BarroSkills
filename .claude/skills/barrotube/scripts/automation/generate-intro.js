@@ -36,6 +36,7 @@ import {
 import { composeThumbnail } from './lib/thumbnail-composer.js';
 import { generateImageOpenAI } from './lib/image-engines/openai-gpt-image.js';
 import { resolveImageEngine } from './lib/image-engine-config.js';
+import { resolveBrandsForTitle } from './lib/brand-entities.js';
 import { getSecret } from './config-loader.js';
 
 // 스킬 루트 기준 경로. resolve('config/…') 는 CWD 의존이라
@@ -122,7 +123,7 @@ const INTRO_EMOTION_HINTS = {
   annoyed: 'a mildly annoyed expression with squinted eyes and one raised palm',
 };
 
-function buildIntroPrompt({ channel, format, seriesName, episodeN, episodeM, standalone, noTextMode = false, topic = '', visualHint = '', mascotEmotion = 'confident' }) {
+function buildIntroPrompt({ channel, format, seriesName, episodeN, episodeM, standalone, noTextMode = false, topic = '', visualHint = '', mascotEmotion = 'confident', brandBlock = null }) {
   const dna = loadCharacterDna(channel);
 
   if (noTextMode) {
@@ -152,7 +153,9 @@ Layout safety zones: keep the TOP 20% of the frame relatively clear (a headline 
 TEXT POLICY: absolutely NO text, NO Korean characters, NO English words, NO numbers, NO logos, NO watermarks, NO signatures anywhere in the image itself. All text and badges are composited in a separate post-processing step.
 `.trim();
 
-    return [dna, v2Spec].filter(Boolean).join('\n\n');
+    // 브랜드 블록은 DNA 보다 **위**에 둔다. 썸네일에서 PRIMARY SUBJECT 를 맨 앞에 올려야
+    // 모델이 인물을 장식이 아니라 배치 대상으로 다룬다는 걸 이미 확인했다(generate-thumbnail.js).
+    return [brandBlock, dna, v2Spec].filter(Boolean).join('\n\n');
   }
 
   const framing = resolveStylePrefix(channel, format);
@@ -273,6 +276,23 @@ async function main() {
     // 채널 이름이 아니다 — 그대로 쓰면 영상에만 다른 브랜드가 찍힌다.
     series_badge_text: isStandalone ? channelDisplayName(channel) : `${seriesName} ${seriesN}/${seriesM}`,
   };
+
+  // 타이틀에 기업명이 있으면 그 회사를 "연관 인물 + CI" 로 표현한다.
+  // 인물은 모델이 그리고(정책 게이트 통과 시), CI 는 라이선스 SVG 를 생성 후 합성한다 —
+  // 로고를 모델에게 그리게 하면 카드의 한글 오타와 같은 방식으로 깨진다.
+  const introTitle = [v2spec.headline_text, briefFM.topic].filter(Boolean).join(' \n ');
+  // 인트로 합성기(thumbnail-composer, is_intro)는 헤드라인을 화면 맨 위(y=80)부터 그린다.
+  // 로고를 top-right 에 두면 그 글자 위에 얹힌다 — 그래서 인트로만 아래 모서리를 쓴다.
+  const brands = resolveBrandsForTitle(channel, briefFM, introTitle, { logoPosition: 'bottom-right' });
+  if (brands.brands.length) {
+    const summary = brands.brands
+      .map(b => `${b.company.name_ko}(${b.mode === 'PERSON_AND_CI' ? `인물:${b.figure.display_name_ko}+CI` : 'CI만'}${b.logo ? '' : ', 로고없음'})`)
+      .join(', ');
+    console.log(`   🏢 브랜드 감지: ${summary}`);
+    for (const n of brands.notes) console.log(`      ↳ ${n}`);
+  }
+  if (brands.logoSpecs.length) v2spec.brand_logos = brands.logoSpecs;
+
   const isV2 = !!v2spec.headline_text;
 
   const outPath = join(baseDir, '45_intro.png');
@@ -300,6 +320,7 @@ async function main() {
     topic: briefFM.topic || '',
     visualHint,
     mascotEmotion: introMascotEmotion,
+    brandBlock: brands.promptBlock,
   });
 
   const aspectRatio = aspectForFormat(format);
@@ -319,20 +340,11 @@ async function main() {
   // 이미지 엔진: 전역 resolver(SSOT)로 통일. --engine / BT_INTRO_ENGINE / BT_INTRO_FORCE_GEMINI(legacy)
   // / BT_IMAGE_ENGINE / config/image-engines.json 순으로 해석. (OpenAI는 isV2 v10 경로에서만 의미)
   const introEngine = resolveImageEngine('S6d_intro', { cliOverride: opts.engine });
-  // media-render 모드 (2026-07-02): 인트로를 barrotube-media-render 스킬(브라우저 ChatGPT,
-  // PD 수행)로 사전 생성. API 호출 없음 — 여기 도달했다는 것은 45_intro.png 부재(또는 --force).
-  // PD가 텍스트 오타를 눈으로 검수한 뒤 저장하는 것이 이 모드의 핵심 (한글 렌더 오타 방지).
-  if (introEngine.engine === 'media-render') {
-    console.error(`\n❌ S6d Intro (media-render 기본 모드): ${outPath} 이(가) 없거나 재생성(--force)이 요청되었습니다.`);
-    console.error(`   → PD가 barrotube-media-render 스킬(브라우저 ChatGPT)로 인트로 카드를 생성해 위 경로에 저장한 뒤 재실행하세요.`);
-    console.error(`   → 프롬프트: 에피소드 타이틀 텍스트를 대형 골드 타이포로 + 채널 배지(BarroTube) + 다크 시네마틱 배경, 9:16.`);
-    console.error(`   → 저장 후 반드시 타이틀 철자를 확대 검수 (AI 한글 렌더 오타 방지 — 예: 메타→머타).`);
-    console.error(`   → 레거시 API 경로: --engine openai|gemini 또는 BT_INTRO_ENGINE 설정.`);
-    process.exit(3);
-  }
   const useOpenAI = introEngine.engine === 'openai';
   if (introEngine.downgraded) console.warn('   ⚠ OpenAI 요청됐으나 OPENAI_API_KEY 없음 → Gemini 사용');
-  console.log(`   Engine: ${useOpenAI ? 'openai-gpt-image-1 (v10)' : 'gemini'} (source=${introEngine.source})`);
+  console.log(`   Engine: ${introEngine.engine === 'media-render' ? 'media-render (브라우저 ChatGPT)'
+    : introEngine.engine === 'codex' ? 'codex-imagegen'
+    : useOpenAI ? 'openai-gpt-image-1 (v10)' : 'gemini'} (source=${introEngine.source})`);
 
   // Debug: --print-prompt 또는 BT_PRINT_PROMPT=1 시 prompt만 출력하고 종료 (image gen skip).
   if (opts['print-prompt'] || process.env.BT_PRINT_PROMPT === '1') {
@@ -340,9 +352,47 @@ async function main() {
     console.log(prompt);
     console.log('===== END PROMPT =====');
     console.log(`\n📏 prompt length: ${prompt.length} chars`);
-    console.log(`🎨 engine: ${useOpenAI ? 'openai-gpt-image-1' : 'gemini-3.1-flash-image-preview'}`);
+    console.log(`🎨 engine: ${introEngine.engine} (source=${introEngine.source})`);
     console.log(`📐 v2spec: ${JSON.stringify(v2spec, null, 2)}`);
     process.exit(0);
+  }
+
+  // media-render 모드 (2026-07-02): 인트로를 barrotube-media-render 스킬(브라우저 ChatGPT,
+  // PD 수행)로 사전 생성. API 호출 없음 — 여기 도달했다는 것은 45_intro.png 부재(또는 --force).
+  // PD가 텍스트 오타를 눈으로 검수한 뒤 저장하는 것이 이 모드의 핵심 (한글 렌더 오타 방지).
+  //
+  // 2026-08-25: 프롬프트를 **여기서 그대로 찍는다**. 예전에는 "타이틀을 골드 타이포로" 같은
+  // 요약만 안내해서, 타이틀에 기업명이 있어도 PD가 매번 손으로 다시 쓸 수밖에 없었다.
+  // 브랜드 블록(연관 인물 + CI 자리)은 이 프롬프트에만 들어 있으므로 요약으로 대체하면 사라진다.
+  if (introEngine.engine === 'media-render') {
+    // 브라우저에서 만든 아트워크를 45_intro.base.png 로 저장해 뒀다면 여기서 마무리한다.
+    // 헤드라인·배지·CI 로고를 전부 로컬에서 얹으므로 한글 오타도 로고 왜곡도 나올 수 없다.
+    const mrBase = join(baseDir, '45_intro.base.png');
+    if (isV2 && existsSync(mrBase)) {
+      const result = await composeThumbnail({ baseImagePath: mrBase, spec: v2spec, outPath });
+      console.log(`✅ Intro (media-render 아트워크 + 로컬 합성, ${result.layers} layers): ${outPath}`);
+      if (v2spec.brand_logos) console.log(`   🏢 CI: ${v2spec.brand_logos.map(l => l.id).join(', ')} (SimpleIcons CC0)`);
+      process.exit(0);
+    }
+    console.error(`\n❌ S6d Intro (media-render 기본 모드): ${outPath} 이(가) 없거나 재생성(--force)이 요청되었습니다.`);
+    console.error(`   → PD가 barrotube-media-render 스킬(브라우저 ChatGPT)로 아래 프롬프트의 아트워크를 만들어`);
+    console.error(`      ${join(baseDir, '45_intro.base.png')} 로 저장한 뒤 이 명령을 다시 실행하면`);
+    console.error(`      헤드라인·배지·CI 를 로컬에서 얹어 ${outPath} 를 완성한다.`);
+    console.error(`   → 브라우저에서 타이틀까지 그려 최종본을 만든 경우에는 그대로 위 경로에 저장하면 된다.`);
+    console.error(`   → 저장 후 반드시 타이틀 철자를 확대 검수 (AI 한글 렌더 오타 방지 — 예: 메타→머타).`);
+    console.error(`   → 레거시 API 경로: --engine openai|gemini 또는 BT_INTRO_ENGINE 설정.`);
+    if (brands.brands.length) {
+      console.error(`   → 브랜드 감지됨 — 아래 프롬프트에 [BRAND CONTEXT] 가 이미 들어 있다. 그대로 붙여넣어라.`);
+      if (brands.logoSpecs.length) {
+        console.error(`   → CI 로고(${brands.logoSpecs.map(l => l.id).join(', ')})는 ChatGPT 에 그리게 하지 말 것.`);
+        console.error(`      최종본(타이틀 포함)을 45_intro.png 로 직접 저장했다면 CI 만 따로 얹는다:`);
+        console.error(`      node scripts/automation/compose-intro-brand.js --episode ${opts.episode}${opts.platform ? ` --platform ${opts.platform}` : ''}`);
+      }
+    }
+    console.error('\n===== ChatGPT PROMPT (copy as-is) =====');
+    console.error(prompt);
+    console.error('===== END PROMPT =====\n');
+    process.exit(3);
   }
 
   try {
@@ -359,6 +409,14 @@ async function main() {
         const introHeadline = resolveIntroHeadline({ briefThumb, topic: briefFM.topic || '' });
         const introKeyword = briefThumb.intro_keyword_number || briefThumb.keyword_number || '';
         console.log(`   🎬 v10 ALL-IN-ONE — headline="${introHeadline}", keyword="${introKeyword}"`);
+        // v10 은 프롬프트를 enrichPrompt 가 통째로 다시 쓰고, 그 시스템 프롬프트가
+        // "editorial photomontage realism / photoreal compositing" 을 강제한다. 거기에
+        // 공인 캐리커처를 밀어 넣으면 실사풍 인물이 나와 정책 §4.2(사칭·초상권) 위반이 된다.
+        // 그래서 v10 에서는 브랜드 블록을 태우지 않는다 — 조용히 빠지지 않게 알린다.
+        if (brands.brands.length) {
+          console.warn(`   ⚠ v10 경로는 브랜드 주입을 하지 않는다 (실사풍 강제 → 정책 §4.2 충돌).`);
+          console.warn(`     인물·CI 를 넣으려면 BT_INTRO_V10=0 으로 base+composer 경로를 쓴다.`);
+        }
         const result = await generateIntroV10({
           topic: briefFM.topic || '',
           visualHint,
@@ -375,7 +433,13 @@ async function main() {
         console.log(`✅ Intro (v10${result.accurate ? ' ✓ accurate' : ' ⚠ partial accuracy'}, $${result.cost_usd.toFixed(4)}): ${outPath}`);
       } else {
         const baseOutPath = join(baseDir, '45_intro.base.png');
-        if (useOpenAI) {
+        if (introEngine.engine === 'codex') {
+          // 씬 이미지와 같은 엔진 — 인트로 배경만 다른 화풍으로 새는 걸 막는다.
+          // 한글 타이포는 아래 로컬 SVG 합성이 얹으므로 렌더 오타는 원천적으로 없다.
+          const { generateImageCodex } = await import('./lib/image-engines/codex-imagegen.js');
+          generateImageCodex({ prompt, outPath: baseOutPath, channel });
+          console.log(`   📸 Base image (codex imagegen + 캐릭터시트): ${baseOutPath}`);
+        } else if (useOpenAI) {
           // 씬 이미지와 같은 경로 — 캐릭터시트를 붙여 마시를 지킨다.
           await generateImageOpenAI({
             prompt, outPath: baseOutPath, channel,
