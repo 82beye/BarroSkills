@@ -437,15 +437,24 @@ async function main() {
         prev = cur;
         await sleep(1500);
       }
-      finderCopy(src, videosDir, `scene_${scene.id}.mp4`);
+      // 중복 판정은 **복사 전에 원본에서** 한다. 복사한 뒤에 던지면 앞 컷의 복사본이
+      // scene_NNN.mp4 자리에 그대로 박힌다 — 2026-08-26 EP-2026-0116 씬 002 실측:
+      // 001 과 바이트 동일한 파일이 002 자리에 남았고, 다음 게이트가 "duplicate bytes"
+      // 로 잡아 주지 않았다면 같은 화면이 두 번 나가는 영상이 발행됐다.
+      const hash = md5(src);
+      if (knownHashes.has(hash)) throw new Error('직전 컷과 같은 파일 (중복 다운로드) — 기존 파일은 그대로 둔다');
 
-      const hash = md5(outPath);
-      if (knownHashes.has(hash)) throw new Error('직전 컷과 같은 파일 (중복 다운로드)');
+      finderCopy(src, videosDir, `scene_${scene.id}.mp4`);
       knownHashes.add(hash);
 
       const probe = execFileSync('ffprobe', ['-v', 'error', '-select_streams', 'a:0',
         '-show_entries', 'stream=codec_name', '-of', 'csv=p=0', outPath], { encoding: 'utf8' }).trim();
-      if (probe !== 'aac') throw new Error(`오디오 없음 (codec=${probe || 'none'}) — Video audio 를 켜야 합니다`);
+      if (probe !== 'aac') {
+        // 오디오가 없으면 쓸 수 없는 파일이다. 자리에 남겨 두면 다음 실행이
+        // "이미 있음" 으로 건너뛴다.
+        try { unlinkSync(outPath); } catch { /* 이미 없으면 그만 */ }
+        throw new Error(`오디오 없음 (codec=${probe || 'none'}) — Video audio 를 켜야 합니다`);
+      }
 
       made += 1;
       console.log(`  ✅ 씬 ${scene.id} → ${outPath}`);
