@@ -442,6 +442,9 @@ async function main() {
   const scriptText = readFileSync(scriptPath, 'utf-8');
   const researchText = readIfExists(join(absEp, '10_market_research.md'));
   const strategyText = readIfExists(join(absEp, '20_strategy.md'));
+  // 데스크 브리핑에는 각 수치의 출처 URL 이 그대로 남아 있다. 요약본(10_)만 보면
+  // "근거를 못 찾음" 으로 표시되던 수치들이 여기서 확인된다.
+  const deskText = readIfExists(join(absEp, '05_desk_briefing.md'));
   const fm = parseScriptFrontmatter(scriptText);
   const episodeId = fm.episode_id || 'EP-UNKNOWN';
   const channelId = fm.channel_id || 'econ-daily';
@@ -450,6 +453,7 @@ async function main() {
   const userPrompt = [
     '[AUTHORITATIVE PIPELINE MARKET RESEARCH]',
     researchText || '(not available)',
+    ...(deskText ? ['', '[DESK BRIEFING — 기자단 원본 근거·출처 URL]', deskText] : []),
     '',
     '[CONTENT STRATEGY AND FACT BOUNDARIES]',
     strategyText || '(not available)',

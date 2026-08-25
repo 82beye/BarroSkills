@@ -198,6 +198,10 @@ guard_budget || exit 0
 
 TODAY=$(date +%Y-%m-%d)
 NEWS_DIR="${BARROTUBE_HOME}/workspace/daily-news/${TODAY}"
+# Phase 2a 산출물. Phase 3 이 에피소드로 복사하므로 RESUME·FORCE_TOPIC 경로(= Phase 2 를
+# 통째로 건너뛰는 경로)에서도 정의돼 있어야 한다 — set -u 라 미정의면 그 자리에서 죽는다.
+DESK_BRIEF_MD="${NEWS_DIR}/desk-briefing.md"
+DESK_TOPIC_JSON="${NEWS_DIR}/desk-topic.json"
 
 audit "auto_pipeline_start" "INFO" "slot=$SLOT dry_run=$DRY_RUN force_topic=$FORCE_TOPIC resume=$RESUME_EP"
 notify_telegram "🤖 <b>${SLOT_LABEL} 시작</b>$([ "$DRY_RUN" = "1" ] && echo " (DRY_RUN)")"
@@ -254,7 +258,27 @@ else
   RESEARCH_MD="${NEWS_DIR}/research-${SLOT}.md"
   STRATEGY_MD="${NEWS_DIR}/strategy-${SLOT}.md"
 
+  # ── Phase 2a: 전문 기자단 브리핑 (2026-08-25 도입) ─────────────────────────
+  # 리서처 한 명이 지수·환율만 보고 토픽을 정하던 구조의 한계를 메운다.
+  # 증시·금리·원자재·코인·지정학·외환 6개 데스크가 각자 조사하고, 에디터가
+  # "오늘 가장 뜨거운 하나" 를 고른다. 데스크끼리 서로의 해석을 반박해서
+  # 과장이 걸러진다 (실측: 원자재 데스크가 지정학 데스크의 안전자산 해석을 교정).
+  #
+  # 실패해도 죽지 않는다 — 아래 research-brief 가 그대로 이어받는다.
+  # 끄려면 BT_DESK_BRIEFING=0.
+  if [ "${BT_DESK_BRIEFING:-1}" = "1" ] && [ "$DRY_RUN" = "0" ]; then
+    echo "  📰 Phase 2a — 전문 기자단 데스크 브리핑"
+    if node scripts/automation/desk-briefing.js --slot "$SLOT" --date "$TODAY" \
+         --timeout "${BT_DESK_TIMEOUT:-420}"; then
+      audit "desk_briefing_ok" "INFO" "slot=$SLOT date=$TODAY"
+    else
+      echo "  ⚠ 데스크 브리핑 실패 — 기존 리서치로 진행"
+      audit "desk_briefing_failed" "WARN" "slot=$SLOT date=$TODAY"
+    fi
+  fi
+
   if [ "$DRY_RUN" = "1" ]; then
+    run_or_echo node scripts/automation/desk-briefing.js --slot "$SLOT" --date "$TODAY" --dry-run
     run_or_echo node scripts/automation/research-brief.js --slot "$SLOT" --date "$TODAY" --dry-run
     TOPIC="[DRY_RUN] 샘플 토픽"
   else
@@ -333,6 +357,13 @@ if [ -z "$RESUME_EP" ]; then
         || fail_with_alert "Phase 3 analysis" "20_strategy.md 설치 실패"
       echo "  ✓ 10_market_research.md 설치"
       echo "  ✓ 20_strategy.md 설치"
+      # 기자단 브리핑 원본도 같이 넣는다. 10_market_research.md 는 이걸 요약한 것이라
+      # 수치의 출처 URL 이 깎인다 — 대본과 팩트체크가 근거를 직접 보게 하려는 것이다.
+      # 데스크가 실패한 날엔 파일이 없다. 그건 정상이라 파이프라인을 세우지 않는다.
+      if [ -s "$DESK_BRIEF_MD" ]; then
+        cp "$DESK_BRIEF_MD" "${EP_DIR}/05_desk_briefing.md" && echo "  ✓ 05_desk_briefing.md 설치"
+        [ -s "$DESK_TOPIC_JSON" ] && cp "$DESK_TOPIC_JSON" "${EP_DIR}/05_desk_topic.json"
+      fi
     fi
   fi
   audit "auto_pipeline_ep_created" "INFO" "slot=$SLOT ep=$EP_ID topic=$TOPIC"
@@ -410,18 +441,39 @@ if [ "$DRY_RUN" = "0" ] && [ -s "$FACTCHECK_PATH" ]; then
   FC_MAX_REWRITES=$(json_get "$AUTONOMY_FILE" "d.get('guards',{}).get('factcheck_max_rewrites',2)")
   case "${FC_MAX_REWRITES:-}" in ''|*[!0-9]*) FC_MAX_REWRITES=2 ;; esac
   FC_REWRITES=0
+  FC_REGROUNDS=0
+  FC_MAX_REGROUNDS=2
 
   while factcheck_gate_blocks; do
+    # grounded=false 는 대본의 잘못이 아니다 — 팩트체크 백엔드가 실시간 검색을 못 붙인 것이다
+    # (2026-08-23 EP-2026-0110: chunks=0, 실존확인 URL=0). 재작성은 이걸 못 고치는데
+    # 기존 루프는 곧장 재작성으로 갔고, 예산만 태우고 사람을 불렀다.
+    # 접지는 재실행으로 붙을 때가 많으므로 먼저 팩트체크만 다시 돌린다.
+    FC_GROUNDED=$(sed -n 's/^grounded:[[:space:]]*//p' "$FACTCHECK_PATH" | head -1)
+    if [ "$FC_GROUNDED" != "true" ] && [ "$FC_REGROUNDS" -lt "$FC_MAX_REGROUNDS" ]; then
+      FC_REGROUNDS=$((FC_REGROUNDS + 1))
+      echo "   ↻ 접지 실패(grounded=false) — 팩트체크 재실행 ${FC_REGROUNDS}/${FC_MAX_REGROUNDS} (재작성 아님)"
+      audit "auto_pipeline_factcheck_reground" "WARN" "slot=$SLOT ep=$EP_ID attempt=$FC_REGROUNDS"
+      node scripts/automation/run-factcheck.js \
+        --episode "$EP_ID" --platform "$PLATFORM" --force \
+        || fail_with_alert "Phase 6 factcheck" "접지 재시도 중 run-factcheck.js 실패"
+      continue
+    fi
+
     if [ "$FC_REWRITES" -ge "$FC_MAX_REWRITES" ]; then
       halt_for_human "Phase 6 factcheck" \
-        "MED 부정확 또는 미접지(grounded=false) 주장이 ${FC_MAX_REWRITES}회 재작성 후에도 남았습니다. 수치·최상급 표현을 중립 문구로 고치고 팩트체크를 다시 실행하세요."
+        "MED 부정확 또는 미접지(grounded=false) 주장이 ${FC_MAX_REWRITES}회 재작성·${FC_REGROUNDS}회 접지 재시도 후에도 남았습니다. 수치·최상급 표현을 중립 문구로 고치고 팩트체크를 다시 실행하세요."
     fi
     # 게이트는 걸리는데 고칠 주장이 없으면(모든 판정이 '사실') 재작성은 헛돈다.
     # --check 는 파일만 읽으므로 비용이 없다. exit 10 = 고칠 게 있다.
     if node scripts/automation/revise-script-factcheck.js \
          --episode "$EP_DIR" --platform "$PLATFORM" --check; then
+      if [ "$FC_GROUNDED" != "true" ]; then
+        halt_for_human "Phase 6 factcheck" \
+          "팩트체크가 ${FC_MAX_REGROUNDS}회 재실행 후에도 접지되지 않았습니다(grounded=false, 실시간 검색 0건). 대본 문제가 아니라 검색 백엔드 문제입니다 — 네트워크·검색 도구 상태를 확인하고 재개하세요."
+      fi
       halt_for_human "Phase 6 factcheck" \
-        "MED 부정확 또는 미접지(grounded=false) 로 게이트가 걸렸는데 자동 수정 대상(부정확·미확인)이 없습니다. 리포트를 직접 보고 대본을 손보세요."
+        "MED 부정확으로 게이트가 걸렸는데 자동 수정 대상(부정확·미확인)이 없습니다. 리포트를 직접 보고 대본을 손보세요."
     fi
 
     FC_REWRITES=$((FC_REWRITES + 1))
@@ -752,6 +804,26 @@ SuperGrok 구독 모달이 뜨면 결제·무료 체험 절대 하지 말고 닫
   #
   # 인트로 카드·썸네일은 여기서 만들지 않는다 — Phase 8 의 generate-cards.js /
   # generate-thumbnail.js 가 씬 스틸로부터 결정론적으로 만든다.
+  # 1순위 폴백 — codex 내장 imagegen (2026-08-20 추가).
+  # 브라우저가 막힌 이유(시드 대화 로그인·확장 권한·일일 한도)와 무관하고, ChatGPT 계정
+  # 인증이라 OpenAI/Gemini 크레딧과도 무관하다. 2026-08-20 EP-0107 이 정확히 이 조합
+  # (브라우저 로그인 화면 + API 크레딧 고갈)으로 죽어서 넣었다. 캐릭터·노출 고정 블록은
+  # lib/image-engines/codex-imagegen.js 가 붙인다 — 붙이지 않으면 캡슐 몸통이 사라진다.
+  if ! media_assets_ready "$MEDIA_BASE" stills; then
+    if command -v codex >/dev/null 2>&1; then
+      echo "  🛟 codex imagegen 폴백 (브라우저·API 크레딧 불필요): ${MEDIA_ASSETS_MISSING}"
+      audit "media_render_codex_fallback" "WARN" "ep=$EP_ID missing=${MEDIA_ASSETS_MISSING}"
+      notify_telegram "🛟 <b>${EP_ID}</b> 브라우저 이미지 실패 — codex imagegen 폴백으로 진행\n누락: ${MEDIA_ASSETS_MISSING}"
+      (
+        export BT_IMAGE_ENGINE=codex
+        run_or_echo node scripts/automation/generate-image-gemini.js \
+          --script "${MEDIA_BASE}/30_script.md" --out-dir "${MEDIA_BASE}/40_assets/images"
+      ) 2>&1 || echo "  ⚠ codex imagegen 폴백 실패 — API 폴백으로 넘어갑니다"
+    else
+      echo "  ⏭  codex CLI 없음 — codex imagegen 폴백 건너뜀"
+    fi
+  fi
+
   if ! media_assets_ready "$MEDIA_BASE" stills; then
     echo "  🛟 API 폴백 (gpt-image-1 + 캐릭터 시트): ${MEDIA_ASSETS_MISSING}"
     audit "media_render_api_fallback" "WARN" "ep=$EP_ID missing=${MEDIA_ASSETS_MISSING}"
@@ -787,8 +859,21 @@ SuperGrok 구독 모달이 뜨면 결제·무료 체험 절대 하지 말고 닫
     if [ "${IMAGE_API_EXHAUSTED:-0}" = "1" ]; then
       HALT_DETAIL="${HALT_DETAIL}
 
-⛔ 이미지 API 크레딧 고갈 — 코드로 못 풉니다. 충전해야 폴백이 살아납니다.
+⛔ 이미지 API 크레딧 고갈 (gpt-image-1·Gemini) — 충전해야 이 폴백이 살아납니다.
    OpenAI: platform.openai.com/settings/organization/billing"
+    fi
+    # codex 는 크레딧과 무관한 경로다. 그것까지 실패했다면 CLI 부재/로그아웃이 원인이라
+    # 확인할 곳이 완전히 다르다 — 운영자가 엉뚱하게 충전부터 하지 않도록 갈라서 적는다.
+    if ! command -v codex >/dev/null 2>&1; then
+      HALT_DETAIL="${HALT_DETAIL}
+
+🧩 codex CLI 를 PATH 에서 찾지 못했습니다 — 크레딧 없이 굽는 폴백이 통째로 빠졌습니다.
+   launchd plist 의 PATH 를 확인하세요."
+    elif ! codex login status 2>/dev/null | grep -qi 'logged in'; then
+      HALT_DETAIL="${HALT_DETAIL}
+
+🧩 codex 가 로그아웃 상태입니다 — 크레딧 없이 굽는 폴백이 막혔습니다.
+   \`codex login\` 으로 ChatGPT 계정에 다시 로그인하세요 (API 키가 아니라 계정 인증입니다)."
     fi
     halt_for_human "Phase 7 media-render" "$HALT_DETAIL"
   fi
@@ -802,16 +887,59 @@ SuperGrok 구독 모달이 뜨면 결제·무료 체험 절대 하지 말고 닫
   #             "Grok 의 로컬 파일 선택은 확장 표면에서 열리지 않아" 로 여전히 막힌다.
   #             현재 Grok 모션의 확실한 경로는 대화형 claude-in-chrome 의 file_upload 뿐이다.
   # 로컬 폴백으로 내보내려면 BT_MOTION_ENGINE=local-only 로 **명시**해야 한다.
+  # 브라우저 에이전트 표면이 Grok 첨부를 못 하면 여기서 전용 Playwright 스크립트를 쓴다.
+  # 확장이 아니라 프로그램이라 codex 표면의 첨부 차단(숨은 input·파일 선택·Cmd+V)을 받지 않는다.
+  # 전용 프로필(~/.barrotube/grok-profile)에 한 번 로그인해 두면 무인으로 돈다.
+  # 한 컷이라도 실패하면 exit 1 이고, 아래 게이트가 남은 컷을 보고 판단한다.
+  if [ "$MOTION_ENGINE" != "local-only" ] && ! media_assets_ready "$MEDIA_BASE"; then
+    # 디렉터리 존재가 아니라 **실제 로그인 여부**로 게이트한다.
+    # 예전에는 폴더만 보고 시도해서, 로그인 안 된 프로필로 매일 RED halt 를 냈다
+    # (2026-08-17·20·23·24 실측 4건 — 원인은 --use-mock-keychain 으로 sso 쿠키가
+    #  Playwright 에 안 보이던 것. 2026-08-24 수정).
+    # 1순위: 실제 Chrome 을 AppleScript 로 몬다.
+    # Playwright 는 headless·headed·CDP 전부 grok.com 에서 Cloudflare 에 막힌다
+    # (2026-08-24 실측). AppleScript 의 execute javascript 는 CDP 포트도
+    # webdriver 플래그도 쓰지 않아 자동화 지문이 없고, launchd(Aqua 세션)에서 그대로 돈다.
+    # 첨부는 DataTransfer 주입 — 파일 선택 UI·클립보드·Playwright 파일 API 를 전부 우회한다.
+    if node scripts/automation/grok-motion-applescript.js --check >/dev/null 2>&1; then
+      echo "  🎬 Grok 모션 (실제 Chrome · AppleScript): ${MEDIA_ASSETS_MISSING}"
+      audit "grok_motion_applescript" "INFO" "ep=$EP_ID missing=${MEDIA_ASSETS_MISSING}"
+      run_or_echo node scripts/automation/grok-motion-applescript.js \
+        --episode "$MEDIA_BASE" --platform "$PLATFORM" \
+        || echo "  ⚠ AppleScript Grok 모션 일부 실패 — 아래 게이트가 판단합니다"
+    # 2순위: 기존 Playwright 경로 (프로필 로그인 시). Cloudflare 가 풀린 환경용.
+    elif node scripts/automation/grok-motion.js --status >/dev/null 2>&1; then
+      echo "  🎬 Grok 모션 폴백 (Playwright 전용 프로필): ${MEDIA_ASSETS_MISSING}"
+      audit "grok_motion_playwright" "WARN" "ep=$EP_ID missing=${MEDIA_ASSETS_MISSING}"
+      run_or_echo node scripts/automation/grok-motion.js \
+        --episode "$MEDIA_BASE" --platform "$PLATFORM" \
+        || echo "  ⚠ Playwright Grok 모션 일부 실패 — 아래 게이트가 판단합니다"
+    else
+      echo "  ⏭  Grok 경로 없음 — 건너뜀 (Chrome 로그아웃/차단, Playwright 프로필 미로그인)"
+      echo "     실제 Chrome 확인: node scripts/automation/grok-motion-applescript.js --check"
+      echo "     확인: node scripts/automation/grok-motion.js --status"
+      echo "     로그인: node scripts/automation/grok-motion.js --login"
+      audit "grok_motion_not_logged_in" "WARN" "ep=$EP_ID profile=${BT_GROK_PROFILE:-$HOME/.barrotube/grok-profile}"
+    fi
+  fi
+
   if [ "$MOTION_ENGINE" != "local-only" ] && ! media_assets_ready "$MEDIA_BASE"; then
     audit "grok_motion_missing" "RED" "ep=$EP_ID missing=${MEDIA_ASSETS_MISSING}"
     halt_for_human "Phase 7 Grok 모션" \
       "Grok 모션 클립이 없습니다: ${MEDIA_ASSETS_MISSING}
 
-🎬 Grok image→video 는 컷마다 스틸을 업로드해야 하는데 첨부가 막혀 있습니다.
-   Chrome 에서 켜 주세요 — 이것만 켜면 무인 실행에서도 Grok 모션이 됩니다:
-     chrome://extensions → ChatGPT 확장 → 세부정보 → 「파일 URL에 대한 액세스 허용」
+🎬 Playwright(headless·headed 모두)로는 grok.com 에 접근할 수 없습니다.
+   ⚠️ 원인은 첨부가 아니라 Cloudflare 봇 차단입니다 — 로그인된 프로필로도
+      \"Sorry, you have been blocked\" 가 뜹니다 (2026-08-24 실측).
+      우회는 시도하지 않습니다.
+   ✅ 확실히 되는 경로: 대화형 claude-in-chrome 의 file_upload (실제 Chrome 세션).
+   🔜 근본 해법: xAI 공식 image→video API (api.x.ai/v1/videos/generations, 10s 720p).
+      XAI_API_KEY 를 .env 에 넣으면 브라우저 없이 무인 실행이 가능합니다.
 
-   켠 뒤 재개:  RESUME_EP=${EP_ID} bash ${BARROTUBE_HOME}/lib/auto-pipeline.sh --slot ${SLOT}
+   무인 실행으로 굽는 경로는 전용 Playwright 프로필입니다. 한 번만 로그인하면 됩니다:
+     node ${BARROTUBE_HOME}/scripts/automation/grok-motion.js --login
+
+   로그인 후 재개:  RESUME_EP=${EP_ID} bash ${BARROTUBE_HOME}/lib/auto-pipeline.sh --slot ${SLOT}
    이번 회차만 로컬 팬·줌으로 내보내려면: BT_MOTION_ENGINE=local-only 를 붙여 재개하세요."
   fi
 fi
@@ -891,10 +1019,31 @@ APPROVAL_PATH="${MEDIA_BASE}/75_board_approval.json"
 if [ "$DRY_RUN" = "1" ]; then
   echo "[DRY_RUN] 사람 승인 토큰 확인: $APPROVAL_PATH"
 elif [ ! -s "$APPROVAL_PATH" ]; then
-  notify_telegram "📋 <b>${EP_ID}</b> QA PASS — 게시 승인 필요\n승인: <code>/approve ${EP_ID}</code>\n취소: <code>/cancel ${EP_ID}</code>"
-  audit "auto_pipeline_awaiting_approval" "INFO" "slot=$SLOT ep=$EP_ID"
-  echo "⏸  S10 사람 승인 대기: /approve ${EP_ID}"
-  exit 0
+  # auto_approve_on_qa_pass=true 면 QA PASS 를 승인 근거로 삼아 토큰을 스스로 발급한다.
+  # 운영자 명시 요청으로 2026-08-24 도입 (그전까지는 /approve 수동만 허용).
+  # 이 분기는 **Phase 9 QA 게이트를 통과한 뒤에만** 닿는다 — score>=60, blocker=0.
+  # 발급 후에도 Phase 11 텔레그램 거부창(30분)이 남아 있어 운영자가 /reject 로 되돌릴 수 있고,
+  # 업로드는 private + publishAt 예약이라 공개 시각 전까지 취소 가능하다.
+  AUTO_APPROVE=$(json_get "$AUTONOMY_FILE" "d.get('guards',{}).get('auto_approve_on_qa_pass',False)")
+  if [ "$AUTO_APPROVE" = "True" ]; then
+    echo "🤖 auto_approve_on_qa_pass=true — QA PASS 근거로 S10 토큰 자동 발급"
+    if node scripts/automation/approve-episode.js --episode "$EP_ID" --platform "$PLATFORM" \
+         --by "auto-pipeline (QA PASS, slot=$SLOT)" >/dev/null 2>&1 && [ -s "$APPROVAL_PATH" ]; then
+      audit "auto_pipeline_auto_approved" "INFO" "slot=$SLOT ep=$EP_ID"
+      notify_telegram "🤖 <b>${EP_ID}</b> QA PASS — 자동 승인됨\n${REJECT_WINDOW_HINT:-30}분 내 <code>/reject ${EP_ID}</code> 로 취소할 수 있습니다."
+      echo "✅ S10 자동 승인 토큰 발급: $APPROVAL_PATH"
+    else
+      audit "auto_pipeline_auto_approve_failed" "WARN" "slot=$SLOT ep=$EP_ID"
+      notify_telegram "⚠️ <b>${EP_ID}</b> 자동 승인 실패 — 수동 승인이 필요합니다\n승인: <code>/approve ${EP_ID}</code>"
+      echo "⏸  자동 승인 실패 — 수동 승인 대기: /approve ${EP_ID}"
+      exit 0
+    fi
+  else
+    notify_telegram "📋 <b>${EP_ID}</b> QA PASS — 게시 승인 필요\n승인: <code>/approve ${EP_ID}</code>\n취소: <code>/cancel ${EP_ID}</code>"
+    audit "auto_pipeline_awaiting_approval" "INFO" "slot=$SLOT ep=$EP_ID"
+    echo "⏸  S10 사람 승인 대기: /approve ${EP_ID}"
+    exit 0
+  fi
 else
   echo "✅ S10 사람 승인 토큰 확인: $APPROVAL_PATH"
   audit "auto_pipeline_approved" "INFO" "slot=$SLOT ep=$EP_ID"

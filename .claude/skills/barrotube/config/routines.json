@@ -26,9 +26,22 @@
       ],
       "market": {
         "symbols": [
-          ".INX",
-          ".IXIC",
           ".DJI",
+          ".IXIC",
+          ".INX",
+          "KOSPI",
+          "KOSDAQ",
+          "BOND:US10YT=RR",
+          "BOND:KR10YT=RR",
+          "BOND:JP10YT=RR",
+          "CMDT:CLcv1",
+          "CMDT:LCOcv1",
+          "CMDT:NGcv1",
+          "CMDT:GCcv1",
+          "CMDT:SIcv1",
+          "CMDT:HGcv1",
+          "COIN:bitcoin",
+          "COIN:ethereum",
           "FX_USDKRW",
           ".DXY"
         ],
@@ -58,11 +71,24 @@
       ],
       "market": {
         "symbols": [
+          ".DJI",
+          ".IXIC",
+          ".INX",
           "KOSPI",
           "KOSDAQ",
+          "BOND:US10YT=RR",
+          "BOND:KR10YT=RR",
+          "BOND:JP10YT=RR",
+          "CMDT:CLcv1",
+          "CMDT:LCOcv1",
+          "CMDT:NGcv1",
+          "CMDT:GCcv1",
+          "CMDT:SIcv1",
+          "CMDT:HGcv1",
+          "COIN:bitcoin",
+          "COIN:ethereum",
           "FX_USDKRW",
-          ".INX",
-          ".IXIC"
+          ".DXY"
         ],
         "require_closed": [
           "KOSPI",

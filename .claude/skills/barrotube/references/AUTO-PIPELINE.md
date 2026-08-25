@@ -2,34 +2,89 @@
 
 > **마케팅 → 콘텐츠 → YouTube 업로드까지 호출 한 번에 자동.** 안전 가드 10개로 5/22 같은 silent failure 차단.
 
-## 흐름 (8 Phase)
+## 흐름 (Phase 0~12)
+
+> 2026-08-25 갱신: 문서가 `lib/auto-pipeline.sh` 의 실제 단계와 갈라져 있었다(문서 8단계 vs 코드 13단계).
+> 아래는 스크립트의 `log_stage` 를 그대로 옮긴 것이다.
 
 ```
-[Phase 0] 환경 가드 검증 (master switch, in-flight, daily quota, budget)
+[Phase 0]  환경 가드 검증 (master switch, in-flight, daily quota, budget)
    ↓
-[Phase 1] RSS fetch (marketing-fetch-local.js) — 무비용
+[Phase 1]  데이터 수집 — 무비용
+             fetch-market-snapshot.js  시세 18종 (지수·국채·원자재·코인·환율)
+             fetch-daily-news.js       RSS 헤드라인
+             fetch/analyze-competitors 경쟁 채널 (슬롯의 competitor_scan=true 일 때)
    ↓
-[Phase 1b] 토픽 자동 선정 (ceo-select-topics.js 휴리스틱) — 무비용
+[Phase 2a] 전문 기자단 데스크 브리핑 (desk-briefing.js) — 아래 별도 절
    ↓
-[Phase 2] S0 brief 생성 (create-episode.js) — 무비용
+[Phase 2]  시장 리서치 + 콘텐츠 전략 + 토픽 선정 (research-brief.js)
+             ※ RESUME_EP / FORCE_TOPIC 이면 이 단계 전체를 건너뛴다
    ↓
-[Phase 3] S4~S9 produce-episode.js --execute — 💰 비용 ~$0.5
-            (Script → TTS → Image → Render → QA → Metadata)
-            ※ Factcheck 회귀는 produce-episode 안이 아니라 그 앞 단계에 있다 —
-              auto-pipeline.sh Phase 6 이 게이트가 걸리는 동안 대본을 고쳐 재검증한다.
+[Phase 3]  S0 brief 생성 (create-episode.js) + 분석 산출물 설치
+             research-<slot>.md → 10_market_research.md
+             strategy-<slot>.md → 20_strategy.md
+             desk-briefing.md   → 05_desk_briefing.md   (있을 때만)
    ↓
-[Phase 4] QA Gate (score ≥ 60, blocker = 0)
+[Phase 4]  S4 대본 생성
+   ↓
+[Phase 5]  image_prompt 계약 검사 (무비용 게이트 — 이미지 굽기 전에 막는다)
+   ↓
+[Phase 6]  S5 팩트체크 (인용 URL 실존 검증) → HIGH 위험이면 대본 회귀
+   ↓
+[Phase 7]  이미지·모션 (브라우저 ChatGPT / 로컬 HyperFrames)
+   ↓
+[Phase 8]  S6~S9 자산·렌더·QA·메타 — 💰 TTS 비용
+   ↓
+[Phase 9]  QA Gate (score ≥ 60, blocker = 0)
    ↓ FAIL → Telegram 알람 + exit (publish 안 함)
-   ↓ PASS
-[Phase 5] S10 자율 승인 (approve-episode.js --by auto-pipeline)
+[Phase 10] S10 승인
    ↓
-[Phase 6] Telegram reject window 30분
-   ↓ 운영자 /reject EP-XXXX → exit (publish 안 함)
-   ↓ 통과
-[Phase 7] S11 publish-youtube.js --execute — 💰📺 영상 공개
-   ↓
-[Phase 8] 완료 알람 (videoId + URL Telegram 전송)
+[Phase 11] Telegram reject window 30분
+   ↓ 운영자 /reject EP-XXXX → exit
+[Phase 12] S11 YouTube 업로드 (private + publishAt)
 ```
+
+## Phase 2a — 전문 기자단 데스크 브리핑
+
+리서처 한 명이 지수·환율만 보고 토픽을 정하던 구조를 데스크로 쪼갠 것이다. 자산군별로
+따로 조사시키고, 에디터가 그 위에서 **오늘 하나**를 고른다.
+
+```bash
+node scripts/automation/desk-briefing.js --slot us-close [--date YYYY-MM-DD]
+                                         [--desks equities,rates] [--timeout 420] [--dry-run]
+```
+
+| 데스크 | 담당 | 시세 |
+|---|---|---|
+| `equities` | 다우·나스닥·S&P500·코스피·코스닥 | 5종 |
+| `rates` | 미국·한국·일본 10년물, 연준·한은 | 3종 (값은 **가격이 아니라 금리 %**) |
+| `commodities` | WTI·브렌트·천연가스·금·은·구리 | 6종 |
+| `crypto` | 비트코인·이더리움, ETF 자금흐름·규제 | 2종 (**24시간 기준** — 주식의 전일 대비와 다르다) |
+| `geopolitics` | 전쟁·분쟁·제재·선거·무역갈등이 자산에 미치는 경로 | 없음 (뉴스·검색만) |
+| `fx` | 원/달러, 달러인덱스 | 2종 |
+
+- **산출물** — `workspace/daily-news/<date>/` 에 `desk-<id>.md` (frontmatter 에 `heat` 1~10),
+  에디터가 종합한 `desk-briefing.md`, 그리고 `desk-topic.json` (topic·angle·evidence[]).
+- **에디터는 heat 순위를 참고값으로만 쓴다.** 여러 데스크가 같은 원인을 가리키면 그게 오늘의
+  이야기다 — 자산 나열이 아니라 **인과 하나**를 고르는 게 선정 기준이다.
+- **실패해도 파이프라인을 세우지 않는다.** 일부 데스크가 죽어도 남은 것으로 에디터가 돌고,
+  전부 죽으면 exit 4 로 빠져 `research-brief.js` 가 그대로 이어받는다. 끄려면 `BT_DESK_BRIEFING=0`.
+- **비용·시간** — 데스크당 `claude -p`(기본 sonnet) 1회. 2026-08-25 실측 데스크 ~56초,
+  에디터 ~58초 → 6데스크 약 7분.
+
+### 설정이 두 곳으로 갈라지지 않게
+
+데스크가 담당한다고 선언한 심볼(`config/desk-reporters.json`)은 슬롯이 실제로 수집해야
+한다(`config/routines.json` 의 `market.symbols`). 갈라지면 그 데스크는 매일 조용히
+"스냅샷에 값이 없어 판단하지 못했다"를 쓴다 — 2026-08-25 원자재 데스크가 구리·천연가스에서
+실제로 그랬다. `tests/desk-briefing.test.js` 가 이 계약을 강제한다.
+
+### 소셜 검색은 붙는 채널만 준다
+
+`desk-briefing.js` 가 실행 시 `agent-reach doctor --json` 을 **한 번** 돌려 살아 있는 채널만
+프롬프트에 넣고, 미인증 채널은 "시도하지 마라"로 못박는다. 예전에는 `twitter search` 가
+프롬프트에 박혀 있었는데 twitter-cli 가 미인증이라 6개 데스크가 저마다 실패하는 데 턴을 썼다.
+2026-08-25 이 머신 기준 살아 있는 채널: github·youtube·reddit·bilibili·linkedin·v2ex·rss·exa_search·web.
 
 ## 안전 가드 10개
 

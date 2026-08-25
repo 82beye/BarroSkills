@@ -175,7 +175,10 @@ async function main() {
     },
   });
 
-  const date = values.date || new Date().toISOString().slice(0, 10);
+  // KST 기준이다. toISOString() 은 UTC 라 00~09시 KST 에는 하루 전 폴더를 가리킨다 —
+  // us-close 슬롯이 06:00 KST 라 정확히 그 구간이고, desk-briefing.js 는 KST 를 쓴다.
+  // --date 없이 손으로 돌리면 산출물이 두 폴더로 갈렸다 (2026-08-25).
+  const date = values.date || new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
   const sourceKeys = values.sources
     ? values.sources.split(',').map(s => s.trim())
     : Object.keys(SOURCES);

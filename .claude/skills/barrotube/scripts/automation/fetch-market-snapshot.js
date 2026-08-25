@@ -41,12 +41,34 @@ const DISPLAY = {
   KOSPI: '코스피', KOSDAQ: '코스닥',
   '.INX': 'S&P 500', '.IXIC': '나스닥', '.DJI': '다우존스', '.DXY': '달러인덱스',
   FX_USDKRW: '원/달러', FX_EURKRW: '원/유로', FX_JPYKRW: '원/엔(100)', FX_CNYKRW: '원/위안',
+  // 원자재·국채·코인 (2026-08-25 추가) — 브리핑이 지수·환율만 다루던 한계를 메운다.
+  'CMDT:GCcv1': '국제 금', 'CMDT:SIcv1': '은', 'CMDT:HGcv1': '구리',
+  'CMDT:CLcv1': 'WTI', 'CMDT:LCOcv1': '브렌트유', 'CMDT:NGcv1': '천연가스',
+  'BOND:US10YT=RR': '미국 국채 10년', 'BOND:KR10YT=RR': '한국 국채 10년',
+  'BOND:JP10YT=RR': '일본 국채 10년', 'BOND:DE10YT=RR': '독일 국채 10년',
+  'COIN:bitcoin': '비트코인', 'COIN:ethereum': '이더리움',
+};
+
+/**
+ * 네이버 marketindex 카테고리 (2026-08-25 실측으로 확인한 경로).
+ *   /marketindex/metals            금·은·구리·백금
+ *   /marketindex/energy            WTI·브렌트·천연가스
+ *   /marketindex/majors/bond       각국 10년물 금리
+ * 지수 API(/index/<sym>/basic)는 이 심볼들을 모른다 — "지원하지 않는 지수" 를 준다.
+ */
+const MARKETINDEX_CATEGORY = {
+  CMDT_METALS: 'metals',
+  CMDT_ENERGY: 'energy',
+  BOND: 'majors/bond',
 };
 
 /** 심볼 → 어느 엔드포인트 계열인지. 사이트별 분기가 아니라 심볼 형태 규칙이다. */
 function family(symbol) {
   if (/^(KOSPI|KOSDAQ)$/.test(symbol)) return 'domestic';
   if (/^FX_/.test(symbol) || symbol === '.DXY') return 'exchange';
+  if (symbol.startsWith('CMDT:')) return 'commodity';
+  if (symbol.startsWith('BOND:')) return 'bond';
+  if (symbol.startsWith('COIN:')) return 'coin';
   if (symbol.startsWith('.')) return 'world';
   return null;
 }
@@ -116,12 +138,74 @@ async function fetchExchange(symbol) {
   return normalize(symbol, row);
 }
 
+// 카테고리 응답은 한 번만 받아 캐시한다 (금·은·구리가 같은 응답에 들어 있다).
+const categoryCache = new Map();
+async function fetchCategory(path) {
+  if (!categoryCache.has(path)) {
+    categoryCache.set(path, await getJson(`https://api.stock.naver.com/marketindex/${path}`));
+  }
+  return categoryCache.get(path);
+}
+
+/** CMDT:GCcv1 → metals/energy 중 맞는 카테고리에서 찾는다. */
+async function fetchCommodity(symbol) {
+  const code = symbol.slice('CMDT:'.length);
+  for (const cat of [MARKETINDEX_CATEGORY.CMDT_METALS, MARKETINDEX_CATEGORY.CMDT_ENERGY]) {
+    const rows = await fetchCategory(cat);
+    const row = (rows || []).find((r) => r.reutersCode === code);
+    if (row) return normalize(symbol, row);
+  }
+  throw new Error(`metals·energy 에 ${code} 없음`);
+}
+
+/** BOND:US10YT=RR → majors/bond. 값은 "가격" 이 아니라 **금리(%)** 다. */
+async function fetchBond(symbol) {
+  const code = symbol.slice('BOND:'.length);
+  const rows = await fetchCategory(MARKETINDEX_CATEGORY.BOND);
+  const row = (rows || []).find((r) => r.reutersCode === code);
+  if (!row) throw new Error(`majors/bond 에 ${code} 없음`);
+  const out = normalize(symbol, row);
+  out.unit = 'percent';   // 대본이 "포인트" 로 읽지 않도록 명시한다
+  out.metric = 'yield';
+  return out;
+}
+
+/**
+ * COIN:bitcoin → CoinGecko simple/price (키 불필요).
+ * 네이버에는 코인 시세가 없다. 24시간 변동률을 등락률로 쓴다 — 주식의 "전일 대비"와
+ * 기준이 다르므로 대본이 섞어 쓰지 않도록 basis 를 남긴다.
+ */
+async function fetchCoin(symbol) {
+  const id = symbol.slice('COIN:'.length);
+  const d = await getJson(
+    `https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(id)}`
+    + '&vs_currencies=usd&include_24hr_change=true',
+  );
+  const row = d?.[id];
+  if (!row || row.usd === undefined) throw new Error(`CoinGecko 에 ${id} 없음`);
+  const price = num(row.usd);
+  const rate = num(row.usd_24h_change);
+  // normalize() 와 같은 스키마로 맞춘다 — 리포트·대본이 price/change_pct 를 읽는다.
+  const out = normalize(symbol, {
+    closePrice: price === null ? null : String(price),
+    fluctuationsRatio: rate === null ? null : rate.toFixed(2),
+    marketStatus: 'OPEN',     // 코인은 24시간 거래
+  });
+  out.currency = 'USD';
+  out.basis = '24h';          // 전일 종가 대비가 아니다 — 대본이 섞어 쓰지 않도록
+  out.source = 'coingecko';
+  return out;
+}
+
 async function fetchSymbol(symbol) {
   const fam = family(symbol);
   if (!fam) return { symbol, error: `알 수 없는 심볼 형식: ${symbol}` };
   try {
     if (fam === 'domestic') return await fetchDomestic(symbol);
     if (fam === 'world') return await fetchWorld(symbol);
+    if (fam === 'commodity') return await fetchCommodity(symbol);
+    if (fam === 'bond') return await fetchBond(symbol);
+    if (fam === 'coin') return await fetchCoin(symbol);
     return await fetchExchange(symbol);
   } catch (e) {
     return { symbol, name: DISPLAY[symbol] || symbol, error: e.message };
@@ -204,7 +288,10 @@ async function main() {
     requireClosed = slot.market?.require_closed || [];
   }
 
-  const date = values.date || new Date().toISOString().slice(0, 10);
+  // KST 기준이다. toISOString() 은 UTC 라 00~09시 KST 에는 하루 전 폴더를 가리킨다 —
+  // us-close 슬롯이 06:00 KST 라 정확히 그 구간이고, desk-briefing.js 는 KST 를 쓴다.
+  // --date 없이 손으로 돌리면 산출물이 두 폴더로 갈렸다 (2026-08-25).
+  const date = values.date || new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
   console.log(`\n📈 시세 스냅샷 — ${slotName} (${date})`);
 
   let quotes = await collect(symbols);

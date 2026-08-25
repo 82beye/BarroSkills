@@ -52,8 +52,23 @@ function buildPrompt({ slotName, slot, defaults, skeleton, date, inputs, outDir 
   const requiredClosed = slot.market?.require_closed?.join(', ') || '없음';
 
   // 파일 내용은 넣지 않고 경로만 준다 (CLAUDE.md brief 원칙).
-  return `너는 바로경제(econ-daily) 채널의 리서처다. 오늘(${date}, ${weekday}) "${slot.label}" 쇼츠 1편의 리서치를 완성한다.
+  // 데스크 브리핑이 있으면 그걸 1순위 입력으로 준다 (2026-08-25).
+  // 6개 전문 데스크가 이미 조사·검증한 결과라, 리서처가 처음부터 다시 파는 것보다
+  // 정확하고 빠르다. 없으면 기존 방식 그대로 돈다.
+  const deskBrief = join(outDir, 'desk-briefing.md');
+  const deskTopic = join(outDir, 'desk-topic.json');
+  const deskBlock = existsSync(deskBrief)
+    ? `\n## 데스크 브리핑 (1순위 입력 — 반드시 먼저 읽어라)\n`
+      + `  - ${deskBrief}\n`
+      + (existsSync(deskTopic) ? `  - ${deskTopic}\n` : '')
+      + `증시·금리·원자재·코인·지정학·외환 6개 데스크가 조사하고 에디터가 고른 오늘의 이야기다.\n`
+      + `여기서 고른 토픽과 인과 사슬을 **그대로 이어받아라**. 근거 없이 다른 주제로 갈아타지 마라.\n`
+      + `다만 데스크가 놓친 것(소셜 반응, 경쟁 채널 중복)은 네가 보강해라.\n`
+      + `데스크 리포트 원문은 같은 폴더의 desk-*.md 에 있다.\n`
+    : '\n## 데스크 브리핑\n  (없음 — 네가 직접 조사해라)\n';
 
+  return `너는 바로경제(econ-daily) 채널의 리서처다. 오늘(${date}, ${weekday}) "${slot.label}" 쇼츠 1편의 리서치를 완성한다.
+${deskBlock}
 ## 입력 (경로다. 직접 읽어라)
 ${inputLines}
 
@@ -223,7 +238,10 @@ function main() {
   try { cfg = loadSlot(values.slot); } catch (e) { console.error(`❌ ${e.message}`); process.exit(2); }
   const { slot, defaults, skeleton } = cfg;
 
-  const date = values.date || new Date().toISOString().slice(0, 10);
+  // KST 기준이다. toISOString() 은 UTC 라 00~09시 KST 에는 하루 전 폴더를 가리킨다 —
+  // us-close 슬롯이 06:00 KST 라 정확히 그 구간이고, desk-briefing.js 는 KST 를 쓴다.
+  // --date 없이 손으로 돌리면 산출물이 두 폴더로 갈렸다 (2026-08-25).
+  const date = values.date || new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
   const outDir = values['out-dir'] || join(ROOT, 'workspace', 'daily-news', date);
   mkdirSync(outDir, { recursive: true });
 

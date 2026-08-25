@@ -1,0 +1,125 @@
+{
+  "version": "1.0",
+  "description": "자산시장 브리핑용 전문 기자단. 각 데스크가 자기 영역만 파고들어 리포트를 내면, 데스크 에디터가 그 중 '오늘 가장 뜨거운 것'을 골라 에피소드 각도를 만든다. 지수·환율만 보던 기존 단일 리서처의 시야 한계를 메우기 위해 2026-08-25 도입.",
+  "reporters": [
+    {
+      "id": "equities",
+      "label": "증시 데스크",
+      "beat": "다우·나스닥·S&P500·코스피·코스닥",
+      "symbols": [
+        ".DJI",
+        ".IXIC",
+        ".INX",
+        "KOSPI",
+        "KOSDAQ"
+      ],
+      "question": "오늘 지수를 움직인 단일 최대 요인은 무엇인가. 섹터 간 온도차(디커플링)가 있었나.",
+      "search_hints": [
+        "nasdaq today",
+        "dow jones close",
+        "코스피 마감",
+        "섹터 로테이션"
+      ]
+    },
+    {
+      "id": "rates",
+      "label": "금리·채권 데스크",
+      "beat": "미국·한국·일본 국채 금리, 연준·한은 통화정책",
+      "symbols": [
+        "BOND:US10YT=RR",
+        "BOND:KR10YT=RR",
+        "BOND:JP10YT=RR"
+      ],
+      "question": "금리가 오늘 자산가격을 설명하는가, 아니면 금리와 무관하게 움직였나. 그 괴리가 오늘의 기사거리인가.",
+      "search_hints": [
+        "treasury yield",
+        "fed rate",
+        "10년물 금리",
+        "FOMC"
+      ],
+      "unit_caveat": "국채는 가격이 아니라 금리(%)다. '포인트 하락'이 아니라 '금리 하락'으로 쓴다."
+    },
+    {
+      "id": "commodities",
+      "label": "원자재 데스크",
+      "beat": "WTI·브렌트유·천연가스·금·은·구리",
+      "symbols": [
+        "CMDT:CLcv1",
+        "CMDT:LCOcv1",
+        "CMDT:NGcv1",
+        "CMDT:GCcv1",
+        "CMDT:SIcv1",
+        "CMDT:HGcv1"
+      ],
+      "question": "원자재가 지정학 리스크를 선반영하고 있나. 금·은은 안전자산 수요인가 인플레 헤지인가.",
+      "search_hints": [
+        "oil price today",
+        "gold price",
+        "silver squeeze",
+        "유가 전망"
+      ]
+    },
+    {
+      "id": "crypto",
+      "label": "디지털자산 데스크",
+      "beat": "비트코인·이더리움, ETF 자금흐름, 규제",
+      "symbols": [
+        "COIN:bitcoin",
+        "COIN:ethereum"
+      ],
+      "question": "코인이 위험자산(나스닥)과 같이 움직였나 따로 움직였나. 그 이유가 오늘 뉴스에 있나.",
+      "search_hints": [
+        "bitcoin price",
+        "btc etf flows",
+        "비트코인 시세"
+      ],
+      "unit_caveat": "코인 등락률은 24시간 기준이라 주식의 전일 대비와 기준이 다르다. 섞어 쓰지 않는다."
+    },
+    {
+      "id": "geopolitics",
+      "label": "국제·지정학 데스크",
+      "beat": "전쟁·분쟁·제재·선거·무역갈등이 자산시장에 미치는 경로",
+      "symbols": [],
+      "question": "오늘 지정학 뉴스 중 자산가격에 실제로 반영된 것이 있나. 반영 경로(유가·환율·방산·반도체)를 하나로 짚어라.",
+      "search_hints": [
+        "iran israel",
+        "ukraine russia war",
+        "tariff china",
+        "지정학 리스크 증시"
+      ],
+      "scope_caveat": "정치적 편들기를 하지 않는다. '누가 옳은가'가 아니라 '가격에 무엇이 반영됐나'만 쓴다. 사망·전쟁 피해는 선정적으로 다루지 않는다."
+    },
+    {
+      "id": "fx",
+      "label": "외환 데스크",
+      "beat": "원/달러, 달러인덱스, 엔·위안",
+      "symbols": [
+        "FX_USDKRW",
+        ".DXY"
+      ],
+      "question": "환율이 국내 투자자의 손익을 바꿨나. 달러 강세/약세의 원인이 미국 안인가 밖인가.",
+      "search_hints": [
+        "dollar index",
+        "원달러 환율",
+        "yen carry trade"
+      ],
+      "unit_caveat": "원/달러가 **오르면 원화 약세**다. \"환율 상승 = 원화 강세\" 로 쓰는 실수가 잦다."
+    }
+  ],
+  "editor": {
+    "id": "desk-editor",
+    "label": "데스크 에디터",
+    "role": "6개 데스크 리포트를 받아 오늘 단 하나의 '가장 뜨거운 이야기'를 고르고, 60초 쇼츠 각도로 좁힌다.",
+    "selection_criteria": [
+      "숫자로 확인되는가 (스냅샷·출처 링크)",
+      "한국 시청자의 손익과 연결되는가",
+      "경쟁 채널이 아직 안 다뤘거나 다르게 볼 여지가 있는가",
+      "60초에 인과 하나를 설명할 수 있는가"
+    ],
+    "reject": [
+      "여러 자산을 나열만 하고 인과가 없는 것",
+      "숫자 근거 없이 전망만 있는 것",
+      "정치적 입장이 필요한 것"
+    ]
+  }
+}

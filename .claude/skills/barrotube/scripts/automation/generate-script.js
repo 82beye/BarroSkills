@@ -116,6 +116,27 @@ function loadMascotClause(channel) {
  * image_prompt 계약 블록. 수치·템플릿은 lib/image-prompt-contract.js 가 유일한 출처다 —
  * 여기에 숫자를 다시 적으면 검증기와 갈라진다(그래서 예전 "≤25 words" 규칙이 생겼다).
  */
+/**
+ * 공인 캐리커처 절 (정책 §2·§4). 인물이 씬의 중심 키워드인데 익명 마스코트로만 그리면
+ * 시청자가 누구 얘긴지 못 알아본다 — 정책은 2026-04-26 부터 CHARACTERIZE 를 요구했지만
+ * 실행 룰이 없어 전 EP 가 마스코트로 나갔다(정책 §0.2 가 스스로 진단한 "정책-실행 갭").
+ */
+function buildCaricatureBlock() {
+  return [
+    'RULE C — 공인 캐리커처 (인물이 씬의 중심 키워드일 때만):',
+    '- 대상: 외국 정치인·외국 CEO·외국 경제 인사·사망/역사 인물 → 캐리커처로 그린다.',
+    '  한국 정치인·한국 CEO·한국 경제 인사·일반인 → 캐리커처 금지, 마스코트만 쓴다.',
+    '- 인물 이름이 narration 에 나오기만 해도 되는 게 아니라, 그 씬의 논지가 그 사람의',
+    '  발언·결정일 때만 해당한다. 배경 언급이면 마스코트 씬으로 둔다.',
+    '- 형식: 마스코트 절과 스테이징 문구는 그대로 두고, BACKGROUND 앞에 한 문장을 덧댄다 —',
+    '  "WITH: a flat cartoon caricature of <영문 이름><식별 단서 2~3개>, same line-art style, similar scale."',
+    '- 식별 단서는 헤어 실루엣·트레이드마크 의상/색·상징 props 수준까지만. 주름·점 같은',
+    '  얼굴 정밀 묘사, photorealistic/photo/digital painting 표현, 뿔·동물화는 금지.',
+    '- 캐리커처 컷은 프롬프트 상한이 880자로 완화된다(피사체가 둘이라). 씬 수 상한은',
+    '  5씬 포맷 2컷 / 7씬 포맷 3컷이며, 초과하면 검증기가 BLOCK 한다.',
+  ].join('\n');
+}
+
 function buildImagePromptContractBlock(mascotClause) {
   const identity = mascotClause
     ? `The channel mascot clause you MUST use (verbatim, inside the parentheses form shown):\n${mascotClause}\n`
@@ -176,6 +197,7 @@ RULES:
 2. Voice is Yohan Koo (ElevenLabs Korean male) at ~6-7 Korean chars/sec.
 3. Image prompts in ENGLISH. They MUST satisfy the image_prompt contract below (RULE 3-CONTRACT). It is machine-checked by validate-image-prompts.js before any image is generated — a violation blocks the pipeline.
 ${buildImagePromptContractBlock(mascotClause)}
+${buildCaricatureBlock()}
 4. CRITICAL — narration is TTS input: write every date, number, decimal, percentage, and range as Korean spoken words; never use Arabic digits. Add subtitle_text for every scene with the same meaning, using Arabic number display where useful (예: narration "사십 퍼센트", subtitle_text "40%").
 ${buildAnalystContractBlock(sceneCount)}
 5. BGM moods: tense_intro, calm_explain, dramatic_reveal, hopeful_outro, neutral_bg, upbeat_energy.
@@ -335,6 +357,10 @@ async function main() {
   const refs = readIfExists(join(epDir, '05_topic_references.md'));
   const research = readIfExists(join(epDir, '10_market_research.md'));
   const strategy = readIfExists(join(epDir, '20_strategy.md'));
+  // 기자단 브리핑 원본. 10_market_research.md 는 이걸 요약한 것이라 출처 URL 이 깎여 있다.
+  // 대본이 수치를 쓸 때 근거를 직접 보게 하려고 원본도 같이 넣는다.
+  // 길면 자른다 — brief+refs 가 길어져 응답이 잘린 전례가 있다 (아래 max_tokens 주석 참조).
+  const deskBrief = readIfExists(join(epDir, '05_desk_briefing.md')).slice(0, 6000);
 
   if (!brief) {
     console.error(`❌ Missing brief: ${briefPath}`);
@@ -418,6 +444,7 @@ async function main() {
   ];
   if (research) userPromptParts.push(`[MARKET RESEARCH]`, research, '');
   if (strategy) userPromptParts.push(`[CONTENT STRATEGY]`, strategy, '');
+  if (deskBrief) userPromptParts.push(`[DESK BRIEFING — 기자단 원본 근거·출처]`, deskBrief, '');
   if (refs) userPromptParts.push(`[NEWS REFERENCES]`, refs, '');
   if (brand) userPromptParts.push(`[CHANNEL BRAND]`, brand, '');
   if (styleGuide) userPromptParts.push(`[STYLE GUIDE: ${spec.style_guide_filename}]`, styleGuide, '');

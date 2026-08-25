@@ -6,6 +6,7 @@
 
 | Stage | 명칭 | 담당 (subagent_type) | 입력 | 출력 | 비용 | 시간 |
 |---|---|---|---|---|---|---|
+| Pre-S0 | Desk Briefing | (자동) `desk-briefing.js` — 증시·금리·원자재·코인·지정학·외환 6개 데스크 + 에디터. auto-pipeline Phase 2a. 상세는 `AUTO-PIPELINE.md` | 시세 18종 + 뉴스 + 경쟁 인텔 + 웹·소셜 검색 | `desk-<id>.md`, `desk-briefing.md`, `desk-topic.json` → EP 의 `05_desk_briefing.md` | `claude -p` 7회 | ~7분 |
 | S0 | Brief | (자동) `create-episode.js` | topic, channel | `00_brief.md` + EP 디렉토리 | 0 | 5초 |
 | S1 | Ticket | (BarroSkills 생략) | - | - | 0 | - |
 | S2 | Research | `barrotube-researcher` | brief | `10_market_research.md` | ~$0.05 | 1~2분 |
@@ -15,7 +16,7 @@
 | S6a | TTS | `barrotube-voice-engineer` (또는 직접 호출) | script | `40_assets/tts/*.wav` | **$0.02/씬** (ElevenLabs) | 30초/씬 |
 | S6b | Duration Sync | (자동) `sync-durations.js` | tts metadata | `30_script.md` 갱신 | 0 | 5초 |
 | S6c | Scene Images + Motion | **기본: `barrotube-media-render` 스킬** (브라우저 ChatGPT→Grok image-to-video, PD 수행) / 레거시: `barrotube-image-generator` API (`--image-engine openai\|gemini`) | script | 신규 Shorts: `40_assets/images/scene_001..005.png` + `40_assets/videos/scene_001..005.mp4` (각 5/5) | 기본 0 (브라우저) / 레거시 **$0.04/이미지** | 1~2분/씬 (브라우저) |
-| S6d | Intro Card | **기본: `barrotube-media-render` 스킬** (브라우저 ChatGPT, PD가 타이틀 철자 검수) / 레거시: `generate-intro.js` v10 API (`--engine openai\|gemini`) | title + brand | `45_intro.png` | 기본 0 / 레거시 ~$0.18 | 1~2분 (브라우저) |
+| S6d | Intro Card | **기본: `barrotube-media-render` 스킬** (브라우저 ChatGPT, PD가 타이틀 철자 검수) / 레거시: `generate-intro.js` v10 API (`--engine openai\|gemini`) | title + brand<br>타이틀의 기업명 → 연관 인물 캐리커처 + CI 로고 자동 주입 (`config/brand-entities.json`) | `45_intro.png` | 기본 0 / 레거시 ~$0.18 | 1~2분 (브라우저) |
 | S6e | Thumbnail | `barrotube-image-generator` | brand + script | `47_thumbnail.png` | ~$0.04 | 20초 |
 | S7 | Render | (자동) `render-direct.js` — 신규 Shorts는 Grok 클립 5/5 미달 시 기본 실패하며 각 클립을 반복하지 않고 TTS 길이에 맞춰 리타이밍. `--allow-stills`는 publish QA를 통과할 수 없는 레거시 전용 예외 | assets + script | `55_render/video.mp4` | 0 (FFmpeg) | 1~2분 |
 | S7b | CapCut Draft | `barrotube-capcut-composer` (선택) | assets | `50_capcut_draft.json` | 0 | 1분 |
