@@ -172,20 +172,52 @@ node scripts/automation/check-oauth-expiry.js --verify   # 실제 토큰 검증 
 - `doctor-cli.sh` 의 `youtube_oauth` 항목이 EXPIRED 를 RED 로 보고
 - 발급 기록(`YOUTUBE_OAUTH_ISSUED_AT`)이 없으면 `.env` mtime 으로 추정하되 "추정"임을 밝힌다
 
-### 갱신
+### 자동 갱신 (기본)
+
+```bash
+node scripts/automation/renew-youtube-oauth.js            # 임박했을 때만 (launchd 용)
+node scripts/automation/renew-youtube-oauth.js --force    # 지금 바로
+node scripts/automation/renew-youtube-oauth.js --dry-run  # 판단만
+```
+
+남은 기간이 **3일 이하**일 때만 실제로 갱신하고, 그 외에는 즉시 종료한다.
+갱신은 로컬 콜백 서버 + **로그인된 실제 Chrome** 을 AppleScript 로 몰아 동의 3단계
+(브랜드 계정 선택 → "확인되지 않은 앱" 계속 → 동의 계속)를 대신 클릭한다.
+Playwright 가 아니라 AppleScript 인 이유는 `grok-motion-applescript.js` 와 같다 —
+자동화 지문이 없고 launchd(Aqua 세션)에서 그대로 돈다.
+
+launchd: `com.barroskills.barrotube.oauth-renew` — 매일 **06:40** (us-close 06:00 이 끝난 뒤,
+kr-close 16:00 전. 발행 중에 Chrome 을 빼앗지 않으려고 슬롯 사이에 둔다).
+로그는 `logs/cron/oauth-renew.{log,err}`.
+
+안전장치 두 가지:
+- **채널 검증** — 새 토큰의 `channels.list(mine=true)` 가 기대 채널(`바로경제`,
+  `UCZAXYLHl1-bFqNmnwtgrcXg`)이 아니면 되돌린다. 브랜드 계정을 잘못 고르면 다음 발행이
+  남의 채널로 나간다. 다른 채널이면 `BT_YT_BRAND` / `BT_YT_CHANNEL_ID` 로 바꾼다.
+- **실패해도 기존 토큰 유지** — 어느 단계에서 막히든 `.env` 를 되돌리고 텔레그램으로
+  수동 절차를 알린다. 남은 기간 동안은 계속 돈다.
+
+### 수동 갱신
 
 ```bash
 node scripts/automation/setup-youtube-oauth.js
 ```
 
 브라우저가 열리고 승인하면 `refresh_token` 과 `ISSUED_AT` 이 `.env` 에 저장된다.
-"확인되지 않은 앱" 경고는 `고급 → 이동`으로 넘어간다.
+"확인되지 않은 앱" 경고는 `계속`으로 넘어간다. 자동 갱신이 DOM 변경 등으로 깨졌을 때 쓴다.
 
-### 영구 해결
+### 영구 해결 — 지금은 막혀 있다
 
-[동의 화면](https://console.cloud.google.com/apis/credentials/consent)을 **프로덕션**으로 게시하면
-만료가 사라진다. 사용자 100명 미만 자가 운영은 Google 심사가 필요 없다.
-게시 후 `.env` 에 `YOUTUBE_OAUTH_PUBLISHED=1` 을 넣으면 경과일 검사를 끈다.
+[동의 화면](https://console.cloud.google.com/auth/audience?project=barrotube)을 **프로덕션**으로
+게시하면 만료가 사라지고 위 갱신이 통째로 불필요해진다. 게시 후 `.env` 에
+`YOUTUBE_OAUTH_PUBLISHED=1` 을 넣으면 경과일 검사가 꺼진다.
+
+**2026-08-26 실측: "앱 게시" 버튼이 비활성이다.** 경고는
+*"앱의 OAuth 구성이 완료되지 않았습니다"* 이고, 원인은 브랜딩 페이지의
+**애플리케이션 홈페이지 · 개인정보처리방침 링크 · 서비스 약관 링크**가 비어 있는 것이다
+(외부 앱 게시의 필수 항목). 필수 표시(*)가 붙은 앱 이름·지원 이메일·개발자 연락처는
+이미 채워져 있다. 즉 남은 것은 **운영자가 소유·인증한 도메인에 그 세 페이지를 올리는 일**이고,
+그때까지는 위 자동 갱신이 차선이다.
 
 
 ## 다른 머신으로 이식
