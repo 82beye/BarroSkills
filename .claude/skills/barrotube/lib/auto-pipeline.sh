@@ -933,8 +933,14 @@ SuperGrok 구독 모달이 뜨면 결제·무료 체험 절대 하지 말고 닫
     halt_for_human "Phase 7 Grok 모션" \
       "Grok 모션 클립이 없습니다: ${MEDIA_ASSETS_MISSING}
 
-🔎 먼저 **왜 실패했는지** 보세요. 컷별 사유는 stdout 이 아니라 stderr 에 있습니다:
-     grep '❌ 씬 0' ${BARROTUBE_HOME}/logs/cron/${CRON_LOG_NAME}.err | tail -10
+🔎 먼저 **왜 실패했는지** 보세요. 컷별 사유는 stdout 이 아니라 stderr 에 있습니다.
+   launchd 실행:  grep '❌ 씬 0' ${BARROTUBE_HOME}/logs/cron/${CRON_LOG_NAME}.err | tail -10
+   손으로 돌린 경우: 그 실행의 출력에 그대로 있습니다 (2>&1 로 합쳤다면 stdout 쪽).
+
+🔑 Grok 계정부터 확인하세요. 접근은 되는데 **다른 계정으로 로그인**돼 있으면 생성은 되고
+   다운로드 버튼이 안 잡혀 전 컷이 "다운로드 버튼을 찾지 못했습니다" 로 죽습니다
+   (2026-08-27 EP-2026-0118: 11분을 이렇게 헛돌았다).
+     node ${BARROTUBE_HOME}/scripts/automation/grok-motion-applescript.js --check
 
 💾 자주 나오는 함정 — **영상은 이미 받아져 있는데 복사만 실패한 경우**가 있습니다.
    (2026-08-26 EP-2026-0116: Grok 생성·다운로드 5/5 성공, Finder 복사가 AppleEvent

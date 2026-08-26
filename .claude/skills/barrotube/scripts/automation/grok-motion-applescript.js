@@ -28,6 +28,8 @@ import { createHash } from 'node:crypto';
 
 const GROK_URL = 'https://grok.com/imagine';
 /** Finder 가 바빠도 버티게 한다. 기본 AppleEvent 타임아웃(60초)이 -1712 의 원인이었다. */
+/** 기대하는 Grok 로그인 계정. 비우면 계정 검사를 하지 않는다. */
+const BT_GROK_ACCOUNT = process.env.BT_GROK_ACCOUNT || '82beye@gmail.com';
 const FINDER_TIMEOUT_SEC = Number(process.env.BT_GROK_FINDER_TIMEOUT || 300);
 const CUT_DELAY_MS = Number(process.env.BT_GROK_CUT_DELAY_MS ?? 12000);
 const GEN_TIMEOUT_MS = Number(process.env.BT_GROK_TIMEOUT_MS || 6 * 60 * 1000);
@@ -59,6 +61,14 @@ end run`;
   return execFileSync('osascript', ['-e', script, js], {
     encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
   }).trim();
+}
+
+/** 지금 Grok 에 로그인된 계정 이메일. 못 읽으면 null (검사를 건너뛴다). */
+function signedInAs() {
+  try {
+    const r = chromeJS("(function(){var m=document.body.innerText.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+/);return m?m[0]:''})()");
+    return r || null;
+  } catch { return null; }
 }
 
 /** grok.com 탭을 찾는다. 없으면 새 탭으로 연다. → {windowIdx, tabIdx} */
@@ -367,7 +377,17 @@ async function main() {
       navigate(tab, GROK_URL);
       try {
         await waitReady(tab, 60000);
-        console.log(`✅ 실제 Chrome 으로 Grok 사용 가능 (w${tab.windowIdx}t${tab.tabIdx})`);
+        // 접근 가능 여부만 보면 **남의 계정으로 로그인돼 있어도 통과한다.**
+        // 2026-08-27 EP-2026-0118: Chrome 의 Grok 이 hameedkhan17653@gmail.com 세션이었고
+        // --check 는 ✅ 를 줬다. 생성은 시작되는데 다운로드 버튼이 안 잡혀 5컷 전부
+        // "다운로드 버튼을 찾지 못했습니다" 로 11분을 헛돌았다. 계정을 같이 본다.
+        const who = signedInAs();
+        if (BT_GROK_ACCOUNT && who && who.toLowerCase() !== BT_GROK_ACCOUNT.toLowerCase()) {
+          console.error(`❌ Grok 이 다른 계정입니다: ${who} (기대 ${BT_GROK_ACCOUNT})`);
+          console.error('   Chrome 에서 운영자 계정으로 다시 로그인하세요. 코드로는 풀 수 없습니다.');
+          process.exit(3);
+        }
+        console.log(`✅ 실제 Chrome 으로 Grok 사용 가능 (w${tab.windowIdx}t${tab.tabIdx})${who ? ` · ${who}` : ''}`);
         process.exit(0);
       } catch (e) {
         lastErr = e;
