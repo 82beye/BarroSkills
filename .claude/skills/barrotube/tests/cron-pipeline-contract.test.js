@@ -180,6 +180,25 @@ test('produce-episode 가 config 단계별 엔진을 전역 env 로 덮지 않�
     '전역 override 는 운영자가 **명시**했을 때만 건다');
 });
 
+test('halt 안내문의 따옴표가 셸 문자열을 끊지 않는다', () => {
+  // 2026-08-27: 안내문에 이스케이프 안 된 " 를 넣어 halt_for_human 의 인자가 중간에서
+  // 끊겼다. `bash -n` 은 따옴표가 우연히 짝이 맞아 통과했고, 실행에서야 line 975
+  // syntax error 로 터졌다 — cron 포함 모든 실행이 막히는 상태였다.
+  // 문법 검사만으로는 못 잡으니 문자열 안의 raw " 를 직접 본다.
+  const src = readFileSync(AUTO, 'utf8');
+  const start = src.indexOf('halt_for_human "Phase 7 Grok 모션"');
+  assert.ok(start > 0, 'Grok halt 블록이 있어야 한다');
+  // 인자 문자열은 그 다음 " 부터 이스케이프되지 않은 " 까지다.
+  const body = src.slice(start + 'halt_for_human "Phase 7 Grok 모션"'.length);
+  const open = body.indexOf('"');
+  const arg = body.slice(open + 1);
+  const endIdx = arg.search(/(?<!\\)"/);
+  assert.ok(endIdx > 500,
+    `안내문이 ${endIdx}자에서 끊긴다 — 본문의 " 를 \\" 로 이스케이프해야 한다`);
+  assert.match(arg.slice(0, endIdx), /BT_MOTION_ENGINE=local-only/,
+    '탈출구 안내까지 한 문자열 안에 들어 있어야 한다');
+});
+
 test('Grok motion is canon — a missing clip halts instead of silently falling back', () => {
   // HyperFrames 는 스틸에 팬·줌을 걸 뿐이고 피사체가 움직이지 않는다. 조용히 대체되면
   // 덜 사는 화면이 매일 나간다 — EP-0096·0097·0098 이 전부 그렇게 게시됐고 운영자가
