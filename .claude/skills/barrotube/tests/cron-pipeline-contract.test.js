@@ -173,8 +173,28 @@ test('Grok motion is canon — a missing clip halts instead of silently falling 
   const source = readFileSync(AUTO, 'utf8');
   assert.match(source, /grok_motion_missing/);
   assert.match(source, /halt_for_human "Phase 7 Grok 모션"/);
-  assert.match(source, /파일 URL에 대한 액세스 허용/, '무엇을 켜야 하는지 알려 줘야 한다');
   assert.match(source, /BT_MOTION_ENGINE=local-only/, '명시적 탈출구가 있어야 한다');
+
+  // 멈출 때는 **무엇을 보라고** 알려 줘야 한다. 예전 문구는 Playwright/Cloudflare 를
+  // 원인으로 지목했는데, 2026-08-26 EP-0116 의 실제 원인은 Finder 복사 타임아웃이었고
+  // 클립 5개는 이미 ~/Downloads 에 받아져 있었다. 진단을 30분 태운 문구다.
+  assert.match(source, /logs\/cron\/\$\{CRON_LOG_NAME\}\.err/,
+    '컷별 실패 사유는 stdout 이 아니라 stderr 에 있다 — 어디를 볼지 알려 줘야 한다');
+  assert.match(source, /~\/Downloads/,
+    '이미 받아진 클립이 있는지 먼저 보게 해야 한다 (재생성은 쿼터·20분이다)');
+  assert.ok(!/XAI_API_KEY/.test(source),
+    '읽는 코드가 없는 키를 설정하라고 안내하면 안 된다');
+
+  // 게이트는 motion 모드여야 한다. 기본값(full)은 인트로·썸네일까지 요구하는데 그 둘은
+  // Phase 8 의 산출물이라, Phase 7 이 영원히 통과할 수 없다 —
+  // EP-0114·EP-0116·EP-0117 이 이미지·클립 5/5 인 채로 이것 때문에 halt 했다.
+  const motionGates = source.split('\n')
+    .filter((l) => l.includes('media_assets_ready "$MEDIA_BASE"') && l.includes('local-only'));
+  assert.equal(motionGates.length, 2, 'Grok 게이트는 시도 전·후 두 곳이다');
+  for (const g of motionGates) {
+    assert.match(g, /media_assets_ready "\$MEDIA_BASE" motion/,
+      'Grok 게이트가 full 로 떨어지면 Phase 8 산출물을 요구해 영원히 멈춘다');
+  }
 
   // 브라우저에 모션을 요구하는 지시가 살아 있어야 한다 — 이걸 끄면 애초에 Grok 을 안 연다.
   assert.match(source, /Grok Imagine에서 각 scene_NNN\.png를 첨부해 영상 5개를/);

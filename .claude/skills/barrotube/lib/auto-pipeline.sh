@@ -113,11 +113,15 @@ run_with_timeout() {
   return $rc
 }
 
-# $2 = full(기본) | stills
-#   full   — 인트로 카드·썸네일까지 있어야 "브라우저 단계 통째로 건너뛰기" 가 성립한다.
-#   stills — 브라우저가 **실제로 필요한** 것만 본다. 인트로 카드는 generate-cards.js 가,
-#            썸네일은 generate-thumbnail.js 가 Phase 8 에서 씬 이미지로부터 만든다.
-#            그 둘이 없다고 파이프라인을 세울 이유가 없다.
+# $2 = full(기본) | motion | stills
+#   full   — 이미지 + 클립 + 인트로 카드·썸네일. "브라우저 단계를 **통째로 건너뛴다**" 는
+#            판정에만 쓴다. 넷이 다 있으면 Phase 7 에서 할 일이 없다는 뜻이다.
+#   motion — 이미지 + 클립. **Grok 모션 게이트가 쓸 모드다.** 인트로 카드는
+#            generate-cards.js 가, 썸네일은 generate-thumbnail.js 가 Phase 8 에서 씬
+#            스틸로부터 만든다 — Phase 7 이 Phase 8 의 산출물을 요구하면 영원히 통과할 수 없다.
+#            (2026-08-24 EP-0114 · 08-26 EP-0116 · EP-0117 이 이것 때문에 halt 했다.
+#             셋 다 이미지·클립은 5/5 였고 인트로·썸네일만 없었다.)
+#   stills — 이미지만. 브라우저가 정말 필요한 건 시트를 붙이는 스틸뿐인 단계에서 쓴다.
 media_assets_ready() {
   local base="$1" mode="${2:-full}" id path hash hashes="" missing=""
   # 모션은 Grok 이 정본이라 여기서 클립까지 요구한다. BT_MOTION_ENGINE=local-only 일 때만
@@ -151,6 +155,7 @@ media_assets_ready() {
       hashes="${hashes}${hashes:+$'\n'}${hash}"
     fi
   done
+  # 인트로·썸네일은 full 에서만 본다. motion·stills 는 Phase 8 이 만들 것을 요구하지 않는다.
   if [ "$mode" = "full" ]; then
     for path in 45_intro.png 47_thumbnail.png; do
       [ -s "${base}/${path}" ] || missing="${missing}${missing:+, }${path}"
@@ -891,7 +896,7 @@ SuperGrok 구독 모달이 뜨면 결제·무료 체험 절대 하지 말고 닫
   # 확장이 아니라 프로그램이라 codex 표면의 첨부 차단(숨은 input·파일 선택·Cmd+V)을 받지 않는다.
   # 전용 프로필(~/.barrotube/grok-profile)에 한 번 로그인해 두면 무인으로 돈다.
   # 한 컷이라도 실패하면 exit 1 이고, 아래 게이트가 남은 컷을 보고 판단한다.
-  if [ "$MOTION_ENGINE" != "local-only" ] && ! media_assets_ready "$MEDIA_BASE"; then
+  if [ "$MOTION_ENGINE" != "local-only" ] && ! media_assets_ready "$MEDIA_BASE" motion; then
     # 디렉터리 존재가 아니라 **실제 로그인 여부**로 게이트한다.
     # 예전에는 폴더만 보고 시도해서, 로그인 안 된 프로필로 매일 RED halt 를 냈다
     # (2026-08-17·20·23·24 실측 4건 — 원인은 --use-mock-keychain 으로 sso 쿠키가
@@ -923,7 +928,7 @@ SuperGrok 구독 모달이 뜨면 결제·무료 체험 절대 하지 말고 닫
     fi
   fi
 
-  if [ "$MOTION_ENGINE" != "local-only" ] && ! media_assets_ready "$MEDIA_BASE"; then
+  if [ "$MOTION_ENGINE" != "local-only" ] && ! media_assets_ready "$MEDIA_BASE" motion; then
     audit "grok_motion_missing" "RED" "ep=$EP_ID missing=${MEDIA_ASSETS_MISSING}"
     halt_for_human "Phase 7 Grok 모션" \
       "Grok 모션 클립이 없습니다: ${MEDIA_ASSETS_MISSING}
