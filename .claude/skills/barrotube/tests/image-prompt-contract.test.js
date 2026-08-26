@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const ROOT = join(import.meta.dirname, '..');
 
 import {
   BOUNDS, CANONICAL_TAIL, TEMPLATE, KNOWN_PALETTES, MASCOT_CLAUSE, CARICATURE,
@@ -192,4 +196,23 @@ test('5씬 Shorts 는 캐리커처 2컷까지', () => {
     .concat([...Array(5 - n).keys()].map(() => ({ sceneId: 'x', prompt: GOOD })));
   assert.ok(checkEpisodePrompts(five(2)).ok);
   assert.ok(!checkEpisodePrompts(five(3)).ok);
+});
+
+test('작성 규칙과 검증 계약이 캐리커처 형식에서 어긋나지 않는다', () => {
+  // 2026-08-27 EP-2026-0118 씬 002: RULE 14(a) 가 "마스코트 절을 descriptor 로 REPLACE 하라"
+  // 고 적혀 있어 작성자가 지시대로 교체했고, 검증기는 MASCOT_CLAUSE_MISSING 으로 BLOCK 했다.
+  // 규칙을 지킬수록 게이트에 걸리니 재생성이 무한히 실패했다. 정본은 RULE C 의 "마스코트 절은
+  // 그대로 두고 WITH: 절을 덧댄다" 이고, 계약이 인식하는 캐리커처도 그 형태뿐이다.
+  const writer = readFileSync(join(ROOT, 'scripts/automation/generate-script.js'), 'utf-8');
+  // "Do NOT replace …" 는 금지문이라 잡으면 안 된다. 지시문만 본다.
+  assert.ok(!/(?<!Do NOT )REPLACE the mascot clause/.test(writer),
+    '마스코트 절을 교체하라고 지시하면 검증기가 BLOCK 한다 — 덧대는 형식이어야 한다');
+  assert.match(writer, /KEEP the RULE 3-CONTRACT mascot clause/,
+    'RULE 14 는 마스코트 절을 유지하라고 해야 한다');
+  assert.match(writer, /WITH: a flat cartoon caricature of/,
+    '계약이 인식하는 유일한 캐리커처 형식을 지시해야 한다');
+
+  // 계약이 실제로 그 형식만 캐리커처로 인정하는지 — 양쪽이 같은 문자열을 본다.
+  assert.match(CARICATURE.clauseRe.source, /WITH:/,
+    '계약의 캐리커처 정규식과 작성 규칙의 형식이 같아야 한다');
 });
