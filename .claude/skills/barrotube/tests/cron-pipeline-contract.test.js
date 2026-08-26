@@ -166,6 +166,20 @@ test('browser output is captured by file redirect, never by a pipe', () => {
     'tee 파이프가 돌아오면 브라우저 단계가 타임아웃을 넘겨 매달린다');
 });
 
+test('produce-episode 가 config 단계별 엔진을 전역 env 로 덮지 않는다', () => {
+  // 부모가 기본값 'openai' 를 BT_IMAGE_ENGINE 으로 export 하면, 그 env 는 우선순위상
+  // config.stages 보다 위라 단계별 설정이 통째로 무력화된다. 2026-08-26 EP-2026-0117:
+  // config 는 S6e_thumbnail="codex" 인데 자식이 openai 로 갔다가 429 → 씬 스틸 폴백.
+  // config.global 이 openai 이던 시절엔 결과가 같아 드러나지 않았다.
+  const src = readFileSync(join(ROOT, 'scripts/automation/produce-episode.js'), 'utf8');
+  assert.ok(!/const imageEngine = explicitEngine \|\| 'openai'/.test(src),
+    "기본값을 'openai' 로 두면 config 단계별 설정이 죽는다");
+  assert.match(src, /const imageEngine = explicitEngine \|\| 'auto'/,
+    '미지정이면 auto — 자식이 config 를 직접 보게 한다');
+  assert.match(src, /if \(explicitEngine && \['openai', 'gemini', 'codex'\]\.includes\(explicitEngine\)\)/,
+    '전역 override 는 운영자가 **명시**했을 때만 건다');
+});
+
 test('Grok motion is canon — a missing clip halts instead of silently falling back', () => {
   // HyperFrames 는 스틸에 팬·줌을 걸 뿐이고 피사체가 움직이지 않는다. 조용히 대체되면
   // 덜 사는 화면이 매일 나간다 — EP-0096·0097·0098 이 전부 그렇게 게시됐고 운영자가

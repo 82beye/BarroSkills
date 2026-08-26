@@ -1104,9 +1104,23 @@ if [ "$DRY_RUN" = "0" ]; then
     VIDEO_ID=$(json_get "$RESULT_FILE" "d.get('targets',{}).get('youtube',{}).get('videoId') or d.get('video_id','')")
     PUB_STATUS=$(json_get "$RESULT_FILE" "d.get('targets',{}).get('youtube',{}).get('status','')")
     PUB_AT=$(json_get "$RESULT_FILE" "d.get('targets',{}).get('youtube',{}).get('publishedAt','')")
-    notify_telegram "✅ <b>${EP_ID} ${PUB_STATUS}</b>\n슬롯: ${SLOT_LABEL}\n토픽: $TOPIC\n공개: ${PUB_AT}\nURL: https://youtu.be/${VIDEO_ID}"
+    PUB_PRIVACY=$(json_get "$RESULT_FILE" "d.get('targets',{}).get('youtube',{}).get('privacyStatus','')")
+
+    # 예약이 안 걸리고 private 로 올라간 것은 **발행이 아니다.** 슬롯 시각을 넘기면
+    # generate-metadata 의 resolvePublishAt 이 null 을 돌려(YouTube 가 과거 publishAt 을
+    # 거부한다) 조용히 private 로 남는데, publishedAt 은 publish-youtube 가
+    # `publishAt || now` 로 채우기 때문에 완료 보고에는 "공개: <지금>" 이 찍힌다.
+    # 2026-08-26 EP-0116·EP-0117 이 연속으로 이렇게 묻혔다 — 둘 다 "✅ 완료" 였다.
+    if [ "$PUB_PRIVACY" = "private" ] && [ "$PUB_STATUS" != "scheduled" ]; then
+      audit "publish_left_private" "RED" "ep=$EP_ID slot=$SLOT video=$VIDEO_ID"
+      echo "  ⚠️  비공개로 남았습니다 — 예약이 걸리지 않았습니다 (슬롯 시각 ${PUBLISH_AT:-?} 경과)"
+      echo "     공개: node scripts/automation/set-video-privacy.js --video $VIDEO_ID --privacy public"
+      notify_telegram "⚠️ <b>${EP_ID} 비공개로 남았습니다</b>\n슬롯: ${SLOT_LABEL}\n토픽: $TOPIC\nURL: https://youtu.be/${VIDEO_ID}\n\n예약 목표 ${PUBLISH_AT:-?} KST 를 넘겨 예약이 걸리지 않았습니다.\n공개하려면:\n<code>node scripts/automation/set-video-privacy.js --video ${VIDEO_ID} --privacy public</code>"
+    else
+      notify_telegram "✅ <b>${EP_ID} ${PUB_STATUS}</b>\n슬롯: ${SLOT_LABEL}\n토픽: $TOPIC\n공개: ${PUB_AT}\nURL: https://youtu.be/${VIDEO_ID}"
+    fi
     echo "  videoId: $VIDEO_ID"
-    echo "  status:  $PUB_STATUS"
+    echo "  status:  $PUB_STATUS (privacy=$PUB_PRIVACY)"
     echo "  공개:    $PUB_AT"
   else
     echo "  ⚠ 발행 결과 파일을 찾지 못했습니다: $RESULT_FILE"

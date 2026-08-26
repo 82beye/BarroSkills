@@ -158,15 +158,23 @@ async function main() {
   // (브라우저 ChatGPT/Grok, PD 수행)으로 사전 생성하는 기본 모드. API 호출 없음.
   // 명시(explicit) 값과 미지정을 구분해 S6c 기본값을 config.stages.S6c_scene에서 가져온다.
   const explicitEngine = (values['image-engine'] || process.env.BT_IMAGE_ENGINE || '').toLowerCase() || null;
-  const imageEngine = explicitEngine || 'openai';
+  // 기본값을 'openai' 로 하드코딩하면 안 된다. 아래에서 그 값을 BT_IMAGE_ENGINE 으로
+  // export 하는데, 그 env 는 우선순위상 config.stages 보다 위라 **단계별 설정이 통째로
+  // 무력화된다**. 2026-08-26 EP-2026-0117: config 가 S6e_thumbnail="codex" 인데
+  // 자식 generate-thumbnail.js 가 openai 로 갔다가 429 를 맞고 씬 스틸 폴백으로 샜다.
+  //   ▶ S6e Thumbnail (codex)                      ← 부모가 config 로 계산한 값(로그만)
+  //     Engine: openai-gpt-image-1 (source=BT_IMAGE_ENGINE)  ← 자식이 실제로 본 값
+  // config.global 이 openai 이던 시절엔 결과가 같아 드러나지 않았다.
+  const imageEngine = explicitEngine || 'auto';
   if (!['openai', 'gemini', 'auto', 'media-render', 'codex'].includes(imageEngine)) {
     console.error(`❌ --image-engine 는 openai|gemini|auto|media-render|codex 중 하나여야 합니다 (받음: ${imageEngine})`);
     process.exit(1);
   }
-  if (imageEngine === 'openai' || imageEngine === 'gemini' || imageEngine === 'codex') {
-    process.env.BT_IMAGE_ENGINE = imageEngine;   // resolveImageEngine 이 config.stages/global 보다 우선 적용
+  if (explicitEngine && ['openai', 'gemini', 'codex'].includes(explicitEngine)) {
+    // 운영자가 **명시**했을 때만 전역 override. resolveImageEngine 이 config 보다 우선 적용한다.
+    process.env.BT_IMAGE_ENGINE = explicitEngine;
   } else {
-    // auto / media-render: S6d 인트로·S6e 썸네일 하위 스크립트는 config 단계별 설정 그대로
+    // 미지정 · auto · media-render: 자식이 config/image-engines.json 단계별 설정을 직접 보게 둔다.
     delete process.env.BT_IMAGE_ENGINE;
   }
   // S6c 씬 엔진 resolution: 명시(CLI/env, auto 제외) > config.stages.S6c_scene > openai

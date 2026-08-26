@@ -28,9 +28,12 @@ test('OpenAI 경로도 캐릭터시트를 참조 이미지로 붙인다', () => 
   assert.match(SCENE.slice(codexStart, codexStart + 400), /channel: meta\.channel_id/,
     'codex 분기에도 channel 을 넘겨야 한다');
 
+  // 2026-08-26: codex 실패 시 Gemini 폴백 분기가 추가되어 4개가 됐다. 그 폴백에도 시트가
+  // 붙어야 한다 — Gemini 는 텍스트 DNA 만 쓰면 드리프트가 크고, 폴백은 조용히 타는
+  // 경로라 여기서 빠지면 아무도 모른다 (EP-0114 가 5컷 전부 Gemini 로 나간 적이 있다).
   assert.equal(
-    (SCENE.match(/channel: meta\.channel_id/g) || []).length, 3,
-    'gemini·openai·codex 세 분기 모두에 있어야 한다');
+    (SCENE.match(/channel: meta\.channel_id/g) || []).length, 4,
+    'gemini·openai·codex·codex→gemini 폴백 네 분기 모두에 있어야 한다');
 });
 
 test('codex 어댑터가 캐릭터·노출 고정 블록을 매 호출에 붙인다', async () => {

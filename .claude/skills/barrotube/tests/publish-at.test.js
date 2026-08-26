@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+
+const ROOT = join(import.meta.dirname, '..');
 
 import { resolvePublishAt } from '../scripts/automation/generate-metadata.js';
 
@@ -53,4 +57,19 @@ test('두 슬롯의 실제 값이 모두 유효하다', () => {
   const at1600 = new Date('2026-07-29T07:00:00Z');  // 07-29 16:00 KST
   assert.equal(resolvePublishAt('08:00', at0600), '2026-07-29T08:00:00+09:00');
   assert.equal(resolvePublishAt('18:00', at1600), '2026-07-29T18:00:00+09:00');
+});
+
+test('예약이 안 걸려 private 로 남은 업로드를 완료로 위장하지 않는다', () => {
+  // publish-youtube 는 publishedAt 을 `publishAt || now` 로 채운다. 예약이 없어도
+  // 완료 보고에 "공개: <지금>" 이 찍혀 게시된 것처럼 보인다 — 2026-08-26 EP-0116·0117 이
+  // 연속으로 그렇게 묻혔고 둘 다 "✅ 완료" 였다. privacy 를 따로 보고 경고해야 한다.
+  const src = readFileSync(join(ROOT, 'lib/auto-pipeline.sh'), 'utf8');
+  assert.match(src, /PUB_PRIVACY=/, '완료 보고가 privacyStatus 를 읽어야 한다');
+  assert.match(src, /publish_left_private/, 'RED 감사 이벤트로 남겨야 한다');
+  assert.match(src, /비공개로 남았습니다/, '텔레그램이 "완료" 가 아니라 경고여야 한다');
+  assert.match(src, /set-video-privacy\.js --video/, '무엇을 실행하면 되는지 알려 줘야 한다');
+
+  // 안내한 도구가 실제로 있어야 한다 — 없는 명령을 알려 주면 운영자가 두 번 헤맨다.
+  assert.ok(existsSync(join(ROOT, 'scripts/automation/set-video-privacy.js')),
+    'set-video-privacy.js 가 있어야 한다');
 });
