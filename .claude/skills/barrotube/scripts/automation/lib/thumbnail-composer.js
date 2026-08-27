@@ -30,6 +30,31 @@ const ASSETS_DIR = join(ROOT, 'workspace', 'assets');
 export const CANVAS_W = 1080;
 export const CANVAS_H = 1920;
 
+/**
+ * YouTube Shorts 플레이어가 자기 UI 로 덮는 구역. 여기에 글자를 두면 읽히지 않는다.
+ *
+ * 2026-08-27 EP-2026-0118 실측(운영자 스크린샷): 인트로 타이틀이 상단 5.8% 에서 시작해
+ * 상태바(시각·통신사·배터리)와 뒤로가기·검색·⋮ 아이콘이 첫 줄 위에 그대로 얹혔다.
+ * EP-0117 도 8.6% 로 같은 문제였다. 반면 generate-cards.js(HyperFrames) 로 만든
+ * EP-0114·0116 은 22~24% 에서 시작해 안전했다 — 즉 경로마다 값이 달라 생긴 회귀다.
+ *
+ * 하단·우측은 채널명·설명·좋아요/댓글/공유 버튼이 차지한다. 지금은 상단만 강제하지만
+ * 값은 세 경로가 같이 본다.
+ */
+export const SHORTS_SAFE = {
+  /** 상단 크롬(상태바 + 네비 아이콘). 이 아래에서 글자를 시작한다. */
+  topPct: 0.14,
+  /** 하단 오버레이(채널·제목·설명·공유 바). */
+  bottomPct: 0.20,
+  /** 우측 액션 버튼 열. */
+  rightPct: 0.15,
+};
+
+/** 안전선 아래로 밀어 준다. 이미 아래면 그대로 둔다. */
+export function safeTop(y, canvasH = CANVAS_H) {
+  return Math.max(y, Math.round(canvasH * SHORTS_SAFE.topPct));
+}
+
 export const ACCENT_COLORS = {
   yellow: '#FFD60A',
   red: '#FF3B30',
@@ -283,7 +308,10 @@ export async function composeThumbnail({ baseImagePath, spec, outPath }) {
       ({ lines, fontSize } = fitHeadline(spec.headline_text));
     }
     const lineHeight = Math.floor(fontSize * 1.25);
-    const blockTop = isIntro ? 80 : 240;  // intro: 화면 상단 5% (base의 negative space)
+    // 인트로는 **영상의 첫 화면**이라 Shorts UI 와 정면으로 겹친다. 80(4.2%) 은 상태바와
+    // 뒤로가기·검색·⋮ 아이콘 아래로 들어가는 값이었다 (2026-08-27 EP-0118 실측).
+    // 썸네일(240 = 12.5%)도 안전선(14%)보다 살짝 위라 같이 민다.
+    const blockTop = safeTop(isIntro ? 80 : 240);
     for (let i = 0; i < lines.length; i++) {
       const sv = buildTextSvg({
         text: lines[i],
