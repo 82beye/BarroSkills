@@ -1,6 +1,6 @@
 {
   "version": "3.0",
-  "description": "경쟁 채널 정본 목록 (v3.0, 2026-08-13). v2.0의 마케팅 리포트 동적 추출을 주 경로에서 제거 — 리포트가 max_age_days(30일)를 넘겨 만료되면 채널 목록이 빈 배열이 되어 2026-05-24 이후 80일간 무음 실패했다. 이제 운영자가 아래 channels[] 를 직접 편집한다. v2.0 추출기는 discovery 블록으로 강등되어 신규 채널 '제안'에만 쓰인다.",
+  "description": "경쟁 채널 정본 목록 (v3.0, 2026-08-13). v2.0의 마케팅 리포트 동적 추출을 주 경로에서 제거 — 리포트가 max_age_days(30일)를 넘겨 만료되면 채널 목록이 빈 배열이 되어 2026-05-24 이후 80일간 무음 실패했다. 이제 운영자가 아래 channels[] 를 직접 편집한다. v2.0 추출기는 discovery 블록으로 강등되어 신규 채널 '제안'에만 쓰인다. v3.1(2026-08-30): 부동산 섹션 개설 — realestate 슬롯 경쟁사 21개 추가. 각 채널에 stance(논조) 필드를 붙였다 — 중립 데스크가 편향을 상쇄하려면 상대의 기울기를 알아야 한다.",
   "channels": [
     {
       "id": "futuresnow",
@@ -75,6 +75,279 @@
         "kr-close"
       ],
       "note": "2026-08-13 --resolve-handles 로 확보. API 표기는 '심플 관심종목 TV'"
+    },
+    {
+      "id": "weolbu",
+      "name": "월급쟁이부자들TV",
+      "handle": "@weolbu_official",
+      "channelId": "UCDSj40X9FFUAnx1nv7gQhcA",
+      "tier": "core",
+      "active": true,
+      "competes_with": [
+        "realestate"
+      ],
+      "stance": "bullish-lean",
+      "note": "운영자 지정. 너나위 등 강사진 — '내집마련 실행' 프레임이 강해 매수 권유로 기우는 경향. 중립 데스크의 1순위 대조군"
+    },
+    {
+      "id": "buiknam",
+      "name": "부읽남TV",
+      "handle": "@buiknam_tv",
+      "channelId": "UC2QeHNJFfuQWB4cy3M-745g",
+      "tier": "core",
+      "active": true,
+      "competes_with": [
+        "realestate"
+      ],
+      "stance": "bullish-lean",
+      "note": "운영자 지정. 구독 182만 최대 규모. 내집마련~건물주 서사"
+    },
+    {
+      "id": "jipconomy",
+      "name": "집코노미",
+      "handle": "@jipconomy",
+      "channelId": "UCAVdqlngIAxHtwlCA2hjv3A",
+      "tier": "core",
+      "active": true,
+      "competes_with": [
+        "realestate"
+      ],
+      "stance": "neutral",
+      "note": "한국경제 부동산 채널. 통계·정책 원문 인용 비중이 높아 사실 대조용으로 유용"
+    },
+    {
+      "id": "ddangzipgo",
+      "name": "땅집고",
+      "handle": "@ddangzipgo",
+      "channelId": "UCFhF5oooL5ugxHKvTxBD75Q",
+      "tier": "core",
+      "active": true,
+      "competes_with": [
+        "realestate"
+      ],
+      "stance": "neutral",
+      "note": "조선일보 부동산. 재건축·정비사업 취재력"
+    },
+    {
+      "id": "aptcycle",
+      "name": "[이현철] 아파트사이클연구소",
+      "handle": "@aptcycle",
+      "channelId": "UCr8tO6DbPIaZw6R5nSNq07A",
+      "tier": "core",
+      "active": true,
+      "competes_with": [
+        "realestate"
+      ],
+      "stance": "bearish-lean",
+      "note": "운영자 지정. 사이클론 기반 하락 전망 비중 높음 — bullish 채널들의 대척점. 두 극단을 같이 봐야 중립이 선다"
+    },
+    {
+      "id": "richgo",
+      "name": "리치고TV",
+      "handle": "@RICHGO406",
+      "channelId": "UC3nsb3SxlRrJQ9egkKNnlfg",
+      "tier": "core",
+      "active": true,
+      "competes_with": [
+        "realestate"
+      ],
+      "stance": "data-driven",
+      "note": "운영자 지정. 자체 데이터 지표 기반. 수치 출처 대조용"
+    },
+    {
+      "id": "aforu",
+      "name": "AforU 아포유",
+      "handle": "@aforu1",
+      "channelId": "UCK6bIuN3aDIV4F53QQ4__Ng",
+      "tier": "core",
+      "active": true,
+      "competes_with": [
+        "realestate"
+      ],
+      "stance": "data-driven",
+      "note": "영상 수는 적으나(406) 구독 30만 — 편당 밀도가 높은 분석형"
+    },
+    {
+      "id": "ppassong",
+      "name": "스마트튜브(빠숑)",
+      "handle": "@ppassong",
+      "channelId": "UCKosTo5bqKm4v264z2zDnFQ",
+      "tier": "core",
+      "active": true,
+      "competes_with": [
+        "realestate"
+      ],
+      "stance": "bullish-lean",
+      "note": "김학렬. 입지 분석 계열의 대표 화자"
+    },
+    {
+      "id": "prng",
+      "name": "푸릉",
+      "handle": "@prng_official",
+      "channelId": "UC8tWxC9EPKUCrHmEhiYTbhQ",
+      "tier": "core",
+      "active": true,
+      "competes_with": [
+        "realestate"
+      ],
+      "stance": "neutral",
+      "note": "구독 40만. 실수요 관점"
+    },
+    {
+      "id": "hootv",
+      "name": "후랭이TV",
+      "handle": "@hootv",
+      "channelId": "UChnfOZtjny0KBSVkfS9nwsg",
+      "tier": "core",
+      "active": true,
+      "competes_with": [
+        "realestate"
+      ],
+      "stance": "mixed",
+      "note": "인터뷰 포맷 — 게스트에 따라 논조가 갈린다. 시장 내 여론 스펙트럼 관측용"
+    },
+    {
+      "id": "thewriter-song",
+      "name": "작가 송희구",
+      "handle": "@thewriter-song",
+      "channelId": "UCrxr7eBgbKdz0e1t5ax9kCg",
+      "tier": "watch",
+      "active": true,
+      "competes_with": [
+        "realestate"
+      ],
+      "stance": "narrative",
+      "note": "운영자 지정. 서사·에세이형. 포맷 레퍼런스"
+    },
+    {
+      "id": "jooeungyu",
+      "name": "주언규",
+      "handle": "@주언규PD",
+      "channelId": "UCo3Qy41yS1ATrHm_-iIe3Mw",
+      "tier": "watch",
+      "active": true,
+      "competes_with": [
+        "realestate"
+      ],
+      "stance": "general",
+      "note": "운영자 지정. 부동산 전문이 아니라 콘텐츠·수익화 종합 — 부동산 비중 낮음"
+    },
+    {
+      "id": "kimjakga",
+      "name": "김작가 TV",
+      "handle": "@lucky_tv",
+      "channelId": "UCvil4OAt-zShzkKHsg9EQAw",
+      "tier": "watch",
+      "active": true,
+      "competes_with": [
+        "realestate"
+      ],
+      "stance": "general",
+      "note": "운영자 지정. 구독 273만이나 경제·인터뷰 종합 채널. 부동산은 일부 — 전문 채널과 구분해 읽는다"
+    },
+    {
+      "id": "tumi",
+      "name": "투미부동산",
+      "handle": "@tumi7777",
+      "channelId": "UC9meL6XNNckzlleWelmO9tQ",
+      "tier": "watch",
+      "active": true,
+      "competes_with": [
+        "realestate"
+      ],
+      "stance": "bullish-lean",
+      "note": "김제경. 재개발·재건축 특화"
+    },
+    {
+      "id": "invaid",
+      "name": "이상우 부동산 애널리스트",
+      "handle": "@invaid.advisory",
+      "channelId": "UC6inuEkuN_Xq2sjfO8MLXeQ",
+      "tier": "watch",
+      "active": true,
+      "competes_with": [
+        "realestate"
+      ],
+      "stance": "analyst",
+      "note": "인베이드투자자문. 애널리스트 화법 — 우리 중립 데스크의 톤 레퍼런스"
+    },
+    {
+      "id": "jupjup",
+      "name": "미분양 줍줍TV",
+      "handle": "@jupjup_tv",
+      "channelId": "UCzXtaeY4EfSnSB9_3gYnqdw",
+      "tier": "watch",
+      "active": true,
+      "competes_with": [
+        "realestate"
+      ],
+      "stance": "bearish-lean",
+      "note": "미분양 특화. 공급 과잉 신호 조기 포착용"
+    },
+    {
+      "id": "ddangddang",
+      "name": "부동산은 땅땅무슨땅",
+      "handle": "@땅땅무슨땅",
+      "channelId": "UC3azbZFCFrt53KoQEjhEXiQ",
+      "tier": "watch",
+      "active": true,
+      "competes_with": [
+        "realestate"
+      ],
+      "stance": "mixed",
+      "note": "부동산 섹션 경쟁사 (watch)"
+    },
+    {
+      "id": "dukkubi",
+      "name": "재테크는 두꺼비 세무사",
+      "handle": "@두꺼비세무사",
+      "channelId": "UCiLdPBP0AeP-Z9CDH4MggYQ",
+      "tier": "watch",
+      "active": true,
+      "competes_with": [
+        "realestate"
+      ],
+      "stance": "tax",
+      "note": "세제 관점. 취득·보유·양도세 변화 추적용"
+    },
+    {
+      "id": "budongsan-auction",
+      "name": "경매하는 붇옹산",
+      "handle": "@jaegebal",
+      "channelId": "UC9HYs-EG-tXxZbsgMi6TzEw",
+      "tier": "watch",
+      "active": true,
+      "competes_with": [
+        "realestate"
+      ],
+      "stance": "auction",
+      "note": "경매·낙찰가율 — 하방 압력의 선행지표"
+    },
+    {
+      "id": "kimgwangseok",
+      "name": "경제 읽어주는 남자(김광석TV)",
+      "handle": "@경읽남_김광석tv",
+      "channelId": "UC3pfEoxaRDT6hvZZjpHu7Tg",
+      "tier": "watch",
+      "active": true,
+      "competes_with": [
+        "realestate"
+      ],
+      "stance": "macro",
+      "note": "거시경제 연결 — 금리·정책과 부동산을 잇는 화법"
+    },
+    {
+      "id": "dongsan2bro",
+      "name": "동산이형의 부동산 수다",
+      "handle": "@dongsan2bro",
+      "channelId": "UClpcx2yXucTczyci_FB1zCg",
+      "tier": "watch",
+      "active": true,
+      "competes_with": [
+        "realestate"
+      ],
+      "stance": "mixed",
+      "note": "부동산 섹션 경쟁사 (watch)"
     }
   ],
   "channel_id_resolution": {
@@ -150,5 +423,18 @@
     "remove_channel": "배열에서 삭제하지 말고 active:false 로 둘 것. 제거하면 과거 분석의 baseline 모집단이 깨진다.",
     "manual_overrides": "config/competitor-channel-overrides.json 에 {\"<채널명>\": \"UC...\"} 를 넣으면 channels[].channelId 보다 우선 적용된다. 채널명이 바뀌었거나 매핑이 틀렸을 때 사용.",
     "cache_invalidation": "channel-id-cache.json 에서 해당 entry 삭제 → 다음 실행 시 재해석."
+  },
+  "stance_legend": {
+    "bullish-lean": "상승·매수 실행 프레임이 강함",
+    "bearish-lean": "하락·조정 경고 프레임이 강함",
+    "neutral": "통계·정책 원문 중심",
+    "data-driven": "자체 지표·데이터 중심",
+    "mixed": "게스트/주제에 따라 갈림",
+    "analyst": "애널리스트 화법",
+    "macro": "거시연결",
+    "tax": "세제",
+    "auction": "경매",
+    "narrative": "서사형",
+    "general": "부동산 비전문 종합"
   }
 }

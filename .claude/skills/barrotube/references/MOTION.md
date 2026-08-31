@@ -110,3 +110,43 @@ HTML/CSS 를 헤드리스 크롬으로 프레임 단위 캡처해 결정론적 M
 "클로드 코드로 영상 편집" 라이브(VSIsHredA5U)에서 리모션 대신 하이퍼프레임스를 쓰는
 이유로 든 것들 — 에이전트가 쓰기 좋고, 라이선스 비용이 0 이고, 결정적 렌더를 도구가
 강제한다.
+
+## Grok AppleScript 실패 진단 — 에러 문구를 믿지 마라 (2026-08-30, EP-0124)
+
+`execute javascript` 가 이렇게 죽을 때가 있다:
+
+> Google Chrome에 오류 발생: AppleScript를 통한 자바스크립트 실행 기능이 꺼져 있습니다.
+> ... 보기 > 개발자 > Apple Events의 자바스크립트 허용으로 이동하세요. (12)
+
+**메뉴는 이미 체크돼 있다.** 설정 문제가 아니다. 원인은 **Chrome 인스턴스 모호성**이다.
+
+`tell application "Google Chrome"` 은 같은 번들이 여러 프로세스로 떠 있을 때 어느
+인스턴스를 잡을지 보장하지 않는다. auto-pipeline 은 Phase 6 에서 codex imagegen 이
+Playwright 로 Chrome 을 하나 더 띄우고(`--user-data-dir=~/.codex/playwright…`),
+그 프로필에는 Apple Events 권한이 없다. 그 인스턴스가 남아 있으면 Phase 7 의 모든
+JS 호출이 실패한다 — 사용자 Chrome 은 멀쩡히 켜져 있는데도.
+
+진단 순서:
+
+```bash
+# 1) Chrome 인스턴스가 둘 이상인가 (Helper 제외)
+ps -eo pid,etime,command | grep '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' | grep -v Helper
+# 2) 자동화 프로필이 섞였는가
+ps -eo pid,command | grep -o 'user-data-dir=[^ ]*' | sort | uniq -c
+```
+
+자동화 인스턴스를 내리면 즉시 복구된다. `grok-motion-applescript.js` 의
+`killShadowChromes()` 가 시작 시 이 정리를 자동으로 한다 (`.codex/`·`.barrotube/`·
+`/tmp/`·`/var/folders/` 프로필만 대상, 사용자 기본 프로필은 건드리지 않는다).
+
+**함의: codex 이미지젠과 Grok 모션을 병렬로 돌리지 마라.** 순차로 돌리거나,
+모션 시작 전에 위 정리를 반드시 거쳐야 한다.
+
+같은 날 함께 고친 것 두 가지:
+
+- **진행 신호** — 대기 루프가 본문의 `생성 중 NN%` 만 봤다. 현재 UI 는 버튼
+  aria-label 로만 `미디어 생성 진행 중` 을 남긴다. %만 보면 5초 만에 완료로 오판하고
+  아직 없는 다운로드 버튼을 찾다 죽는다. 이제 두 신호를 다 보고, 다운로드 버튼 자체를
+  완료 신호로 쓴다. 재시도도 60초 → 120초.
+- **AppleEvent 타임아웃** — `with timeout of 300 seconds` 로 감쌌다. 없으면 60초에
+  끊겨 `-1712` 로 죽는데, 영상 생성 중인 Chrome 은 그보다 오래 멈춰 있을 수 있다.

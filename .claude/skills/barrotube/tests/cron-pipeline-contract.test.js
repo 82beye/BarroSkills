@@ -230,7 +230,11 @@ test('Grok motion is canon — a missing clip halts instead of silently falling 
   }
 
   // 브라우저에 모션을 요구하는 지시가 살아 있어야 한다 — 이걸 끄면 애초에 Grok 을 안 연다.
-  assert.match(source, /Grok Imagine에서 각 scene_NNN\.png를 첨부해 영상 5개를/);
+  // 개수는 슬롯의 scene_count 에서 오므로 리터럴로 박지 않는다 (2026-08-31: 여기 '5개' 가
+  // 박혀 있어서 7씬 realestate 슬롯이 두 컷 모자란 지시를 받았다).
+  assert.match(source, /Grok Imagine에서 각 scene_NNN\.png를 첨부해 영상 \$\{SLOT_SCENES\}개를/);
+  assert.match(source, /SLOT_SCENES=\$\(json_get/,
+    'SLOT_SCENES 는 routines.json 의 slot.scene_count 에서 와야 한다');
   assert.ok(!/BT_GROK_MOTION/.test(source),
     '모션을 opt-in 으로 두면 정본이 폴백으로 뒤집힌다');
 });

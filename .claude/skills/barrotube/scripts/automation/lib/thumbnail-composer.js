@@ -179,10 +179,28 @@ export async function loadBrandLogoLayers(spec, { canvasW = CANVAS_W, canvasH = 
       'bottom-left': { top: canvasH - W - 200, left: 80 },
       'bottom-right': { top: canvasH - W - 200, left: canvasW - W - 80 }
     };
-    let pos = POS_MAP[logoSpec.position] || POS_MAP['top-right'];
-    // 다중 로고 stack — top-right 자동 우측 오프셋
-    if (logoSpec.position === 'top-right' || !logoSpec.position) {
-      pos = { ...pos, top: pos.top + layers.length * (W + 30) };
+    let pos = POS_MAP[logoSpec.position] || POS_MAP['bottom-left'];
+    // 다중 로고는 가로로 나란히 편다.
+    // 2026-08-30 ①: 원래 아래로 쌓고 있었다(top += ...). 로고 2개짜리 인트로에서 두 번째가
+    //   헤드라인 위에 얹혀 글자를 가렸다 (EP-0124 "6일 만에" 판독 불가).
+    // 2026-08-30 ②: 그래서 top-right 로 가로로 폈더니 이번엔 상단 안전선(14%)과 우측
+    //   액션열(15%)을 동시에 침범했다 — 로고 밴드가 y 6.3~12.5%, x 576~999 에 앉았다.
+    //   Shorts UI 가 덮는 자리다. 그래서 기본 위치를 bottom-left 로 내리고, 아래 safeBox 로
+    //   어떤 위치를 주더라도 안전 박스 밖으로 못 나가게 막는다.
+    if (!logoSpec.position || logoSpec.position === 'bottom-left') {
+      pos = { ...pos, left: pos.left + layers.length * (W + 30) };
+    } else if (logoSpec.position === 'top-right') {
+      pos = { ...pos, left: pos.left - layers.length * (W + 30) };
+    }
+    // Shorts 안전 박스 클램프 — 세로 캔버스에서만 적용한다.
+    if (canvasH > canvasW) {
+      const topLimit = Math.round(canvasH * SHORTS_SAFE.topPct);
+      const bottomLimit = Math.round(canvasH * (1 - SHORTS_SAFE.bottomPct)) - W;
+      const rightLimit = Math.round(canvasW * (1 - SHORTS_SAFE.rightPct)) - W;
+      pos = {
+        top: Math.min(Math.max(pos.top, topLimit), Math.max(topLimit, bottomLimit)),
+        left: Math.min(Math.max(pos.left, 40), Math.max(40, rightLimit)),
+      };
     }
     const buf = await sharp(Buffer.from(svg)).png().toBuffer();
     layers.push({ input: buf, top: pos.top, left: pos.left });

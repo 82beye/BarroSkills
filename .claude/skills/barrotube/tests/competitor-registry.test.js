@@ -5,9 +5,13 @@ import { join, resolve } from 'node:path';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const CONFIG = join(ROOT, 'config', 'competitor-channels.json');
+const ROUTINES = join(ROOT, 'config', 'routines.json');
 const AUTOMATION = join(ROOT, 'scripts', 'automation');
 
 const policy = JSON.parse(readFileSync(CONFIG, 'utf-8'));
+// 슬롯 목록을 여기 박아 두면 새 슬롯을 열 때마다 이 파일도 같이 고쳐야 한다.
+// 2026-08-30 realestate 슬롯 개설이 정확히 그 이유로 실패했다 — routines.json 에서 파생시킨다.
+const VALID_SLOTS = Object.keys(JSON.parse(readFileSync(ROUTINES, 'utf-8')).slots);
 
 test('competitor policy is v3.0 with a static channel list', () => {
   assert.equal(policy.version, '3.0');
@@ -22,7 +26,7 @@ test('every channel carries the fields collection depends on', () => {
     assert.ok(c.handle?.startsWith('@'), `handle must start with @: ${c.id} → ${c.handle}`);
     assert.ok(Array.isArray(c.competes_with), `competes_with must be an array: ${c.id}`);
     for (const slot of c.competes_with) {
-      assert.ok(['us-close', 'kr-close'].includes(slot), `unknown slot "${slot}" on ${c.id}`);
+      assert.ok(VALID_SLOTS.includes(slot), `unknown slot "${slot}" on ${c.id} (routines.json 의 슬롯: ${VALID_SLOTS.join(', ')})`);
     }
     assert.ok(['core', 'watch'].includes(c.tier), `unknown tier "${c.tier}" on ${c.id}`);
   }

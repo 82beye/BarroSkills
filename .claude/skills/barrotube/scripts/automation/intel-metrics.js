@@ -39,7 +39,10 @@ const TARGETS = {
   collection_rate: { min: 0.95, min_n: 7, label: '수집 성공률', fmt: (v) => `${(v * 100).toFixed(1)}%` },
   topic_adoption: { min: 0.60, min_n: 3, label: '주제 반영률', fmt: (v) => `${(v * 100).toFixed(1)}%` },
   // 하루 2회(36) + 주 1회 deep scan(54/7≈7.7) = 약 44. 여유를 둬 50.
-  quota_per_day: { max: 50, min_n: 3, label: 'API 쿼터/일', fmt: (v) => `${v.toFixed(1)} units` },
+  // 2026-08-30 부동산 섹션 개설로 채널이 6 → 27 이 됐다. 하루 비용은 27ch × 3u × 2회 = 162.
+  // 자체 상한(competitor-channels.json quota.daily_cap_units = 2000)과 무료 한도(10,000)에는
+  // 한참 못 미치지만, 이 지표는 '폭주 감지'용이라 실제 규모에 맞춰 둬야 의미가 있다.
+  quota_per_day: { max: 200, min_n: 3, label: 'API 쿼터/일', fmt: (v) => `${v.toFixed(1)} units` },
   pipeline_blocks: { max: 0, label: '파이프라인 차단', fmt: (v) => `${v}건` },
   determinism: { min: 1, label: '분석 결정성', fmt: (v) => (v === 1 ? '일치' : v === null ? '미측정' : '불일치') },
   llm_cost_month: { max: 0.10, label: 'LLM 비용/월', fmt: (v) => `$${v.toFixed(4)}` },

@@ -56,7 +56,8 @@
       "closed_market_policy": "KST 토요일·월요일 또는 미국 증시 휴장으로 신규 종가가 없으면 최신 주식·경제 이슈 1개로 대체한다. 일요일에는 다음 미국장 개장 전 확인할 정책·경제지표·실적·채권·환율 이슈 정리로 전환한다. 직전 종가는 거래일을 밝혀 참고값으로만 쓴다 — '오늘'이라 쓰면 안 된다.",
       "audience_context": "출근 전 8시에 보는 시청자. 밤사이 미국에서 벌어진 일을 60초로 따라잡게 한다.",
       "timing_caveat": "서머타임 종료 기간(11~3월)에는 미 증시 마감이 06:00 KST라 시작 시각과 겹친다. 시세 스냅샷이 stale 이면 대본에서 '현지시간 기준 마감 직후' 표현을 쓰고 확정 종가 단정을 피한다.",
-      "schedule_note": "매일 06:00 KST. 토요일은 금요일 미국장 마감(closed_market_issue), 일요일은 다음 주 개장 전 관전 포인트(sunday_preopen)를 다룬다. 월요일도 신규 종가가 없다 — 직전 세션이 일요일이라 최신 마감은 여전히 금요일이고 그 종가는 토요일 편이 이미 썼다. 그래서 월요일은 closed_market_issue 로 떨어진다(2026-08-17 EP-0096 이 이걸 'market_close' 로 잘못 잡아 금요일 마감을 '오늘'이라 쓰고 팩트체크에 걸렸다)."
+      "schedule_note": "매일 06:00 KST. 토요일은 금요일 미국장 마감(closed_market_issue), 일요일은 다음 주 개장 전 관전 포인트(sunday_preopen)를 다룬다. 월요일도 신규 종가가 없다 — 직전 세션이 일요일이라 최신 마감은 여전히 금요일이고 그 종가는 토요일 편이 이미 썼다. 그래서 월요일은 closed_market_issue 로 떨어진다(2026-08-17 EP-0096 이 이걸 'market_close' 로 잘못 잡아 금요일 마감을 '오늘'이라 쓰고 팩트체크에 걸렸다).",
+      "desk_set": "market"
     },
     "kr-close": {
       "label": "국내 증시 마감 + 오늘 밤 미장 관전 포인트",
@@ -100,7 +101,83 @@
       "closed_market_policy": "KST 토요일 또는 한국 증시 휴장으로 신규 종가가 없으면 최신 주식·경제 이슈 1개로 대체한다. 일요일에는 다음 한국장 개장 전 확인할 정책·경제지표·실적·해외시장·환율 이슈 정리로 전환한다. 직전 종가는 거래일을 밝혀 참고값으로만 쓴다.",
       "audience_context": "퇴근길 6시에 보는 시청자. 오늘 국내장을 정리하고, 밤에 열릴 미장에서 무엇을 볼지 알려준다.",
       "timing_caveat": "16:00 KST 는 미국 프리마켓(04:00 ET = 17:00 KST) 시작 전이다. '미국 장전 이슈'를 실시간 프리마켓 시세로 쓰면 안 되고, 야간 선물·유럽장·오늘 밤 예정된 지표/실적 일정과 전일 미국 종가를 근거로 써야 한다. 미국 지수는 '전일 종가'로 명시할 것.",
-      "schedule_note": "평일 16:00 KST 만. 토·일은 한국장이 없어 돌리지 않는다 — 토요일 16:00 은 이미 하루 지난 금요일 종가라 새 정보가 없다. 설치: bash lib/install-cron.sh install kr-close \"Mon-Fri 16:00\""
+      "schedule_note": "평일 16:00 KST 만. 토·일은 한국장이 없어 돌리지 않는다 — 토요일 16:00 은 이미 하루 지난 금요일 종가라 새 정보가 없다. 설치: bash lib/install-cron.sh install kr-close \"Mon-Fri 16:00\"",
+      "desk_set": "market"
+    },
+    "realestate": {
+      "label": "주간 부동산 브리핑",
+      "cadence": "weekly",
+      "cron": "Thu 17:00",
+      "publish_at": "19:00",
+      "cron_note": "한국부동산원 주간아파트가격동향이 목요일 낮에 나온다 — 그 뒤에 돌려야 '이번 주 수치'로 만들 수 있다. KB 주간시계열은 금요일이라 한 주 늦게 반영된다.",
+      "format": "shorts-3min",
+      "persona": "barro-analyst",
+      "scene_count": 7,
+      "target_seconds": 172,
+      "accept_seconds": [
+        174,
+        180
+      ],
+      "desk_set": "realestate",
+      "news_sources": [
+        "hankyung_realestate",
+        "yna_economy"
+      ],
+      "news_sources_note": "한국 부동산 RSS 는 403·404 가 잦다(2026-08-30 실측: 한경 403, 매경 403, 이데일리·서울경제 404). 실패해도 중단하지 않는다 — 데스크의 본 경로는 WebSearch 와 fetch-realestate-snapshot.js 이고 RSS 는 보조다.",
+      "market": {
+        "symbols": [
+          "RE:APT_SALE_NATIONWIDE",
+          "RE:APT_SALE_SEOUL",
+          "RE:APT_SALE_GYEONGGI",
+          "RE:APT_JEONSE_NATIONWIDE",
+          "RE:APT_JEONSE_SEOUL",
+          "RE:TRADE_VOLUME_SEOUL",
+          "RE:UNSOLD_NATIONWIDE",
+          "RE:UNSOLD_COMPLETED",
+          "RE:MORTGAGE_RATE",
+          "RE:BASE_RATE",
+          "BOND:KR10YT=RR",
+          "FX_USDKRW"
+        ]
+      },
+      "scene_skeleton": [
+        {
+          "n": 1,
+          "role": "hook",
+          "intent": "이번 주 가장 큰 변화 하나를 수치로. 방향을 단정하지 말고 '무엇이 얼마나 바뀌었나'만."
+        },
+        {
+          "n": 2,
+          "role": "numbers",
+          "intent": "매매·전세 지수 주간 변동률. 발표 기관(한국부동산원/KB)을 반드시 밝히고, 두 기관 수치가 다르면 둘 다 준다."
+        },
+        {
+          "n": 3,
+          "role": "cause",
+          "intent": "그 수치가 나온 배경. 금리·정책·공급 중 확인된 것만. 추정이면 추정이라고 말한다."
+        },
+        {
+          "n": 4,
+          "role": "counterview",
+          "intent": "같은 데이터의 반대 해석. 상방 근거를 말했으면 하방 근거를, 하방을 말했으면 상방을 같은 무게로."
+        },
+        {
+          "n": 5,
+          "role": "supply",
+          "intent": "공급·미분양·거래량 — 가격지수보다 늦게 움직이지만 방향을 먼저 알려주는 지표."
+        },
+        {
+          "n": 6,
+          "role": "impact",
+          "intent": "실수요자·전세 거주자·보유자 각각에게 무슨 뜻인지. 특정 단지·지역 추천은 하지 않는다."
+        },
+        {
+          "n": 7,
+          "role": "closing",
+          "intent": "다음 주에 확인할 지표 1~2개를 지정. '사라/팔라'가 아니라 '무엇을 보면 판단할 수 있는지'. 투자조언 아님 고지."
+        }
+      ],
+      "closed_market_policy": "부동산은 증시처럼 일일 종가가 없다. 주간 지수(한국부동산원 목요일·KB 금요일) 발표가 없는 주에는 최신 주식·경제 이슈 중 부동산과 연결되는 것(금리·대출규제·공급대책) 1개로 대체한다. 토요일에 돌면 그 주 발표된 지수를 정리본으로 쓰고, 일요일에는 다음 주 발표 예정 지표와 시행 예정 제도를 미리 짚는 프리뷰로 전환한다. 직전 발표치는 발표일을 밝혀 참고값으로만 쓴다."
     }
   },
   "scene_skeleton": [
@@ -133,6 +210,7 @@
   "publishing_cadence": {
     "weekday": 2,
     "weekend": 1,
-    "note": "평일은 us-close(08:00 발행) + kr-close(18:00 발행) 2편, 주말은 us-close 1편. 발행 시각은 각 슬롯의 publish_at 을 따른다."
+    "note": "평일은 us-close(08:00 발행) + kr-close(18:00 발행) 2편, 주말은 us-close 1편. 발행 시각은 각 슬롯의 publish_at 을 따른다. 부동산은 주 1회(목 19:00) 별도.",
+    "weekly_realestate": 1
   }
 }

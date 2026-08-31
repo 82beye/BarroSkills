@@ -20,7 +20,7 @@
  *   node grok-motion-applescript.js --check      # 세션·차단 상태만 확인 (0=사용가능, 3=불가)
  */
 import { execFileSync } from 'node:child_process';
-import { readFileSync, existsSync, mkdirSync, readdirSync, copyFileSync, statSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, copyFileSync, statSync, unlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { parseArgs } from 'node:util';
@@ -47,16 +47,22 @@ const md5 = (p) => createHash('md5').update(readFileSync(p)).digest('hex');
  * 매 호출마다 grok.com 탭을 다시 찾고, 없으면 만든다.
  */
 function chromeJS(js) {
+  // `with timeout` 이 없으면 AppleEvent 는 60초에 끊긴다. 영상 생성 중인 Chrome 은
+  // 그보다 오래 응답을 못 주는 순간이 있어서 -1712 (AppleEvent timed out) 로 죽었고,
+  // 그 에러가 "Apple Events 자바스크립트가 꺼져 있다" 는 메시지로 오인되기도 했다.
+  // (2026-08-30 EP-0124 실측: scene_001 이 4분 대기 중 -1712 로 실패.)
   const script = `on run argv
   set j to item 1 of argv
-  tell application "Google Chrome"
-    repeat with w in windows
-      repeat with t in tabs of w
-        if (URL of t) contains "grok.com" then return (execute t javascript j)
+  with timeout of 300 seconds
+    tell application "Google Chrome"
+      repeat with w in windows
+        repeat with t in tabs of w
+          if (URL of t) contains "grok.com" then return (execute t javascript j)
+        end repeat
       end repeat
-    end repeat
-    error "GROK_TAB_GONE"
-  end tell
+      error "GROK_TAB_GONE"
+    end tell
+  end timeout
 end run`;
   return execFileSync('osascript', ['-e', script, js], {
     encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
@@ -242,19 +248,101 @@ async function submitPrompt(tab, prompt) {
 }
 
 /** 생성 완료까지 폴링 후 다운로드 클릭 */
+/**
+ * 페이지에 걸린 생성 영상 URL 목록. 히스토리 썸네일도 같은 <video> 라서
+ * "제출 전에 없던 URL" 이 이번 컷이다 — 레이아웃이 바뀌어도 이 차집합은 성립한다.
+ */
+function videoSrcs(tab) {
+  const raw = chromeJS(`(function(){
+    var vs=[].slice.call(document.querySelectorAll('video'));
+    var out=[];
+    for(var i=0;i<vs.length;i++){var s=vs[i].currentSrc||vs[i].src||'';if(s.indexOf('generated_video')>=0)out.push(s);}
+    return JSON.stringify(out);
+  })()`);
+  try { return JSON.parse(raw); } catch { return []; }
+}
+
+/**
+ * 새 영상 URL 이 뜰 때까지 기다린다. 이것이 곧 생성 완료 신호다.
+ *
+ * 왜 버튼을 안 쓰나: 2026-08-30 Grok UI 에서 최상위 "다운로드" 버튼이 사라지고
+ * 「게시물 작업」 메뉴 안으로 들어갔다. 버튼 라벨을 쫓으면 UI 가 바뀔 때마다 깨진다.
+ * URL 차집합은 DOM 구조에 거의 의존하지 않는다.
+ */
+async function waitForNewVideo(tab, before) {
+  const seen = new Set(before);
+  const t0 = Date.now();
+  while (Date.now() - t0 < GEN_TIMEOUT_MS) {
+    await sleep(5000);
+    const now = videoSrcs(tab);
+    const fresh = now.filter(u => !seen.has(u));
+    if (fresh.length) return fresh[0];
+  }
+  throw new Error(`새 영상 URL 이 ${Math.round(GEN_TIMEOUT_MS / 1000)}초 안에 뜨지 않았습니다`);
+}
+
+/**
+ * assets.grok.com 은 쿠키 없이는 403 이다. 그래서 페이지 안에서 fetch 해
+ * base64 로 꺼내 온다 — Downloads 폴더·TCC·Chrome History DB 를 전부 우회한다.
+ * osascript 반환값 한계 때문에 200KB 씩 끊어 받는다.
+ */
+async function fetchVideoToFile(tab, url, outPath) {
+  chromeJS(`(function(){
+    window.__btDL={state:'pending',b64:'',err:''};
+    fetch(${JSON.stringify(url)},{credentials:'include'})
+      .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.blob(); })
+      .then(function(b){ return new Promise(function(res,rej){
+        var fr=new FileReader();
+        fr.onload=function(){ res(String(fr.result).split(',')[1]||''); };
+        fr.onerror=rej; fr.readAsDataURL(b);
+      }); })
+      .then(function(b64){ window.__btDL={state:'done',b64:b64,err:''}; })
+      .catch(function(e){ window.__btDL={state:'error',b64:'',err:String((e&&e.message)||e)}; });
+    return 'started';
+  })()`);
+
+  let st = null;
+  for (let i = 0; i < 120; i++) {
+    await sleep(1000);
+    st = JSON.parse(chromeJS(`JSON.stringify({state:window.__btDL.state,len:window.__btDL.b64.length,err:window.__btDL.err})`));
+    if (st.state !== 'pending') break;
+  }
+  if (!st || st.state !== 'done') throw new Error(`영상 fetch 실패: ${(st && st.err) || 'timeout'}`);
+
+  const CH = 200000;
+  let b64 = '';
+  for (let off = 0; off < st.len; off += CH) {
+    const part = chromeJS(`window.__btDL.b64.substr(${off},${CH})`);
+    b64 += part;
+  }
+  if (b64.length !== st.len) throw new Error(`base64 유실 (${b64.length}/${st.len})`);
+  writeFileSync(outPath, Buffer.from(b64, 'base64'));
+  chromeJS(`(function(){window.__btDL=null;return 'cleared';})()`);
+}
+
 async function waitAndDownload(tab) {
   const t0 = Date.now();
   while (Date.now() - t0 < GEN_TIMEOUT_MS) {
     await sleep(5000);
-    const r = JSON.parse(chromeJS(`(function(){var m=document.body.innerText.match(/생성 중\\s*(\\d+)%/);return JSON.stringify({pct:m?m[1]:null});})()`));
-    if (r.pct === null) break;
+    // 진행 신호는 두 가지다. 예전 UI 는 본문에 "생성 중 NN%" 를 찍었고,
+    // 2026-08-30 현재 UI 는 버튼 aria-label 로만 "미디어 생성 진행 중" 을 남긴다.
+    // %만 보던 시절엔 첫 5초에 곧장 완료로 판정해 아직 없는 다운로드 버튼을 찾다 죽었다.
+    const r = JSON.parse(chromeJS(`(function(){
+      var m=document.body.innerText.match(/생성 중\\s*(\\d+)%/);
+      var B=[].slice.call(document.querySelectorAll('button'));
+      var busy=B.some(function(b){return ((b.getAttribute('aria-label')||b.textContent||'')).indexOf('미디어 생성 진행 중')>=0;});
+      var dl=B.some(function(b){return ((b.getAttribute('aria-label')||b.textContent||'').trim())==='다운로드';});
+      return JSON.stringify({pct:m?m[1]:null,busy:busy,dl:dl});
+    })()`));
+    if (r.dl) break;                    // 다운로드 버튼이 뜨면 그게 완료 신호다
+    if (r.pct === null && !r.busy) break;
   }
   // 진행률이 사라진 뒤에만 다운로드 — 일찍 누르면 직전 컷이 다시 받아진다
   // 다운로드 버튼은 생성 완료 직후에도 잠깐 안 붙어 있다 — 최대 60초 재시도.
   // (2026-08-25 EP-0114: 씬 001 이 "다운로드 버튼을 찾지 못했습니다" 로 죽었다.
   //  진행률은 사라졌는데 상세 패널 렌더가 늦은 경우다.)
   let clicked = false;
-  for (let i = 0; i < 20 && !clicked; i++) {
+  for (let i = 0; i < 40 && !clicked; i++) {
     const dl = JSON.parse(chromeJS(`(function(){
       var B=[].slice.call(document.querySelectorAll('button'));
       var rj=B.filter(function(b){return (b.textContent||'').trim()==='모두 거부';})[0];
@@ -267,7 +355,7 @@ async function waitAndDownload(tab) {
     if (dl.ok) { clicked = true; break; }
     await sleep(3000);
   }
-  if (!clicked) throw new Error('다운로드 버튼을 찾지 못했습니다 (60초 재시도 후)');
+  if (!clicked) throw new Error('다운로드 버튼을 찾지 못했습니다 (120초 재시도 후)');
   await sleep(6000);
 }
 
@@ -357,6 +445,35 @@ function motionFor(scene) {
   return `${base}; keep the character design and composition exactly as the attached image.`;
 }
 
+/**
+ * AppleScript 의 `tell application "Google Chrome"` 은 같은 번들이 여러 인스턴스로
+ * 떠 있으면 어느 쪽을 잡을지 보장하지 않는다. auto-pipeline 은 Phase 6 에서 codex
+ * imagegen 이 Playwright 로 Chrome 을 하나 더 띄우는데, 그 프로필에는 "Apple Events 의
+ * 자바스크립트 허용" 이 없다. 그 인스턴스가 남아 있으면 Phase 7 의 모든 execute javascript 가
+ * 실패하고, 에러 메시지는 엉뚱하게 "자바스크립트 실행 기능이 꺼져 있습니다" 로 나온다
+ * — 사용자 Chrome 은 멀쩡히 켜져 있는데도. (2026-08-30 EP-0124 실측, 원인 규명에 30분)
+ *
+ * 우리가 띄운 자동화 프로필만 정리한다. 사용자 기본 프로필은 절대 건드리지 않는다.
+ */
+function killShadowChromes() {
+  const AUTOMATION_PROFILE = /--user-data-dir=(\/Users\/[^/]+\/\.(codex|barrotube|npm)\/|\/tmp\/|\/var\/folders\/)/;
+  let out = '';
+  try {
+    out = execFileSync('ps', ['-eo', 'pid,command'], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+  } catch { return 0; }
+  let killed = 0;
+  for (const line of out.split('\n')) {
+    if (!line.includes('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')) continue;
+    if (line.includes('Helper')) continue;
+    if (!AUTOMATION_PROFILE.test(line)) continue;
+    const pid = Number(line.trim().split(/\s+/)[0]);
+    if (!Number.isInteger(pid) || pid <= 1) continue;
+    try { process.kill(pid, 'SIGTERM'); killed++; } catch { /* 이미 죽었으면 무시 */ }
+  }
+  if (killed) console.log(`  🧹 자동화용 Chrome 인스턴스 ${killed}개 정리 (AppleScript 대상 모호성 제거)`);
+  return killed;
+}
+
 async function main() {
   const { values } = parseArgs({ options: {
     episode: { type: 'string', short: 'e' },
@@ -365,6 +482,8 @@ async function main() {
     force: { type: 'boolean', default: false },
     check: { type: 'boolean', default: false },
   } });
+
+  killShadowChromes();
 
   const tab = findGrokTab();
 
@@ -434,37 +553,18 @@ async function main() {
       navigate(tab, GROK_URL);
       await waitReady(tab, 60000);
       await attachStill(tab, still);
-      const startedAt = Date.now();
+      const beforeSrcs = videoSrcs(tab);
       await submitPrompt(tab, motionFor(scene));
-      await waitAndDownload(tab);
+      const videoUrl = await waitForNewVideo(tab, beforeSrcs);
+      await fetchVideoToFile(tab, videoUrl, outPath);
 
-      // History 기록은 클릭 직후가 아니라 다운로드가 실제로 시작될 때 남는다.
-      // 6초 단발 확인은 경합에 진다 — 2026-08-24 실측: 파일은 받아졌는데
-      // "미갱신" 으로 오판했다. 최대 90초 폴링하고, 파일 크기가 멈출 때까지 기다린다.
-      let src = null;
-      for (let t = 0; t < 30; t++) {
-        src = latestGrokDownload(startedAt);
-        if (src && existsSync(src)) break;
-        await sleep(3000);
+      // 중복 판정은 쓰기 직후 산출물에서 한다. 같은 파일이 두 씬에 박히면
+      // 같은 화면이 두 번 나가는 영상이 발행된다 (2026-08-26 EP-0116 실측).
+      const hash = md5(outPath);
+      if (knownHashes.has(hash)) {
+        try { unlinkSync(outPath); } catch { /* 이미 없으면 그만 */ }
+        throw new Error('직전 컷과 같은 파일 (중복) — 자리를 비워 둔다');
       }
-      if (!src) throw new Error('다운로드 파일을 찾지 못했습니다 (History DB 미갱신)');
-      // 쓰기가 끝날 때까지 — 크기가 2회 연속 같으면 완료로 본다
-      let prev = -1;
-      for (let t = 0; t < 40; t++) {
-        let cur = 0;
-        try { cur = statSync(src).size; } catch { cur = 0; }
-        if (cur > 0 && cur === prev) break;
-        prev = cur;
-        await sleep(1500);
-      }
-      // 중복 판정은 **복사 전에 원본에서** 한다. 복사한 뒤에 던지면 앞 컷의 복사본이
-      // scene_NNN.mp4 자리에 그대로 박힌다 — 2026-08-26 EP-2026-0116 씬 002 실측:
-      // 001 과 바이트 동일한 파일이 002 자리에 남았고, 다음 게이트가 "duplicate bytes"
-      // 로 잡아 주지 않았다면 같은 화면이 두 번 나가는 영상이 발행됐다.
-      const hash = md5(src);
-      if (knownHashes.has(hash)) throw new Error('직전 컷과 같은 파일 (중복 다운로드) — 기존 파일은 그대로 둔다');
-
-      finderCopy(src, videosDir, `scene_${scene.id}.mp4`);
       knownHashes.add(hash);
 
       const probe = execFileSync('ffprobe', ['-v', 'error', '-select_streams', 'a:0',

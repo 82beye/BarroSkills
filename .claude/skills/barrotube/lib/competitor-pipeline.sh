@@ -58,6 +58,11 @@ run_step "oauth_check" node scripts/automation/check-oauth-expiry.js --notify
 
 run_step "fetch"    node scripts/automation/fetch-competitor-stats.js --date "$DATE"
 run_step "analyze"  node scripts/automation/analyze-competitors.js  --date "$DATE"
+# 슬롯별 분석본도 함께 만든다. 통합본 하나만 두면 채널 수가 많은 섹션(부동산 21)이
+# 적은 섹션(증시 4)의 갭을 묻어 버린다 — 데스크는 자기 슬롯 파일을 먼저 읽는다.
+for SLOT_NAME in us-close kr-close realestate; do
+  run_step "analyze:${SLOT_NAME}" node scripts/automation/analyze-competitors.js --date "$DATE" --slot "$SLOT_NAME"
+done
 run_step "handoff"  node scripts/automation/intel-handoff.js        --date "$DATE"
 
 echo "✓ 경쟁 인텔 루틴 종료 (exit 0 고정)"

@@ -63,7 +63,7 @@ function writeStatus(epDir, episodeId, channel, actor) {
   writeFileSync(join(epDir, '.episode_status.json'), JSON.stringify(status, null, 2), 'utf-8');
 }
 
-function singleEpisode({ channel, topic, length, notes, format }) {
+function singleEpisode({ channel, topic, length, notes, format, persona }) {
   const channelDir = join(WORKSPACE, 'channels', channel);
   if (!existsSync(channelDir)) { console.error(`❌ Channel not found: ${channel}`); process.exit(1); }
   const episodeId = generateEpisodeId();
@@ -82,7 +82,7 @@ created_at: ${new Date().toISOString()}
 topic: ${topicYaml}
 target_length_seconds: ${length}
 format: ${format}
-status: created
+${persona ? `persona: ${persona}\n` : ''}status: created
 # Public Figure Policy v1.0 (CEO 결정 2026-04-26) — 모두 선택. 비워두면 디폴트 적용.
 public_figures: []                # 등록 인물 id 또는 객체 배열. 미명시 시 topic 자동 감지.
 sensitivity: low                  # low | medium | high (정책 §3.1). 사망·범죄·암살 보도면 high.
@@ -214,6 +214,7 @@ function main() {
       topic: { type: 'string', short: 't' },
       length: { type: 'string', short: 'l' },
       format: { type: 'string', short: 'f' },
+      persona: { type: 'string' },
       notes: { type: 'string', short: 'n', default: '' },
       // 시리즈 모드
       series: { type: 'string', short: 's' },
@@ -243,6 +244,9 @@ function main() {
   } else {
     if (!values.topic) { console.error('❌ Single mode requires --topic'); process.exit(1); }
     const format = values.format || 'shorts';
+    // 슬롯이 페르소나를 지정하면 포맷 기본값보다 우선한다. 부동산 슬롯은 shorts-3min 이지만
+    // 기본 페르소나(barro-alert, 경고·긴장 톤)가 아니라 barro-analyst(중립)를 써야 한다.
+    const persona = values.persona || '';
     const defaultLength = format.endsWith('3min') ? (format === 'shorts-3min' ? 172 : 180) : 60;
     singleEpisode({
       channel: values.channel,
@@ -250,6 +254,7 @@ function main() {
       length: parseInt(values.length || String(defaultLength), 10),
       notes: values.notes,
       format,
+      persona,
     });
   }
 }

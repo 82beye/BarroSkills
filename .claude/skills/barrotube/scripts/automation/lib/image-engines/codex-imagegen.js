@@ -94,7 +94,10 @@ export function generateImageCodex({
   prompt,
   outPath,
   channel = null,
-  timeoutMs = 8 * 60 * 1000,
+  // 기본 8분. 컷당 1분이 실측이었지만 codex 응답이 느린 날은 이를 넘긴다
+  // (2026-08-30 EP-0126 scene_005 가 ETIMEDOUT). Gemini·OpenAI 폴백이 둘 다
+  // 크레딧 소진이라 여기서 죽으면 대안이 없어, 운영자가 늘릴 수 있게 열어 둔다.
+  timeoutMs = Number(process.env.BT_CODEX_IMAGE_TIMEOUT_MS) || 8 * 60 * 1000,
   characterLock = true,
   exposureLock = true,
 }) {

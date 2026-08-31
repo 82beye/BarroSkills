@@ -38,7 +38,9 @@ function loadSlot(slotName) {
   const cfg = JSON.parse(readFileSync(join(ROOT, 'config', 'routines.json'), 'utf-8'));
   const slot = cfg.slots?.[slotName];
   if (!slot) throw new Error(`알 수 없는 슬롯: ${slotName}`);
-  return { slot, defaults: cfg.defaults || {}, skeleton: cfg.scene_skeleton || [] };
+  // 슬롯이 자기 스켈레톤을 가지면 그것을 쓴다. 증시 2슬롯은 5씬 공통이지만
+  // 부동산은 7씬이라 전역 하나로는 안 된다 (2026-08-30 realestate 슬롯 개설).
+  return { slot, defaults: cfg.defaults || {}, skeleton: slot.scene_skeleton || cfg.scene_skeleton || [] };
 }
 
 function buildPrompt({ slotName, slot, defaults, skeleton, date, inputs, outDir }) {
@@ -55,13 +57,17 @@ function buildPrompt({ slotName, slot, defaults, skeleton, date, inputs, outDir 
   // 데스크 브리핑이 있으면 그걸 1순위 입력으로 준다 (2026-08-25).
   // 6개 전문 데스크가 이미 조사·검증한 결과라, 리서처가 처음부터 다시 파는 것보다
   // 정확하고 빠르다. 없으면 기존 방식 그대로 돈다.
-  const deskBrief = join(outDir, 'desk-briefing.md');
-  const deskTopic = join(outDir, 'desk-topic.json');
+  // 슬롯별 파일을 먼저 보고, 없으면 예전 이름으로 떨어진다 (2026-08-30 이전 산출물 호환).
+  const pick = (scoped, legacy) => (existsSync(scoped) ? scoped : legacy);
+  const deskBrief = pick(join(outDir, `desk-briefing-${slotName}.md`), join(outDir, 'desk-briefing.md'));
+  const deskTopic = pick(join(outDir, `desk-topic-${slotName}.json`), join(outDir, 'desk-topic.json'));
   const deskBlock = existsSync(deskBrief)
     ? `\n## 데스크 브리핑 (1순위 입력 — 반드시 먼저 읽어라)\n`
       + `  - ${deskBrief}\n`
       + (existsSync(deskTopic) ? `  - ${deskTopic}\n` : '')
-      + `증시·금리·원자재·코인·지정학·외환 6개 데스크가 조사하고 에디터가 고른 오늘의 이야기다.\n`
+      + `${slot.desk_set === 'realestate'
+          ? '가격·거래, 공급, 정책·금융, 임대차, 지역 5개 부동산 데스크가 조사하고 부동산 애널리스트가 고른 이번 주 이야기다.'
+          : '증시·금리·원자재·코인·지정학·외환 6개 데스크가 조사하고 에디터가 고른 오늘의 이야기다.'}\n`
       + `여기서 고른 토픽과 인과 사슬을 **그대로 이어받아라**. 근거 없이 다른 주제로 갈아타지 마라.\n`
       + `다만 데스크가 놓친 것(소셜 반응, 경쟁 채널 중복)은 네가 보강해라.\n`
       + `데스크 리포트 원문은 같은 폴더의 desk-*.md 에 있다.\n`
@@ -81,11 +87,11 @@ ${slot.audience_context}
 ## 반드시 지킬 제약
 ${slot.timing_caveat}
 
-## 휴장일·주말 대체 규칙 (위 앵글과 5컷 구조보다 우선)
+## 휴장일·주말 대체 규칙 (위 앵글과 ${skeleton.length}컷 구조보다 우선)
 - 필수 마감 지수: ${requiredClosed}
 - 시세 스냅샷의 content_mode를 우선 따른다: 토요일은 closed_market_issue, 일요일은 sunday_preopen이다. 평일에는 필수 지수 거래일(traded_at)에 신규 종가가 없으면 closed_market_issue다.
 - ${slot.closed_market_policy}
-- 대체 모드에서는 없는 당일 등락률을 만들지 말고, 아래 5컷 구조의 숫자 요구도 최신 이슈·영향·다음 개장 관전 포인트로 바꿔라.
+- 대체 모드에서는 없는 당일 등락률을 만들지 말고, 아래 ${skeleton.length}컷 구조의 숫자 요구도 최신 이슈·영향·다음 개장 관전 포인트로 바꿔라.
 
 ## 소셜 검색 (필수)
 설치된 CLI 로 시장 반응을 확인해라. 실패하면 건너뛰고 그 사실을 문서에 남겨라.
@@ -100,7 +106,7 @@ ${slot.timing_caveat}
    - 오늘의 핵심 사건 3개와 각각의 근거 링크
    - 소셜 반응 요약 (검색 실패 시 "소셜 검색 불가"라고 명시)
    - 경쟁 채널이 이미 다룬 주제 (아래 "경쟁 인텔" 절 참조)
-   - 60초 안에 다룰 수 있는 범위로 좁힌 결론
+   - ${slot.target_seconds || defaults.target_seconds || 60}초 안에 다룰 수 있는 범위로 좁힌 결론
 
 2. ${join(outDir, `strategy-${slotName}.md`)}
    - 선정 토픽과 한 문장 앵글
@@ -110,7 +116,7 @@ ${slot.timing_caveat}
      * 메커니즘: 왜 그렇게 됐는지 한 문장. "A 때문에 B"
      * 함의: 한국 시청자가 이 때문에 다르게 봐야 할 것 하나
      * 반증: 이 해석이 틀렸다면 내일 무엇이 보일지
-   - 아래 5컷 구조에 맞춘 씬별 메시지
+   - 아래 ${skeleton.length}컷 구조에 맞춘 씬별 메시지
    - 단정하면 안 되는 주장과 팩트체크 우선순위
      근거가 약할 때 "두루뭉술하게 쓰라" 고 지시하지 마라. 그건 대본을 아무 말도 안 하는
      문장으로 만든다. 대신 관찰과 해석을 쪼개라 — 확인된 사실은 좁고 정확하게 단정하고,
@@ -145,7 +151,7 @@ ${slot.timing_caveat}
 
 경쟁 채널의 제목·문장을 그대로 베끼지 마라. 다루는 '주제'만 참고한다.
 
-## 대본이 따를 구조 (참고 — 토픽을 이 5컷에 담을 수 있어야 한다)
+## 대본이 따를 구조 (참고 — 토픽을 이 ${skeleton.length}컷에 담을 수 있어야 한다)
 ${skeletonLines}
 총 ${defaults.target_seconds}초, ${defaults.scene_count}컷.
 
@@ -197,7 +203,7 @@ function writeFallbackAnalysis({ slotName, slot, skeleton, date, inputs, outDir 
   const sceneLines = skeleton.map((scene) => `- ${scene.n}. ${scene.role}: ${scene.intent}`).join('\n');
 
   writeFileSync(join(outDir, `research-${slotName}.md`), `---\ndate: ${date}\nslot: ${slotName}\nsource: deterministic-fallback\ncontent_mode: ${contentMode}\n---\n\n# 시장 리서치\n\n## 선정 토픽\n\n${topic}\n\n## 시세 스냅샷\n\n${quoteLines}\n\n## 주요 뉴스\n\n${newsLines}\n\n## 분석 한계\n\n자동 리서치 모델을 사용할 수 없어 수집 원문만 정리했다. 소셜 반응과 기사 밖 주장은 사용하지 않으며, 모든 수치는 대본 팩트체크에서 다시 검증한다.\n`);
-  writeFileSync(join(outDir, `strategy-${slotName}.md`), `---\ndate: ${date}\nslot: ${slotName}\nsource: deterministic-fallback\ncontent_mode: ${contentMode}\n---\n\n# 콘텐츠 전략\n\n## 한 문장 앵글\n\n${slot.angle}: ${topic}\n\n## 시청자 가치\n\n${slot.audience_context}\n\n## 5씬 구조\n\n${sceneLines}\n\n## 팩트 경계\n\n시세 스냅샷과 링크된 뉴스에 없는 수치·인과·최상급 표현은 단정하지 않는다. 휴장 모드에서는 직전 종가를 거래일과 함께 참고값으로만 사용한다.\n`);
+  writeFileSync(join(outDir, `strategy-${slotName}.md`), `---\ndate: ${date}\nslot: ${slotName}\nsource: deterministic-fallback\ncontent_mode: ${contentMode}\n---\n\n# 콘텐츠 전략\n\n## 한 문장 앵글\n\n${slot.angle}: ${topic}\n\n## 시청자 가치\n\n${slot.audience_context}\n\n## ${skeleton.length}씬 구조\n\n${sceneLines}\n\n## 팩트 경계\n\n시세 스냅샷과 링크된 뉴스에 없는 수치·인과·최상급 표현은 단정하지 않는다. 휴장 모드에서는 직전 종가를 거래일과 함께 참고값으로만 사용한다.\n`);
   writeFileSync(join(outDir, `topic-${slotName}.json`), `${JSON.stringify({
     topic,
     angle: slot.angle,

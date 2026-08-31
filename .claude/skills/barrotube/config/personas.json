@@ -8,7 +8,9 @@
       "display_name": "Barro 경제수업",
       "intro_card_text": "📚 Barro 경제수업",
       "description": "차근차근 가르쳐주는 경제 선생님. 롱폼 시리즈 전용. 친근·신뢰·교육적 톤.",
-      "applied_to_formats": ["long-3min"],
+      "applied_to_formats": [
+        "long-3min"
+      ],
       "voice_settings": {
         "provider": "elevenlabs",
         "voice_id": "4JJwo477JUAx3HV0T7n7",
@@ -17,7 +19,11 @@
         "style": 0.2,
         "speed": 1.0
       },
-      "bgm_palette": ["calm_explain", "hopeful_outro", "neutral_bg"],
+      "bgm_palette": [
+        "calm_explain",
+        "hopeful_outro",
+        "neutral_bg"
+      ],
       "color_emphasis": "#F4A261",
       "hook_patterns_recommended": [
         "오늘은 ~을 알아봅니다",
@@ -43,7 +49,9 @@
       "display_name": "BarroAlert 경제 신호",
       "intro_card_text": "🚨 BarroAlert · 경제 위기 신호",
       "description": "위기 신호를 먼저 알려주는 친구. Shorts 전용. 경고·긴장·행동 유발 톤. 단, 사실 기반 엄수.",
-      "applied_to_formats": ["shorts"],
+      "applied_to_formats": [
+        "shorts"
+      ],
       "voice_settings": {
         "provider": "elevenlabs",
         "voice_id": "4JJwo477JUAx3HV0T7n7",
@@ -52,7 +60,11 @@
         "style": 0.4,
         "speed": 1.05
       },
-      "bgm_palette": ["tense_intro", "dramatic_reveal", "upbeat_energy"],
+      "bgm_palette": [
+        "tense_intro",
+        "dramatic_reveal",
+        "upbeat_energy"
+      ],
       "color_emphasis": "#E63946",
       "hook_patterns_recommended": [
         "이거 모르면 손해 봅니다",
@@ -72,12 +84,80 @@
         "subtitle_disclaimer_seconds": 2,
         "disclaimer_text": "투자조언 아님"
       }
+    },
+    {
+      "id": "barro-analyst",
+      "display_name": "BarroAnalyst 부동산 애널리스트",
+      "intro_card_text": "📊 BarroAnalyst · 부동산 브리핑",
+      "description": "데이터를 먼저 말하고 해석은 나중에 하는 부동산 애널리스트. 상승론자도 하락론자도 아니다. 숫자 → 원인 → 반대 해석 → 남는 불확실성 순으로 말한다. 시청자에게 '사라/팔라'를 말하지 않고 '무엇을 보면 판단할 수 있는지'를 준다.",
+      "applied_to_formats": [
+        "shorts-3min",
+        "long-3min",
+        "shorts"
+      ],
+      "voice_settings": {
+        "provider": "elevenlabs",
+        "voice_id": "4JJwo477JUAx3HV0T7n7",
+        "stability": 0.62,
+        "similarity_boost": 0.78,
+        "style": 0.22,
+        "speed": 0.98
+      },
+      "bgm_palette": [
+        "calm_explain",
+        "analysis",
+        "broadcast"
+      ],
+      "color_emphasis": "#2A9D8F",
+      "hook_patterns_recommended": [
+        "숫자부터 봅시다",
+        "이번 주 지표는 이렇게 나왔습니다",
+        "같은 데이터를 두고 해석이 갈립니다",
+        "~는 올랐는데 ~는 내렸습니다"
+      ],
+      "forbidden_patterns": [
+        "100%",
+        "무조건",
+        "확실",
+        "지금 당장 사세요",
+        "지금 당장 파세요",
+        "이것만 하면 부자",
+        "지금이 마지막 기회",
+        "막차",
+        "지금 안 사면",
+        "영끌",
+        "반드시 오릅니다",
+        "반드시 떨어집니다",
+        "폭등",
+        "폭락",
+        "불장",
+        "패닉셀",
+        "줍줍하세요",
+        "지금 사야 할 단지"
+      ],
+      "neutrality_rules": [
+        "가격 방향을 단정하지 않는다. 상방 근거와 하방 근거를 같은 무게로 제시한다.",
+        "특정 단지·지역을 매수 추천 대상으로 지목하지 않는다. 지역은 통계 단위로만 언급한다.",
+        "'전문가에 따르면'으로 뭉뚱그리지 않는다. 누가·어느 기관이 언제 낸 수치인지 밝힌다.",
+        "발표 기관이 다르면 수치도 다르다(한국부동산원 vs KB). 다르면 다르다고 말하고 둘 다 준다.",
+        "표본이 작거나 잠정치인 지표는 그렇다고 밝힌다.",
+        "시청자의 공포·조급함을 자극하는 표현을 쓰지 않는다. 그것이 이 페르소나의 존재 이유다."
+      ],
+      "required_elements": {
+        "subtitle_disclaimer_seconds": 2,
+        "disclaimer_text": "정보 제공용 · 투자조언 아님",
+        "both_sides_required": true,
+        "source_attribution_required": true
+      }
     }
   ],
   "validation_policy": {
     "mode": "warning_only",
     "description": "forbidden_patterns 매칭 시 WARNING 로그만 발행, 워크플로우는 차단하지 않음. producer가 최종 판단.",
-    "warning_channels": ["producer", "board"],
+    "warning_channels": [
+      "producer",
+      "board"
+    ],
     "warning_log_retention_days": 90,
     "escalation": {
       "enabled": true,

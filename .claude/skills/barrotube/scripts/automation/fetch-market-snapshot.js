@@ -19,7 +19,7 @@
  *
  * 종료코드: 0 = 수집 성공(일부 실패 포함) · 1 = 전부 실패 · 2 = 입력 오류
  */
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
@@ -47,6 +47,13 @@ const DISPLAY = {
   'BOND:US10YT=RR': '미국 국채 10년', 'BOND:KR10YT=RR': '한국 국채 10년',
   'BOND:JP10YT=RR': '일본 국채 10년', 'BOND:DE10YT=RR': '독일 국채 10년',
   'COIN:bitcoin': '비트코인', 'COIN:ethereum': '이더리움',
+  // 부동산 (2026-08-30 realestate 슬롯 개설). 값의 출처·코드는 config/realestate-sources.json.
+  'RE:APT_SALE_NATIONWIDE': '전국 아파트 매매지수', 'RE:APT_SALE_SEOUL': '서울 아파트 매매지수',
+  'RE:APT_SALE_GYEONGGI': '경기 아파트 매매지수',
+  'RE:APT_JEONSE_NATIONWIDE': '전국 아파트 전세지수', 'RE:APT_JEONSE_SEOUL': '서울 아파트 전세지수',
+  'RE:TRADE_VOLUME_SEOUL': '서울 아파트 거래량', 'RE:UNSOLD_NATIONWIDE': '전국 미분양',
+  'RE:UNSOLD_COMPLETED': '준공후 미분양',
+  'RE:BASE_RATE': '한국은행 기준금리', 'RE:MORTGAGE_RATE': '주택담보대출 금리',
 };
 
 /**
@@ -69,6 +76,7 @@ function family(symbol) {
   if (symbol.startsWith('CMDT:')) return 'commodity';
   if (symbol.startsWith('BOND:')) return 'bond';
   if (symbol.startsWith('COIN:')) return 'coin';
+  if (symbol.startsWith('RE:')) return 'realestate';
   if (symbol.startsWith('.')) return 'world';
   return null;
 }
@@ -197,6 +205,71 @@ async function fetchCoin(symbol) {
   return out;
 }
 
+/**
+ * 부동산 지표. 증시와 달리 무키 공개 엔드포인트가 없다 — 세 기관 모두 발급 키를 요구한다
+ * (2026-08-30 실측: KOSIS "유효하지않은 인증KEY", ECOS·R-ONE "필수 값 누락").
+ *
+ * 키가 없으면 **에러로 남긴다**. 0 이나 직전 값으로 채우면 데스크가 그걸 이번 주 수치로 읽고
+ * 대본에 그대로 나간다 — 부동산은 한 주 차이가 서사를 뒤집는 분야라 그게 더 위험하다.
+ * 데스크는 스냅샷이 비면 WebSearch 인용으로 대체하도록 이미 설계돼 있다.
+ */
+async function fetchRealEstate(symbol) {
+  const cfgPath = join(ROOT, 'config', 'realestate-sources.json');
+  if (!existsSync(cfgPath)) throw new Error('config/realestate-sources.json 없음');
+  const spec = JSON.parse(readFileSync(cfgPath, 'utf-8')).symbols?.[symbol];
+  if (!spec) throw new Error(`realestate-sources.json 에 ${symbol} 정의 없음`);
+
+  const KEY_ENV = { reb: 'REB_API_KEY', kosis: 'KOSIS_API_KEY', ecos: 'ECOS_API_KEY' };
+  const envName = KEY_ENV[spec.provider];
+  const key = process.env[envName];
+  if (!key) {
+    throw new Error(`${envName} 미설정 — ${spec.provider} 키가 있어야 ${spec.label} 를 가져온다`
+      + ' (발급처는 config/realestate-sources.json 의 _keys_howto)');
+  }
+
+  let rows = [];
+  if (spec.provider === 'ecos') {
+    const d = await getJson(`https://ecos.bok.or.kr/api/StatisticSearch/${key}/json/kr/1/2/`
+      + `${spec.stat_code}/${spec.cycle || 'M'}/190001/209912/${spec.item_code}`);
+    rows = (d?.StatisticSearch?.row || []).map((r) => ({ t: r.TIME, v: num(r.DATA_VALUE) }));
+  } else if (spec.provider === 'kosis') {
+    const d = await getJson('https://kosis.kr/openapi/Param/statisticsParameterData.do?method=getList'
+      + `&apiKey=${key}&itmId=ALL&objL1=ALL&format=json&jsonVD=Y&prdSe=M&newEstPrdCnt=2`
+      + `&orgId=${spec.org_id}&tblId=${spec.tbl_id}`);
+    rows = (Array.isArray(d) ? d : []).map((r) => ({ t: r.PRD_DE, v: num(r.DT) }));
+  } else if (spec.provider === 'reb') {
+    const d = await getJson('https://www.reb.or.kr/r-one/openapi/SttsApiTblData.do'
+      + `?KEY=${key}&Type=json&pIndex=1&pSize=2&STATBL_ID=${spec.stat_code}`
+      + `&DTACYCLE_CD=WK&ITM_ID=${spec.item_code}&CLS_ID=${spec.region_code}`);
+    const list = d?.SttsApiTblData?.[1]?.row || [];
+    rows = list.map((r) => ({ t: r.WRTTIME_IDTFR_ID, v: num(r.DTA_VAL) }));
+  }
+
+  rows = rows.filter((r) => r.v !== null).sort((a, b) => String(b.t).localeCompare(String(a.t)));
+  if (!rows.length) throw new Error(`${spec.label}: 응답에 값이 없다 (코드 확인 필요 — realestate-sources.json)`);
+
+  const cur = rows[0];
+  const prev = rows[1];
+  const change = prev ? Number((cur.v - prev.v).toFixed(4)) : null;
+  const changePct = prev && prev.v ? Number(((cur.v - prev.v) / prev.v * 100).toFixed(2)) : null;
+  return {
+    symbol,
+    name: DISPLAY[symbol] || spec.label,
+    price: cur.v,
+    price_text: String(cur.v),
+    change,
+    change_pct: changePct,
+    direction: change === null ? 'FLAT' : (change > 0 ? 'RISING' : (change < 0 ? 'FALLING' : 'FLAT')),
+    market_status: 'CLOSE',
+    traded_at: null,
+    unit: spec.unit,
+    basis: spec.basis,          // weekly/monthly — 주식의 '전일 대비'와 섞이면 안 된다
+    period: cur.t,              // 발표 회차 (예: 20260828)
+    prev_period: prev ? prev.t : null,
+    source: spec.provider,
+  };
+}
+
 async function fetchSymbol(symbol) {
   const fam = family(symbol);
   if (!fam) return { symbol, error: `알 수 없는 심볼 형식: ${symbol}` };
@@ -206,6 +279,7 @@ async function fetchSymbol(symbol) {
     if (fam === 'commodity') return await fetchCommodity(symbol);
     if (fam === 'bond') return await fetchBond(symbol);
     if (fam === 'coin') return await fetchCoin(symbol);
+    if (fam === 'realestate') return await fetchRealEstate(symbol);
     return await fetchExchange(symbol);
   } catch (e) {
     return { symbol, name: DISPLAY[symbol] || symbol, error: e.message };

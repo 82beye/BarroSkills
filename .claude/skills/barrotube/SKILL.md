@@ -265,6 +265,9 @@ export PAPERCLIP_DISABLED=1
 bash $BARROTUBE_HOME/lib/install-cron.sh install us-close "06:00"
 bash $BARROTUBE_HOME/lib/install-cron.sh install kr-close "16:00"
 
+# 주간 부동산 브리핑 (목 17:00 — 한국부동산원 주간지수 발표 후)
+bash $BARROTUBE_HOME/lib/install-cron.sh install realestate "Thu 17:00"
+
 # 주간 마케팅 분석 (월요일 09:00)
 bash $BARROTUBE_HOME/lib/install-cron.sh install weekly-marketing "Mon 09:00"
 
@@ -361,6 +364,7 @@ npm run channel:document -- --channel today.myo # 읽기 전용 HTML snapshot �
 ## Reference Files
 
 - `references/ROUTINES.md` — 정기 증시 브리핑 2슬롯 (06:00→08:00 / 16:00→18:00) 운영
+- `references/REALESTATE.md` — 부동산 섹션 (realestate 슬롯·중립 애널리스트 데스크·공공 API 키)
 - `references/PIPELINE.md` — S0~S12 단계별 상세 (입출력·비용·시간)
 - `references/IMAGE-PROMPT.md` — image_prompt 계약 (EP-0069 vs 0070 A/B 근거·규칙 6가지)
 - `references/MARKETING.md` — 마케팅 → 시리즈 부트스트랩 흐름

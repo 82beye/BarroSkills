@@ -231,12 +231,21 @@ function main() {
   // 폴더 경로만 주면 데스크가 어느 파일을 읽어야 할지 몰라 뒤진다. 오늘 자 분석본이 있으면
   // 그 파일을 바로 가리킨다. 심볼릭이 아니라 실경로여야 --add-dir 와 짝이 맞는다.
   const competitorDir = join(ROOT, 'workspace', 'intel', 'competitors');
-  const competitorAnalysis = join(competitorDir, `analysis-${date}.json`);
+  // 슬롯별 분석본을 먼저 본다. 전체 27채널을 한 코퍼스로 섞으면 부동산 21개가 증시 갭을
+  // 묻어 버린다 (2026-08-30: 증시 최상위 갭이 '집값' 으로 바뀌었다). 없으면 통합본으로 폴백.
+  const scopedAnalysis = join(competitorDir, `analysis-${date}-${values.slot}.json`);
+  const competitorAnalysis = existsSync(scopedAnalysis)
+    ? scopedAnalysis
+    : join(competitorDir, `analysis-${date}.json`);
   const competitorPath = existsSync(competitorAnalysis)
     ? realpathSync(competitorAnalysis)
     : (existsSync(competitorDir) ? realpathSync(competitorDir) : competitorDir);
 
-  let reporters = cfg.reporters;
+  // 슬롯이 어느 데스크 세트를 부르는지로 먼저 거른다. 이게 없으면 부동산 슬롯이
+  // 증시 데스크 6개까지 같이 돌려 스냅샷에 없는 심볼을 물어보게 된다 (2026-08-30 realestate 개설).
+  const deskSet = slot.desk_set || 'market';
+  let reporters = (cfg.reporters || []).filter((r) => (r.desk_set || 'market') === deskSet);
+  if (!reporters.length) { console.error(`❌ desk_set "${deskSet}" 에 해당하는 데스크가 없습니다`); process.exit(2); }
   if (values.desks) {
     const want = values.desks.split(',').map((s) => s.trim());
     reporters = reporters.filter((r) => want.includes(r.id));
@@ -255,7 +264,7 @@ function main() {
 
   if (values['dry-run']) {
     for (const r of reporters) console.log(`  [DRY_RUN] ${r.label} → desk-${r.id}.md`);
-    console.log(`  [DRY_RUN] 에디터 → desk-briefing.md`);
+    console.log(`  [DRY_RUN] 에디터 → desk-briefing-${values.slot}.md`);
     process.exit(0);
   }
 
@@ -287,7 +296,9 @@ function main() {
   console.log(`\n🔥 heat 순위: ${ok.map((r) => `${r.id}(${r.heat})`).join(' > ')}`);
 
   // ── 에디터
-  const ed = cfg.editor;
+  // 에디터도 세트별로 갈린다. 증시 에디터에게 부동산 리포트를 주면
+  // '오늘 가장 뜨거운 자산'을 찾는 기준으로 읽어 중립 규약이 통째로 빠진다.
+  const ed = cfg.editors?.[deskSet] || cfg.editor;
   const deskLines = ok.map((r) => `  - ${r.label} [heat ${r.heat}] ${r.path}\n      ${r.headline}`).join('\n');
   const failLines = results.filter((r) => !r.ok).map((r) => `  - ${r.label}: 실패`).join('\n');
   const editorPrompt = `너는 바로경제(econ-daily) 채널의 **${ed.label}** 다. ${ed.role}
@@ -303,24 +314,30 @@ ${ed.selection_criteria.map((c, i) => `${i + 1}. ${c}`).join('\n')}
 
 ## 이런 건 고르지 마라
 ${ed.reject.map((c) => `- ${c}`).join('\n')}
+${ed.neutrality_rules ? `
+## 중립 규약 — 어기면 이 리포트는 폐기다
+${ed.neutrality_rules.map((c) => `- ${c}`).join('\n')}` : ''}${ed.bias_guard ? `
+
+## 편향 경고
+${ed.bias_guard}` : ''}
 
 ## 중요
 - heat 점수는 **참고값**이다. 점수가 낮아도 인과가 선명하면 그걸 골라라.
 - 여러 데스크가 **같은 원인**을 가리키면 그게 오늘의 이야기다. 그 연결을 각도로 삼아라
   (예: 지정학 → 유가 → 인플레 기대 → 금리 → 나스닥).
-- 자산 나열식 요약을 만들지 마라. **인과 하나**를 60초에 설명하는 게 목적이다.
+- 자산 나열식 요약을 만들지 마라. **인과 하나**를 ${slot.target_seconds || 60}초에 설명하는 게 목적이다.
 
 ## 산출물 — 아래 두 파일을 Write 로 저장해라
 
-1. ${join(outDir, 'desk-briefing.md')}
+1. ${join(outDir, `desk-briefing-${values.slot}.md`)}
    - 오늘의 한 줄 (에피소드가 될 이야기)
    - 왜 이걸 골랐나 (근거 데스크와 수치)
    - 인과 사슬 (A → B → C, 각 단계에 출처)
    - 다른 데스크가 본 것 중 이 이야기를 보강하는 것
    - 쓰지 않기로 한 것과 그 이유
-   - 60초 안에 다룰 범위
+   - ${slot.target_seconds || 60}초 안에 다룰 범위
 
-2. ${join(outDir, 'desk-topic.json')}
+2. ${join(outDir, `desk-topic-${values.slot}.json`)}
    {"topic": "<한 문장 주제>", "angle": "<차별화 각도>", "desk": "<주도 데스크 id>",
     "supporting_desks": ["..."], "candidates": ["<후보2>", "<후보3>"],
     "evidence": [{"claim": "...", "value": "...", "source": "<URL>"}]}
@@ -329,8 +346,11 @@ ${ed.reject.map((c) => `- ${c}`).join('\n')}
 
   process.stdout.write(`\n  ▶ ${ed.label} … `);
   const edRun = runClaude({ prompt: editorPrompt, cwd: ROOT, timeoutSec: timeoutSec + 120, addDirs: [outDir, dataRoot] });
-  const briefPath = join(outDir, 'desk-briefing.md');
-  const topicPath = join(outDir, 'desk-topic.json');
+  // 슬롯별로 파일을 가른다. 예전엔 셋(us-close·kr-close·realestate)이 같은 날
+  // desk-briefing.md 하나를 덮어써서, 나중에 돈 슬롯이 앞 슬롯의 브리핑을 지웠다.
+  // research-brief 는 그걸 읽으므로 대본이 엉뚱한 슬롯 기준으로 쓰이게 된다.
+  const briefPath = join(outDir, `desk-briefing-${values.slot}.md`);
+  const topicPath = join(outDir, `desk-topic-${values.slot}.json`);
   if (!edRun.ok || !existsSync(briefPath)) {
     console.log(`❌ ${edRun.why || '산출물 없음'} (${edRun.sec}s)`);
     if (edRun.tail) console.log(`     모델 마지막 응답: ${edRun.tail.replace(/\n+/g, ' | ').slice(0, 400)}`);
@@ -339,7 +359,7 @@ ${ed.reject.map((c) => `- ${c}`).join('\n')}
   }
   const topic = loadJson(topicPath, {});
   console.log(`✅ (${edRun.sec}s)`);
-  console.log(`\n📌 오늘의 토픽: ${topic.topic || '(desk-briefing.md 참조)'}`);
+  console.log(`\n📌 오늘의 토픽: ${topic.topic || `(desk-briefing-${values.slot}.md 참조)`}`);
   if (topic.desk) console.log(`   주도 데스크: ${topic.desk}`);
   console.log(`\n✅ 저장: ${briefPath}`);
   process.exit(0);

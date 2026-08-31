@@ -50,7 +50,11 @@ function loadChannels(policy) {
     const idx = loadJSON(join(INDEX_DIR, f));
     if (!idx?.videos) continue;
     const meta = byId.get(idx.channelId);
-    if (meta?.active === false) continue;
+    // config 에 없는 인덱스는 건너뛴다. v3.0 부터 channels[] 가 정본이고, 여기서
+    // meta 가 undefined 인 것은 '제외 대상'이라는 뜻이다. 예전엔 `meta?.active === false`
+    // 만 봐서 --slot 으로 걸러낸 채널이 그대로 통과했다 (2026-08-30 실측: 부동산 슬롯
+    // 분석에 증시 채널이 섞여 27개가 다 들어왔다).
+    if (!meta || meta.active === false) continue;
 
     const videos = Object.entries(idx.videos).map(([videoId, v]) => {
       const hist = v.stats_history ?? [];
@@ -330,6 +334,7 @@ async function main() {
   const { values } = parseArgs({
     options: {
       date: { type: 'string' },
+      slot: { type: 'string' },
       'dry-run': { type: 'boolean', default: false },
       llm: { type: 'boolean', default: false },
     },
@@ -351,12 +356,24 @@ async function main() {
     return;
   }
 
-  const policy = loadJSON(POLICY_PATH);
+  let policy = loadJSON(POLICY_PATH);
   if (!policy || policy.version !== '3.0') {
     console.error(`✗ policy v3.0 필요: ${POLICY_PATH}`);
     return;
   }
 
+  // 슬롯을 주면 그 슬롯과 경쟁하는 채널만 본다. 2026-08-30 부동산 21개를 등록하면서
+  // 전체 27개를 한 번에 분석했더니 최상위 갭이 '집값' 으로 바뀌어 증시 갭이 묻혔다 —
+  // 세트가 다른 채널을 같은 코퍼스에 섞으면 양쪽 다 신호가 흐려진다.
+  const slotFilter = values.slot;
+  const scoped = slotFilter
+    ? { ...policy, channels: (policy.channels ?? []).filter((c) => (c.competes_with ?? []).includes(slotFilter)) }
+    : policy;
+  if (slotFilter && !scoped.channels.length) {
+    console.error(`❌ competes_with 에 "${slotFilter}" 를 가진 채널이 없습니다`);
+    process.exit(2);
+  }
+  policy = scoped;
   const channels = loadChannels(policy);
   if (channels.length === 0) {
     console.warn('⚠ 비디오 인덱스가 비어 있다 — fetch-competitor-stats.js 를 먼저 실행하라');
@@ -474,9 +491,10 @@ async function main() {
   }
 
   mkdirSync(INTEL_DIR, { recursive: true });
-  writeFileSync(join(INTEL_DIR, `analysis-${date}.json`), JSON.stringify(analysis, null, 2));
-  writeFileSync(join(INTEL_DIR, `analysis-${date}.md`), renderMarkdown(analysis));
-  console.log(`\n✓ Saved: workspace/intel/competitors/analysis-${date}.{json,md}`);
+  const suffix = slotFilter ? `-${slotFilter}` : '';
+  writeFileSync(join(INTEL_DIR, `analysis-${date}${suffix}.json`), JSON.stringify(analysis, null, 2));
+  writeFileSync(join(INTEL_DIR, `analysis-${date}${suffix}.md`), renderMarkdown(analysis));
+  console.log(`\n✓ Saved: workspace/intel/competitors/analysis-${date}${suffix}.{json,md}`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

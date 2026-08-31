@@ -31,17 +31,22 @@ test('데스크가 맡은 심볼은 모든 슬롯이 실제로 수집한다', ()
   // 2026-08-25 실측: 원자재 데스크가 구리·천연가스를 담당한다고 선언돼 있는데 슬롯이
   // 그 심볼을 안 가져와서, 리포트에 "스냅샷 값이 제공되지 않아 판단하지 못했다" 가 찍혔다.
   // 설정 두 곳이 갈라지면 데스크는 매일 조용히 반쪽짜리가 된다.
-  const need = new Set(DESKS.reporters.flatMap((r) => r.symbols || []));
+  // 2026-08-30: 데스크 세트가 둘이 됐다(market / realestate). 슬롯은 자기 세트의 심볼만
+  // 가져오면 된다 — 부동산 슬롯에 나스닥을 요구하면 그게 오히려 오설정이다.
   for (const [slot, v] of Object.entries(ROUTINES.slots)) {
+    const deskSet = v.desk_set || 'market';
+    const need = new Set(DESKS.reporters
+      .filter((r) => (r.desk_set || 'market') === deskSet)
+      .flatMap((r) => r.symbols || []));
     const have = new Set(v.market?.symbols || []);
     const missing = [...need].filter((s) => !have.has(s));
-    assert.deepEqual(missing, [], `${slot} 슬롯이 안 가져오는 데스크 심볼: ${missing.join(', ')}`);
+    assert.deepEqual(missing, [], `${slot}(desk_set=${deskSet}) 슬롯이 안 가져오는 데스크 심볼: ${missing.join(', ')}`);
   }
 });
 
 test('모든 심볼은 수집기가 아는 형태다', () => {
   // family() 가 null 을 주면 그 심볼은 조용히 error 로 떨어지고 데스크 표에서 사라진다.
-  const known = /^(KOSPI|KOSDAQ)$|^FX_|^\.|^CMDT:|^BOND:|^COIN:/;
+  const known = /^(KOSPI|KOSDAQ)$|^FX_|^\.|^CMDT:|^BOND:|^COIN:|^RE:/;
   for (const r of DESKS.reporters) {
     for (const sym of r.symbols || []) {
       assert.match(sym, known, `${r.id}: fetch-market-snapshot 이 모르는 심볼 형태 "${sym}"`);
