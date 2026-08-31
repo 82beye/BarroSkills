@@ -5,6 +5,7 @@
 # 슬롯: config/routines.json 에 선언된 정기 브리핑 구성
 #   us-close  06:00 KST 시작 → 08:00 예약 공개 (전날 미국 증시 마감)
 #   kr-close  16:00 KST 시작 → 18:00 예약 공개 (국내 마감 + 오늘 밤 미장)
+#   realestate  목 17:00 KST 시작 → 19:00 예약 공개 (주간 부동산 · 부동산원 지수 발표 후)
 #
 # 3단 구조:
 #   Stage A (무인)      데이터 수집 → 리서치 → 대본 → [계약 게이트] → 팩트체크
@@ -183,6 +184,14 @@ if [ -n "$SLOT" ]; then
   SLOT_LABEL=$(json_get "$ROUTINES" "d['slots']['$SLOT']['label']")
   NEWS_SOURCES=$(json_get "$ROUTINES" "','.join(d['slots']['$SLOT']['news_sources'])")
   PUBLISH_AT=$(json_get "$ROUTINES" "d['slots']['$SLOT']['publish_at']")
+  # 슬롯이 포맷·페르소나를 지정할 수 있다. 예전엔 create-episode 에 안 넘겨서
+  # 부동산 슬롯(shorts-3min·barro-analyst)도 기본값(shorts 60초·barro-alert)으로 만들어졌다.
+  SLOT_FORMAT=$(json_get "$ROUTINES" "d['slots']['$SLOT'].get('format','')")
+  SLOT_PERSONA=$(json_get "$ROUTINES" "d['slots']['$SLOT'].get('persona','')")
+  # 씬 수도 슬롯에서 읽는다. 아래 codex 지시문이 '5장·5개' 로 박혀 있어서
+  # 7씬 슬롯(realestate)은 두 컷이 빈 채로 렌더까지 갔다 (2026-08-31 dry-run 에서 발견).
+  SLOT_SCENES=$(json_get "$ROUTINES" "d['slots']['$SLOT'].get('scene_count') or d.get('defaults',{}).get('scene_count',5)")
+  [ -n "$SLOT_SCENES" ] || SLOT_SCENES=5
   COMPETITOR_SCAN=$(json_get "$ROUTINES" "d['slots']['$SLOT'].get('competitor_scan',False)")
   PLATFORM=$(json_get "$ROUTINES" "d.get('defaults',{}).get('platform','shorts')")
 elif [ -z "$FORCE_TOPIC" ] && [ -z "$RESUME_EP" ]; then
@@ -205,8 +214,14 @@ TODAY=$(date +%Y-%m-%d)
 NEWS_DIR="${BARROTUBE_HOME}/workspace/daily-news/${TODAY}"
 # Phase 2a 산출물. Phase 3 이 에피소드로 복사하므로 RESUME·FORCE_TOPIC 경로(= Phase 2 를
 # 통째로 건너뛰는 경로)에서도 정의돼 있어야 한다 — set -u 라 미정의면 그 자리에서 죽는다.
-DESK_BRIEF_MD="${NEWS_DIR}/desk-briefing.md"
-DESK_TOPIC_JSON="${NEWS_DIR}/desk-topic.json"
+# 슬롯별 파일이 정본. 예전 이름은 2026-08-30 이전 산출물 폴백이다.
+DESK_BRIEF_MD="${NEWS_DIR}/desk-briefing-${SLOT}.md"
+DESK_TOPIC_JSON="${NEWS_DIR}/desk-topic-${SLOT}.json"
+[ -f "$DESK_BRIEF_MD" ]  || DESK_BRIEF_MD="${NEWS_DIR}/desk-briefing.md"
+[ -f "$DESK_TOPIC_JSON" ] || DESK_TOPIC_JSON="${NEWS_DIR}/desk-topic.json"
+# 성장 처방 (growth-pipeline.sh 05:40/15:40 산출). 슬롯별 파일만 정본 — 없으면 없는 것.
+# DESK_BRIEF_MD 와 같은 이유로 Phase 0 에서 정의한다 (set -u + RESUME 경로).
+GROWTH_DIRECTIVES_MD="${BARROTUBE_HOME}/workspace/growth/directives/${TODAY}-${SLOT}.md"
 
 audit "auto_pipeline_start" "INFO" "slot=$SLOT dry_run=$DRY_RUN force_topic=$FORCE_TOPIC resume=$RESUME_EP"
 notify_telegram "🤖 <b>${SLOT_LABEL} 시작</b>$([ "$DRY_RUN" = "1" ] && echo " (DRY_RUN)")"
@@ -347,7 +362,10 @@ if [ -z "$RESUME_EP" ]; then
     EP_ID="EP-2026-DRYRUN"
     EP_DIR="${BARROTUBE_HOME}/workspace/episodes/${EP_ID}"
   else
-    CREATE_OUT=$(node scripts/automation/create-episode.js --channel econ-daily --topic "$TOPIC" 2>&1)
+    CREATE_ARGS=(--channel econ-daily --topic "$TOPIC")
+    [ -n "$SLOT_FORMAT" ]  && CREATE_ARGS+=(--format "$SLOT_FORMAT")
+    [ -n "$SLOT_PERSONA" ] && CREATE_ARGS+=(--persona "$SLOT_PERSONA")
+    CREATE_OUT=$(node scripts/automation/create-episode.js "${CREATE_ARGS[@]}" 2>&1)
     echo "$CREATE_OUT"
     EP_ID=$(echo "$CREATE_OUT" | grep -oE "EP-[0-9]{4}-[0-9]+" | head -1)
     [ -n "$EP_ID" ] || fail_with_alert "Phase 3" "create-episode.js 출력에서 EP ID 추출 실패"
@@ -369,6 +387,13 @@ if [ -z "$RESUME_EP" ]; then
         cp "$DESK_BRIEF_MD" "${EP_DIR}/05_desk_briefing.md" && echo "  ✓ 05_desk_briefing.md 설치"
         [ -s "$DESK_TOPIC_JSON" ] && cp "$DESK_TOPIC_JSON" "${EP_DIR}/05_desk_topic.json"
       fi
+    fi
+    # 성장 처방은 STRATEGY_MD 블록 밖에서 설치한다 — 제목 패키징·훅 처방은 토픽과
+    # 무관해서 FORCE_TOPIC 경로(Phase 2 생략, STRATEGY_MD="")에도 유효하다. 안에
+    # 두면 운영자가 수동 토픽으로 만든 EP 가 실험 대상에서 조용히 빠져 주간 판정이
+    # 희석된다. 성장 루프가 실패한 날엔 파일이 없다 — 그건 정상이라 세우지 않는다.
+    if [ -s "$GROWTH_DIRECTIVES_MD" ]; then
+      cp "$GROWTH_DIRECTIVES_MD" "${EP_DIR}/06_growth_directives.md" && echo "  ✓ 06_growth_directives.md 설치"
     fi
   fi
   audit "auto_pipeline_ep_created" "INFO" "slot=$SLOT ep=$EP_ID topic=$TOPIC"
@@ -518,7 +543,7 @@ fi
 MEDIA_BASE="${EP_DIR}/platforms/${PLATFORM}"
 
 if [ "$DRY_RUN" = "1" ]; then
-  echo "[DRY_RUN] codex exec → ChatGPT 이미지 5장·인트로·썸네일 → Grok 영상 5개"
+  echo "[DRY_RUN] codex exec → ChatGPT 이미지 ${SLOT_SCENES}장·인트로·썸네일 → Grok 영상 ${SLOT_SCENES}개"
 elif media_assets_ready "$MEDIA_BASE"; then
   echo "⏭  media-render 자산 12/12 검증 완료 — 건너뜀"
 elif [ "$BT_SKIP_MEDIA_RENDER" = "1" ]; then
@@ -557,12 +582,12 @@ else
   # 알려 주는 편이, 덜 사는 화면을 매일 내보내는 것보다 낫다.
   if [ "$MOTION_ENGINE" != "local-only" ]; then
     MOTION_PATH_LINE="  모션 클립  ${MEDIA_BASE_REAL}/40_assets/videos/scene_NNN.mp4"
-    MOTION_STEP_LINE="2. 위 이미지가 모두 저장된 뒤에만 Chrome의 Grok Imagine에서 각 scene_NNN.png를 첨부해 영상 5개를 한 번에 하나씩 생성·저장하고 ffprobe한다."
+    MOTION_STEP_LINE="2. 위 이미지가 모두 저장된 뒤에만 Chrome의 Grok Imagine에서 각 scene_NNN.png를 첨부해 영상 ${SLOT_SCENES}개를 한 번에 하나씩 생성·저장하고 ffprobe한다."
     MOTION_RULES="Grok은 image-to-video 9:16/720p/10s만 사용한다. 매 컷 전 Video audio 버튼이 aria-pressed=true인지 확인한다.
 Grok 로컬 이미지 선택이 확장 파일 접근 제한으로 막히면 해당 PNG를 macOS 클립보드에 넣어 Cmd+V로 첨부하고 계속한다. 파일 URL 권한 때문에 중단하거나 운영자에게 다시 묻지 마라.
 첨부 완료는 filename이 아니라 Remove image/thumbnail로 판정하고, 다운로드 뒤 H.264 세로 영상+AAC 오디오를 ffprobe한다.
 AAC가 없으면 완료로 세지 말고 Video audio를 켠 뒤 같은 컷을 재생성한다. 결제·구독은 절대 하지 마라.
-영상 5개 저장 후 SHA-256을 비교해 중복 바이트가 있으면 해당 뒤쪽 컷을 재생성한다."
+영상 ${SLOT_SCENES}개 저장 후 SHA-256을 비교해 중복 바이트가 있으면 해당 뒤쪽 컷을 재생성한다."
   else
     MOTION_PATH_LINE=""
     MOTION_STEP_LINE="2. 모션 클립은 만들지 마라. Grok Imagine 을 열 필요가 없다 — 저장된 스틸로 로컬 HyperFrames 가 만든다."
@@ -606,7 +631,7 @@ ${MOTION_PATH_LINE}
   썸네일     ${MEDIA_BASE_REAL}/47_thumbnail.png
 
 순서를 바꾸지 마라:
-1. Chrome의 ChatGPT에서 씬 이미지 5장, 인트로, 썸네일을 한 번에 하나씩 생성·저장·검증한다.
+1. Chrome의 ChatGPT에서 씬 이미지 ${SLOT_SCENES}장, 인트로, 썸네일을 한 번에 하나씩 생성·저장·검증한다.
    매 요청 전에 컴포저 도구 메뉴에서 【이미지 만들기】를 선택해 칩이 붙은 것을 스크린샷으로
    확인한 뒤에만 전송한다. 칩 없이 일반 프롬프트로 보내지 마라 — 일반 응답 경로로 라우팅돼
    생성이 멈추거나 규격 밖 이미지가 나온다(2026-08-14 실측). 도구 메뉴에 항목이 없으면

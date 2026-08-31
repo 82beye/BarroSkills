@@ -10,14 +10,18 @@
 # Routines:
 #   us-close              — 매일 06:00 KST 미국 증시 마감 브리핑 전체 파이프라인
 #   kr-close              — 평일 16:00 KST 국내 증시 마감 브리핑 (주말 미실행)
+#   realestate            — 매주 목요일 17:00 KST 주간 부동산 브리핑 (부동산원 지수 발표 후)
 #   competitor-scan       — 매일 05:20,15:20 경쟁 인텔 수집→분석→핸드오프
+#   growth                — 매일 05:40,15:40 채널 성장 루프 (자체 수집→KPI→처방, 월 회고)
 #   weekly-marketing      — 매주 월요일 09:00 마케팅 인텔리전스 fetch
 #   doctor-daily          — 매일 07:00 자동 진단 (silent failure 탐지)
 #
 # Examples:
 #   bash install-cron.sh install us-close "06:00"
 #   bash install-cron.sh install kr-close "Mon-Fri 16:00"
+#   bash install-cron.sh install realestate "Thu 17:00"
 #   bash install-cron.sh install competitor-scan "05:20,15:20"
+#   bash install-cron.sh install growth "05:40,15:40"
 #   bash install-cron.sh install weekly-marketing "Mon 09:00"
 #   bash install-cron.sh install doctor-daily "07:00"
 #   bash install-cron.sh list
@@ -71,8 +75,10 @@ cmd_install() {
   local extra_args=""
   local daemon_mode=false
   case "$routine" in
-    us-close|kr-close)
-      # 정기 증시 브리핑. 슬롯 정의는 config/routines.json.
+    us-close|kr-close|realestate)
+      # 정기 브리핑. 슬롯 정의는 config/routines.json.
+      #   realestate  Thu 17:00  주간 부동산 브리핑 (한국부동산원 주간지수 발표 뒤)
+      #     bash install-cron.sh install realestate "Thu 17:00"
       # 두 슬롯은 --slot 인자가 달라 라벨을 나눠야 한다 (배열로 합칠 수 없다).
       #
       # 발행 빈도 — 평일 2편 / 주말 1편:
@@ -101,6 +107,14 @@ cmd_install() {
       script_path="${BARROTUBE_HOME}/lib/competitor-pipeline.sh"
       extra_args=""
       ;;
+    growth)
+      # 채널 성장 루프: 자체 채널 수집 → KPI 스코어카드 → 성장 지시 (+월요일 주간 회고).
+      # competitor-scan(05:20/15:20) 뒤, 브리핑 슬롯(06:00/16:00) 앞에 돈다 —
+      # 처방이 그날 경쟁 분석을 먹고, 그 처방을 그날 EP 가 먹는 순서.
+      #   bash install-cron.sh install growth "05:40,15:40"
+      script_path="${BARROTUBE_HOME}/lib/growth-pipeline.sh"
+      extra_args=""
+      ;;
     doctor-daily)
       script_path="${BARROTUBE_HOME}/lib/doctor-cli.sh"
       extra_args=""
@@ -124,7 +138,7 @@ cmd_install() {
       ;;
     *)
       echo "❌ 알 수 없는 routine: $routine" >&2
-      echo "사용 가능: us-close | kr-close | competitor-scan | weekly-marketing | doctor-daily | telegram-bot | publish-resume"
+      echo "사용 가능: us-close | kr-close | realestate | competitor-scan | growth | weekly-marketing | doctor-daily | telegram-bot | publish-resume"
       exit 1
       ;;
   esac
@@ -383,6 +397,7 @@ Usage:
 Routines (cron — 정기 실행):
   us-close              미국 증시 마감 브리핑 전체 파이프라인 (예: "06:00")
   kr-close              국내 증시 마감 브리핑 전체 파이프라인 (예: "16:00")
+  growth                채널 성장 루프 — 자체 수집→KPI→처방 (예: "05:40,15:40") — 무비용
   weekly-marketing      주간 마케팅 RSS fetch (예: "Mon 09:00") — 무비용
   doctor-daily          자동 진단 (예: "07:00") — 무비용
 Daemons (long-running, RunAtLoad=true + KeepAlive):

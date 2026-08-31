@@ -363,6 +363,9 @@ async function main() {
   // 대본이 수치를 쓸 때 근거를 직접 보게 하려고 원본도 같이 넣는다.
   // 길면 자른다 — brief+refs 가 길어져 응답이 잘린 전례가 있다 (아래 max_tokens 주석 참조).
   const deskBrief = readIfExists(join(epDir, '05_desk_briefing.md')).slice(0, 6000);
+  // 성장 처방 (growth-directives.js 산출, Phase 3 설치). 훅·소재 선택 가이드 —
+  // 사실 근거는 아니므로 desk briefing 보다 짧게 자른다.
+  const growthDirectives = readIfExists(join(epDir, '06_growth_directives.md')).slice(0, 3000);
 
   if (!brief) {
     console.error(`❌ Missing brief: ${briefPath}`);
@@ -447,6 +450,9 @@ async function main() {
   if (research) userPromptParts.push(`[MARKET RESEARCH]`, research, '');
   if (strategy) userPromptParts.push(`[CONTENT STRATEGY]`, strategy, '');
   if (deskBrief) userPromptParts.push(`[DESK BRIEFING — 기자단 원본 근거·출처]`, deskBrief, '');
+  if (growthDirectives) userPromptParts.push(
+    `[GROWTH DIRECTIVES — 채널 성장 지시. 훅·소재 선택에만 반영하고, '이번 주 실험'은 적용 대상이 대본(훅)일 때만 따르라. 사실·수치의 근거는 DESK BRIEFING 이며, 이 지시로 사실을 왜곡하지 마라]`,
+    growthDirectives, '');
   if (refs) userPromptParts.push(`[NEWS REFERENCES]`, refs, '');
   if (brand) userPromptParts.push(`[CHANNEL BRAND]`, brand, '');
   if (styleGuide) userPromptParts.push(`[STYLE GUIDE: ${spec.style_guide_filename}]`, styleGuide, '');

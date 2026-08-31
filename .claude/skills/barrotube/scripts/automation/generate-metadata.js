@@ -230,6 +230,9 @@ async function main() {
 
   const brief = existsSync(join(epDir, '00_brief.md')) ? readFileSync(join(epDir, '00_brief.md'), 'utf-8') : '';
   const refs = existsSync(join(epDir, '05_topic_references.md')) ? readFileSync(join(epDir, '05_topic_references.md'), 'utf-8').slice(0, 1500) : '';
+  // 성장 처방 — 제목 패키징 지시(경쟁 제목 피처 lift 기반). growth-directives.js 산출.
+  const growthDirectives = existsSync(join(epDir, '06_growth_directives.md'))
+    ? readFileSync(join(epDir, '06_growth_directives.md'), 'utf-8').slice(0, 1500) : '';
 
   // brief frontmatter + topic 추출 (public-figures 감지용)
   let briefFM = {};
@@ -281,6 +284,7 @@ async function main() {
     `대본 narration 의 한글 수사 표기를 그대로 옮기지 마라. 태그에도 한글 수사 숫자를 넣지 마라.`,
     '',
     refs ? `[NEWS REFERENCES]\n${refs}\n` : '',
+    growthDirectives ? `[GROWTH DIRECTIVES]\n제목 작성 시 아래 '제목 패키징' 지시와, '이번 주 실험' 중 적용 대상이 제목(메타데이터)인 것을 반영하라.\n표기 규칙·공인 인물 SEO 정책·클릭베이트 금지 규칙과 충돌하면 그쪽이 항상 우선이다:\n${growthDirectives}\n` : '',
     `[TASK]`,
     `위 에피소드의 YouTube${format.startsWith('shorts') ? '/TikTok/Reels' : ''} 배포 메타데이터를 JSON으로 작성하라.`,
   ].filter(Boolean).join('\n');
