@@ -537,20 +537,36 @@ fi
 # 2026-09-02 기본값을 grok → wan 으로 뒤집었다. Grok 경로는 무인 실행에서 반복해서 섰고
 # (2026-08-17·20·23·24 RED halt 4건), Wan 은 그 실패 모드가 없다.
 MOTION_ENGINE="${BT_MOTION_ENGINE:-wan}"
-case "$MOTION_ENGINE" in
-  grok) log_stage "🎨 Phase 7 — ChatGPT 이미지 → Grok 모션 클립 (브라우저)" ;;
-  wan)  log_stage "🎨 Phase 7 — ChatGPT 이미지 (브라우저) · 모션 클립은 Wan 2.2 (S6c)" ;;
-  *)    log_stage "🎨 Phase 7 — ChatGPT 이미지 (브라우저) · 모션 클립은 로컬 HyperFrames" ;;
-esac
+
+# 브라우저가 **무엇을 만들 담당인지**는 config/image-engines.json 이 정한다.
+# 예전에는 이 프롬프트가 설정과 무관하게 씬·인트로·썸네일을 항상 요청했다. 2026-08-20 에
+# 세 단계를 전부 codex 로 옮겼는데 여기가 안 따라와서, 시드 대화가 깨져 있던 동안에만
+# 우연히 조용했다. 2026-09-02 재시드로 브라우저가 되살아나자 EP-0133 에서 앞 2컷을
+# 가로채 **한 편 안에 두 화풍이 섞였다**(브라우저 1080×1920 · codex 941×1672).
+IMG_CFG="${BARROTUBE_HOME}/config/image-engines.json"
+scene_engine=$(json_get "$IMG_CFG" "d.get('stages',{}).get('S6c_scene') or d.get('global','auto')")
+intro_engine=$(json_get "$IMG_CFG" "d.get('stages',{}).get('S6d_intro') or d.get('global','auto')")
+thumb_engine=$(json_get "$IMG_CFG" "d.get('stages',{}).get('S6e_thumbnail') or d.get('global','auto')")
+BROWSER_SCENES=$([ "$scene_engine" = "media-render" ] && echo 1 || echo 0)
+BROWSER_INTRO=$([ "$intro_engine" = "media-render" ] && echo 1 || echo 0)
+BROWSER_THUMB=$([ "$thumb_engine" = "media-render" ] && echo 1 || echo 0)
+BROWSER_MOTION=$([ "$MOTION_ENGINE" = "grok" ] && echo 1 || echo 0)
+BROWSER_WORK=$(( BROWSER_SCENES + BROWSER_INTRO + BROWSER_THUMB + BROWSER_MOTION ))
+
+if [ "$BROWSER_WORK" = "0" ]; then
+  log_stage "⏭  Phase 7 — 브라우저 담당 자산 없음 (씬=${scene_engine} 인트로=${intro_engine} 썸네일=${thumb_engine} 모션=${MOTION_ENGINE}) — 건너뜀"
+else
+  log_stage "🎨 Phase 7 — 브라우저 담당: $([ "$BROWSER_SCENES" = 1 ] && printf '씬 ')$([ "$BROWSER_INTRO" = 1 ] && printf '인트로 ')$([ "$BROWSER_THUMB" = 1 ] && printf '썸네일 ')$([ "$BROWSER_MOTION" = 1 ] && printf 'Grok모션')"
+fi
 
 MEDIA_BASE="${EP_DIR}/platforms/${PLATFORM}"
 
-if [ "$DRY_RUN" = "1" ]; then
-  if [ "$MOTION_ENGINE" = "grok" ]; then
-    echo "[DRY_RUN] codex exec → ChatGPT 이미지 ${SLOT_SCENES}장·인트로·썸네일 → Grok 영상 ${SLOT_SCENES}개"
-  else
-    echo "[DRY_RUN] codex exec → ChatGPT 이미지 ${SLOT_SCENES}장·인트로·썸네일 (모션은 Phase 8 S6c: ${MOTION_ENGINE})"
-  fi
+if [ "$BROWSER_WORK" = "0" ]; then
+  # 브라우저가 만들 게 없다. Phase 8 의 S6c/S6d/S6e 가 설정된 엔진으로 전부 만든다.
+  # 여기서 브라우저를 굳이 열면 같은 자산을 다른 화풍으로 덮어써 한 편 안에 두 스타일이 섞인다.
+  echo "  씬·인트로·썸네일은 Phase 8 이 만듭니다 (설정: 씬=${scene_engine})"
+elif [ "$DRY_RUN" = "1" ]; then
+  echo "[DRY_RUN] codex exec → 브라우저 자산 (씬=${BROWSER_SCENES} 인트로=${BROWSER_INTRO} 썸네일=${BROWSER_THUMB} 모션=${BROWSER_MOTION})"
 elif media_assets_ready "$MEDIA_BASE"; then
   echo "⏭  media-render 자산 12/12 검증 완료 — 건너뜀"
 elif [ "$BT_SKIP_MEDIA_RENDER" = "1" ]; then

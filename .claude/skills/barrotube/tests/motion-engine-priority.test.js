@@ -141,3 +141,18 @@ test('쿼터 소진 오류가 원인을 말한다 — "Space 오류: null" 로 �
   assert.match(s, /ZeroGPU 쿼터 소진/);
   assert.match(s, /HF_TOKEN/);
 });
+
+test('Phase 7 브라우저 작업은 image-engines.json 이 정한다 — 설정과 어긋나면 화풍이 섞인다', () => {
+  // 2026-08-20 에 씬·인트로·썸네일을 전부 codex 로 옮겼는데 Phase 7 프롬프트가 안 따라와서,
+  // 시드 대화가 깨져 있던 동안에만 우연히 조용했다. 2026-09-02 재시드로 브라우저가 되살아나자
+  // EP-0133 에서 앞 2컷을 가로채 한 편 안에 두 화풍이 섞였다(브라우저 1080×1920 · codex 941×1672).
+  const auto = read('lib/auto-pipeline.sh');
+  assert.match(auto, /image-engines\.json/, 'Phase 7 이 이미지 엔진 설정을 읽어야 한다');
+  for (const v of ['BROWSER_SCENES', 'BROWSER_INTRO', 'BROWSER_THUMB', 'BROWSER_MOTION', 'BROWSER_WORK']) {
+    assert.ok(auto.includes(v), `${v} 게이트가 있어야 한다`);
+  }
+  // 브라우저가 만들 게 없으면 아예 열지 않는다 — 열면 같은 자산을 다른 화풍으로 덮어쓴다
+  assert.match(auto, /BROWSER_WORK" = "0"/);
+  // 씬 이미지 요청은 media-render 로 지정했을 때만 성립한다
+  assert.match(auto, /scene_engine" = "media-render"/);
+});
