@@ -37,8 +37,17 @@ import {
 } from './lib/motion-qa.js';
 
 const TILE = 190;
-const PER_SHEET = 24;
-const SHEET_COLS = 6;
+/**
+ * 시트당 타일 수. 클립당 비전 호출 수를 결정하는 유일한 손잡이다 —
+ * 81프레임이면 24타일에서 4회, 60타일에서 2회다.
+ *
+ * 2026-09-02 실측: 같은 클립에 24타일 131초 / 60타일 26초 — **5배 빠른데 검출 결함 수는
+ * 같았다**(둘 다 3개, f76 공통). 호출당 고정 비용이 지배적이라 시트를 줄이는 게 곧 속도다.
+ * 에피소드 1편(5씬×최대3시도)이면 40분 대 8분 차이라 크론 예산에 직결된다.
+ * 더 키우면 모델이 격자 번호를 헷갈릴 수 있으니 검증 없이 올리지 말 것.
+ */
+const PER_SHEET = Number(process.env.BT_QA_PER_SHEET) || 60;
+const SHEET_COLS = Number(process.env.BT_QA_SHEET_COLS) || 10;
 
 const VISION_PROMPT = [
   '이 이미지는 한 애니메이션 클립에서 뽑은 만화 캐릭터 얼굴 프레임을 격자로 붙인 것이다.',
@@ -66,15 +75,27 @@ function extractFrames(video, dir) {
   return readdirSync(dir).filter((f) => f.endsWith('.png')).sort();
 }
 
-async function analyze(path, resizeTo = null) {
+/**
+ * 한 프레임의 얼굴 지표 + 서명.
+ *
+ * ROI 를 못 찾으면 `fallbackRoi`(직전 프레임 것)로 그 자리를 계속 잰다. findHeadRoi 는
+ * '눈 2개'로 얼굴을 식별하는데, 깜빡이거나 피처가 지워진 프레임에는 눈이 0~1개라 null 이
+ * 된다 — 그런데 **그게 바로 우리가 잡으려는 결함**이다. 여기서 null 을 돌리면 검사를
+ * 포기하게 되고, 결함 프레임이 많을수록 '검사 불가'로 빠져나간다. 구도가 고정된 클립에서
+ * 직전 ROI 는 유효하므로, 그 자리를 재서 featureRatio 가 0 에 수렴하는 걸 결함으로 잡는다.
+ * (2026-09-02: 5초 Wan 클립이 깜빡임 때문에 ROI 미검출 26% 로 통째로 기권했다.)
+ */
+async function analyze(path, resizeTo = null, fallbackRoi = null) {
   let img = sharp(path).removeAlpha();
   if (resizeTo) img = img.resize(resizeTo.width, resizeTo.height, { fit: 'cover' });
   const { data, info } = await img.raw().toBuffer({ resolveWithObject: true });
   const gray = toGray(data, info.width, info.height, info.channels);
-  const roi = findHeadRoi(gray, info.width, info.height);
+  const found = findHeadRoi(gray, info.width, info.height);
+  const roi = found ?? fallbackRoi;
   if (!roi) return null;
   return {
     ...faceMetrics(gray, info.width, info.height, roi),
+    roiCarried: !found,
     signature: faceSignature(gray, info.width, info.height, roi, 32),
   };
 }
@@ -110,14 +131,23 @@ async function buildSheet(dir, files, frames, metrics, outPath, fallbackRoi) {
  * 비전 판정기 호출. claude CLI 를 쓴다 — 대본·팩트체크와 같은 구독 경로라
  * 선불 크레딧이 마르지 않는다. 응답을 못 읽으면 null (호출부가 '검사 불가'로 처리).
  */
-function callVisionJudge(sheetPath, timeoutMs = 240_000) {
-  const r = spawnSync('claude', ['-p', '--output-format', 'json', `${VISION_PROMPT}\n\n@${sheetPath}`], {
-    encoding: 'utf8', timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024,
-  });
-  if (r.status !== 0 || !r.stdout) return null;
-  let text = r.stdout;
-  try { text = JSON.parse(r.stdout).result ?? r.stdout; } catch { /* 평문 폴백 */ }
-  return parseVisionVerdict(text);
+function callVisionJudge(sheetPath, timeoutMs = 240_000, tries = 3) {
+  // CLI 호출은 간헐적으로 실패한다 — 2026-09-02 5씬 검증에서 마지막 씬의 시트 하나가
+  // 그렇게 죽어 **클립은 멀쩡한데 전체 실행이 검사 불가로 중단**됐다. 판정 실패를
+  // 결함 없음으로 오해하면 안 되지만, 단발 플레이크로 크론을 세우는 것도 안 된다.
+  for (let i = 1; i <= tries; i++) {
+    const r = spawnSync('claude', ['-p', '--output-format', 'json', `${VISION_PROMPT}\n\n@${sheetPath}`], {
+      encoding: 'utf8', timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024,
+    });
+    if (r.status === 0 && r.stdout) {
+      let text = r.stdout;
+      try { text = JSON.parse(r.stdout).result ?? r.stdout; } catch { /* 평문 폴백 */ }
+      const v = parseVisionVerdict(text);
+      if (v !== null) return v;
+    }
+    if (i < tries) console.error(`   · 비전 판정 재시도 ${i}/${tries - 1}`);
+  }
+  return null;
 }
 
 async function main() {
@@ -158,10 +188,14 @@ async function main() {
     }
 
     const metrics = [];
+    let lastRoi = ref.roi;   // 첫 프레임이 실패해도 기준 이미지 ROI 로 시작한다
     for (const f of files) {
-      const m = await analyze(join(dir, f));
+      const m = await analyze(join(dir, f), null, lastRoi);
+      if (m && !m.roiCarried) lastRoi = m.roi;
       metrics.push(m ? { ...m, drift: signatureDrift(ref.signature, m.signature) } : null);
     }
+    const carried = metrics.filter((m) => m?.roiCarried).length;
+    if (carried) console.log(`   · ${carried}프레임은 직전 ROI 로 측정 (얼굴 피처 소실 — 결함 판정 대상)`);
 
     const screen = screenFrames(metrics, ref);
     console.log(`🔎 고전 선별 — ${files.length}프레임 · 확정결함 ${screen.defects.length} · 후보 ${screen.suspects.length} · 중앙드리프트 ${screen.medianDrift}`);

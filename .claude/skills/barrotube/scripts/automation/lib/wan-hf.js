@@ -11,9 +11,38 @@
  * 스펙이지 이 무료 Space 스펙이 아니다 — 720p/24fps 가 필요하면 후처리로 올린다.
  */
 
+import { getSecret } from '../config-loader.js';
+
 const SPACE = process.env.BT_WAN_SPACE || 'zerogpu-aoti-wan2-2-fp8da-aoti-faster';
 const BASE = `https://${SPACE}.hf.space`;
+
+/**
+ * HF 토큰. 크론은 로그인 셸을 안 거쳐 process.env 가 비어 있으므로 .env 를 읽는
+ * getSecret 을 경유한다 — 다른 자격증명과 같은 경로다.
+ * 토큰이 있으면 PRO 쿼터(2,400 GPU초/일), 없으면 익명(120초/일)으로 떨어진다.
+ */
+const hfToken = () => getSecret('HF_TOKEN');
 const API = '/generate_video';
+
+/**
+ * Space 슬라이더 상한. 80프레임 ÷ 16fps = 5.0초다.
+ * 씬은 6.6~11.5초라 항상 이보다 짧으므로 렌더가 늘려서 맞춘다 — 그래서 **최대치를 쓰는
+ * 것이 기본**이다. 4초로 구우면 1.63~2.83배 슬로모션이 되고, 5초면 1.31~2.27배로 준다.
+ */
+export const MAX_DURATION = 5;
+/**
+ * 기본 4초. 상한 5초가 렌더 슬로모션은 덜하지만 얼굴 결함이 크게 는다 —
+ * 4초는 재시도 2회에 결함 0, 5초는 3회를 태워도 3~5개가 남았다 (2026-09-02 실측).
+ */
+export const DEFAULT_DURATION = 4;
+export const FPS = 16;
+
+/** Space 범위(0.5~5초)로 자른다. */
+export function clampDuration(sec) {
+  const n = Number(sec);
+  if (!Number.isFinite(n)) return MAX_DURATION;
+  return Math.min(MAX_DURATION, Math.max(0.5, Math.round(n * 10) / 10));
+}
 
 export const DEFAULT_NEGATIVE = [
   '色调艳丽, 过曝, 静态, 细节模糊不清, 字幕, 风格, 作品, 画作, 画面, 整体发灰, 最差质量, 低质量,',
@@ -33,7 +62,7 @@ export const DEFAULT_PROMPT = [
 
 function headers() {
   const h = { 'Content-Type': 'application/json' };
-  const t = process.env.HF_TOKEN;
+  const t = hfToken();
   if (t) h.Authorization = `Bearer ${t}`;
   return h;
 }
@@ -42,7 +71,7 @@ function headers() {
 export async function uploadImage(buffer, name = 'input.png', fetchImpl = fetch) {
   const fd = new FormData();
   fd.append('files', new Blob([buffer], { type: 'image/png' }), name);
-  const auth = process.env.HF_TOKEN ? { Authorization: `Bearer ${process.env.HF_TOKEN}` } : {};
+  const auth = hfToken() ? { Authorization: `Bearer ${hfToken()}` } : {};
   const res = await fetchImpl(`${BASE}/gradio_api/upload`, { method: 'POST', body: fd, headers: auth });
   if (!res.ok) throw new Error(`업로드 실패 ${res.status}`);
   const paths = await res.json();

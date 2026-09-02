@@ -12,11 +12,33 @@
       "cost": "무과금 — 익명 ZeroGPU 쿼터",
       "output": "480x832 · 16fps · 최대 5s (720p·24fps 는 --post-720p 후처리)",
       "qa": "qa-motion-frames.js 프레임 QA 통과까지 시드를 바꿔 재생성",
-      "note": "기본값. 헤드리스라 로그인·Cloudflare·유료 모달에 걸리지 않는다. 얼굴 붕괴는 프레임 QA 가 걸러낸다.",
-      "quota": "익명 ZeroGPU 는 시간당 수 회에서 마른다 (2026-09-02 실측: 4회 연속 후 소진). HF_TOKEN(무료 계정)을 넣으면 상향된다. 소진되면 produce-episode 가 로컬 HyperFrames 로 폴백하고 motion_fallback_shipped 경보를 올린다."
+      "note": "기본값. 2026-09-02 실측에서 **배경 모션(1.689)과 캐릭터 스케일 유지(1.01)를 동시에 만족하는 유일한 엔진**이었다. 해상도·fps·길이는 LTX 에 밀리지만, 프레임 안에서 애니메이션하고 구도를 안 건드린다 — 마스코트가 브랜드 앵커인 Shorts 에서는 이 축이 우선이다. 얼굴 붕괴(생성 4회 중 3회)는 프레임 QA + 시드 재생성으로 잡는다.",
+      "quota": "익명 ZeroGPU 는 시간당 수 회에서 마른다 (2026-09-02 실측: 4회 연속 후 소진). HF_TOKEN(무료 계정)을 넣으면 상향된다. 소진되면 produce-episode 가 로컬 HyperFrames 로 폴백하고 motion_fallback_shipped 경보를 올린다.",
+      "known_hard_cases": "2026-09-03 EP-0131 5씬 실측: 4/5 가 1~2시도에 결함 0 으로 통과했으나 씬003(마스코트가 레버를 당기는 기울어진 동적 포즈)은 6시도 모두 실패했다 — 최선 4결함/65프레임. 머리가 기울고 소품과 겹치는 컷은 Wan 이 얼굴을 다시 그릴 여지가 커진다. 해당 컷은 시도를 늘리거나(BT_WAN_ATTEMPTS) 씬 이미지를 정면·직립 포즈로 다시 굽는 편이 빠르다.",
+      "measured": {
+        "scenes_passed": "4/5",
+        "attempts_median": 2,
+        "clip_frames": 65,
+        "duration_sec": 4
+      }
     },
     {
       "order": 1,
+      "id": "ltx",
+      "label": "LTX-2.3 (오픈소스, HuggingFace Space)",
+      "script": "scripts/automation/generate-motion-ltx.js",
+      "browser_required": false,
+      "cost": "HF PRO 구독 ($9/월, 2,400 GPU초/일). 호출당 150 GPU초 요청 — 익명 쿼터로는 한 컷도 못 굽는다",
+      "output": "1024×1536 · 24fps · 최대 10초 · AAC 오디오 포함",
+      "qa": "qa-motion-frames.js 통과까지 시드를 바꿔 재생성 (기본 2회)",
+      "requires": [
+        "HF_TOKEN"
+      ],
+      "note": "옵션 1. 규격은 모든 면에서 우월하다 — 1024×1536(픽셀 3.8배) · 24fps · 최대 10초 · AAC · 얼굴 붕괴 없음. 그런데 **캐릭터 스케일을 못 지킨다.** 배경을 움직이면 카메라·피사체 크기가 같이 움직이고, 프롬프트로 분리되지 않는다.",
+      "limitation": "2026-09-02 프롬프트 4종 실측 — 배경 모션과 스케일 유지가 트레이드오프였다: 줌허용 배경1.527/크기8.43배확대 · 카메라고정 배경0.066(정지)/크기1.01 · 시네마그래프 배경1.321/크기0.74축소 · 배경+크기고정명시 배경0.819/크기0.66축소. \"never gets smaller\" 를 명시해도 34% 축소했다. 캐릭터가 앵커가 아닌 컷(풍경·차트 전환)에는 쓸 만하다. 또한 두 I2V 공통으로 씬 이미지의 평면 그래픽(화살표·라벨)이 모션 중 사라진다."
+    },
+    {
+      "order": 2,
       "id": "grok",
       "label": "Grok Imagine (브라우저)",
       "script": "scripts/automation/grok-motion-applescript.js",
@@ -28,7 +50,7 @@
       "note": "옵션 1. 실제 Chrome 을 AppleScript 로 몬다. 로그인 계정·Cloudflare·일일 쿼터에 묶이므로 명시 지정할 때만 쓴다."
     },
     {
-      "order": 2,
+      "order": 3,
       "id": "local-only",
       "aliases": [
         "hyperframes"
@@ -42,7 +64,7 @@
       "note": "응급 폴백. 피사체가 움직이지 않는 슬라이드쇼라 이걸로 나가면 QA 가 경고를 올린다."
     },
     {
-      "order": 3,
+      "order": 4,
       "id": "none",
       "label": "모션 생략",
       "browser_required": false,
@@ -50,10 +72,10 @@
     }
   ],
   "operator_notes": [
-    "이번 회차만 Grok 으로:      BT_MOTION_ENGINE=grok bash lib/auto-pipeline.sh --slot us-close",
-    "이번 회차만 로컬 폴백으로:  BT_MOTION_ENGINE=local-only bash lib/auto-pipeline.sh --slot us-close",
-    "Wan 시도 횟수 조정:         BT_WAN_ATTEMPTS=4 (기본 3)",
-    "Wan Space 교체:             BT_WAN_SPACE=<subdomain>",
-    "쿼터 상향(권장):            .env 에 HF_TOKEN=hf_xxx — 무료 HuggingFace 계정 토큰이면 충분하다"
+    "이번 회차만 LTX 로:       BT_MOTION_ENGINE=ltx bash lib/auto-pipeline.sh --slot us-close",
+    "이번 회차만 Grok 으로:     BT_MOTION_ENGINE=grok bash lib/auto-pipeline.sh --slot us-close",
+    "이번 회차만 로컬 폴백으로: BT_MOTION_ENGINE=local-only bash lib/auto-pipeline.sh --slot us-close",
+    "LTX 시도 횟수 조정:        BT_LTX_ATTEMPTS=3 (기본 2 — 호출당 150 GPU초라 낮게 잡았다)",
+    "HF 토큰:                   .env 의 HF_TOKEN 또는 키체인. PRO 구독 계정이어야 한다"
   ]
 }

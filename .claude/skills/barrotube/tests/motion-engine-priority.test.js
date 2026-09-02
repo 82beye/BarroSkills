@@ -10,19 +10,64 @@ import test from 'node:test';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (p) => readFileSync(join(ROOT, p), 'utf8');
 
-test('config/motion-engines.json — Wan 이 order 0 · 기본값이고 Grok 이 order 1', () => {
+test('config/motion-engines.json — Wan 이 order 0 · 기본값이다', () => {
+  // 2026-09-02 4엔진을 같은 씬으로 실측한 결과다. 배경이 살아있는가(상단 40% 프레임간
+  // 움직임)와 구도를 지키는가(끝/첫 얼굴면적) 두 축을 모두 만족한 건 Wan 뿐이었다:
+  //   Wan 1.689/1.01 · Grok 1.647/1.22 · LTX 1.321/0.74 · HyperFrames 0.439/1.18
+  // 순서를 바꾸려면 그 측정을 다시 하고 근거를 config 의 note 에 남길 것.
   const cfg = JSON.parse(read('config/motion-engines.json'));
   assert.equal(cfg.default, 'wan');
   const byOrder = Object.fromEntries(cfg.options.map((o) => [o.order, o.id]));
   assert.equal(byOrder[0], 'wan');
-  assert.equal(byOrder[1], 'grok');
   const wan = cfg.options.find((o) => o.id === 'wan');
   assert.equal(wan.browser_required, false, 'Wan 은 헤드리스여야 기본값일 자격이 있다');
   const grok = cfg.options.find((o) => o.id === 'grok');
   assert.equal(grok.browser_required, true);
+  // LTX 는 규격이 우월한데도 밀렸다 — 그 이유가 config 에 남아 있어야 재논의를 막는다
+  const ltx = cfg.options.find((o) => o.id === 'ltx');
+  assert.ok(ltx, 'LTX 는 옵션으로 남아 있어야 한다');
+  assert.match(ltx.limitation ?? '', /축소|스케일/, 'LTX 의 스케일 드리프트 근거를 기록할 것');
   // id 는 코드가 문자열로 비교한다 — 중복되면 분기가 갈린다
   const ids = cfg.options.map((o) => o.id);
   assert.equal(new Set(ids).size, ids.length);
+  // order 도 유일해야 한다 — 같은 순번이 둘이면 '옵션 N' 이 뭘 가리키는지 모른다
+  const orders = cfg.options.map((o) => o.order);
+  assert.equal(new Set(orders).size, orders.length);
+});
+
+test('Wan 기본 길이는 4초다 — 5초는 얼굴 결함이 늘었다', () => {
+  // 실측: 4초는 재시도 2회에 결함 0, 5초는 3회를 태워도 3~5개가 남았다(2회 반복 확인).
+  // 슬로모션(1.63~2.83배)이 짧은 얼굴 붕괴보다 낫다는 판단이다.
+  const lib = read('scripts/automation/lib/wan-hf.js');
+  assert.match(lib, /DEFAULT_DURATION = 4/);
+  assert.match(lib, /MAX_DURATION = 5/);
+  const gen = read('scripts/automation/generate-motion-wan.js');
+  assert.match(gen, /wan\.DEFAULT_DURATION/, '에피소드 경로가 기본 길이를 써야 한다');
+});
+
+test('QA 시트 밀도는 조정 가능하고 기본이 60타일이다', () => {
+  // 24타일 131초 vs 60타일 26초, 검출 결함 수 동일. 에피소드당 QA 40분 → 8분.
+  const qa = read('scripts/automation/qa-motion-frames.js');
+  assert.match(qa, /BT_QA_PER_SHEET\) \|\| 60/);
+  assert.match(qa, /BT_QA_SHEET_COLS\) \|\| 10/);
+});
+
+test('비전 판정기 호출은 재시도한다 — 단발 플레이크가 크론을 세우면 안 된다', () => {
+  // 2026-09-02 5씬 검증에서 마지막 씬의 시트 하나가 CLI 실패로 죽어, 클립은 멀쩡한데
+  // 전체가 '검사 불가'로 중단됐다. 판정 실패를 통과로 오해하는 건 여전히 금지다.
+  const qa = read('scripts/automation/qa-motion-frames.js');
+  assert.match(qa, /tries = 3/);
+  assert.match(qa, /비전 판정 재시도/);
+});
+
+test('QA 는 얼굴을 못 찾아도 기권하지 않고 직전 ROI 로 판정한다', () => {
+  // findHeadRoi 는 '눈 2개'로 얼굴을 찾는데, 피처가 지워진 프레임엔 눈이 없다 —
+  // 그게 바로 잡으려는 결함이다. null 을 돌리면 결함이 많을수록 '검사 불가'로
+  // 빠져나가는 구멍이 된다 (2026-09-02: 5초 클립이 ROI 미검출 26% 로 통째로 기권).
+  const qa = read('scripts/automation/qa-motion-frames.js');
+  assert.match(qa, /fallbackRoi/);
+  assert.match(qa, /roiCarried/);
+  assert.match(qa, /let lastRoi = ref\.roi/);
 });
 
 test('셸과 JS 의 기본값이 같다 — 어긋나면 같은 EP 도 호출 경로에 따라 다른 엔진으로 구워진다', () => {
