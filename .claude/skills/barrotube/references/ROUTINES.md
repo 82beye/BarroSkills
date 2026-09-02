@@ -33,7 +33,8 @@ Stage A  무인·결정론 (브라우저 불필요)
   Phase 6  S5 팩트체크
 
 Stage B  하이브리드 브라우저
-  Phase 7  media-render (ChatGPT 이미지 → Grok 모션 클립 → 인트로)
+  Phase 7  media-render (ChatGPT 이미지 → 인트로)  ※ 모션 클립은 Phase 8 의 S6c 가 Wan 2.2 로 만든다
+           (BT_MOTION_ENGINE=grok 을 명시하면 이 단계가 Grok 클립까지 요구한다)
            실패·타임아웃 → 텔레그램 호출 후 정상 종료 (자산 보존)
 
 Stage C  무인 발행 + 거부창구
@@ -79,7 +80,7 @@ Stage C  무인 발행 + 거부창구
 ## 실패 시
 
 **브라우저 단계 실패** — 가장 흔하다. 텔레그램으로 알림이 오고 자산은 보존된다.
-Chrome 의 ChatGPT/Grok 로그인을 확인한 뒤:
+Chrome 의 ChatGPT 로그인을 확인한 뒤 (Grok 은 BT_MOTION_ENGINE=grok 일 때만 필요):
 
 ```bash
 RESUME_EP=EP-2026-NNNN bash lib/auto-pipeline.sh --slot us-close

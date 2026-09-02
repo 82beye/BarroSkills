@@ -15,10 +15,10 @@
 | S5 | Factcheck | `barrotube-fact-checker` | script | `35_factcheck.md` | ~$0.05 | 1~2분 |
 | S6a | TTS | `barrotube-voice-engineer` (또는 직접 호출) | script | `40_assets/tts/*.wav` | **$0.02/씬** (ElevenLabs) | 30초/씬 |
 | S6b | Duration Sync | (자동) `sync-durations.js` | tts metadata | `30_script.md` 갱신 | 0 | 5초 |
-| S6c | Scene Images + Motion | **기본: `barrotube-media-render` 스킬** (브라우저 ChatGPT→Grok image-to-video, PD 수행) / 레거시: `barrotube-image-generator` API (`--image-engine openai\|gemini`) | script | 신규 Shorts: `40_assets/images/scene_001..005.png` + `40_assets/videos/scene_001..005.mp4` (각 5/5) | 기본 0 (브라우저) / 레거시 **$0.04/이미지** | 1~2분/씬 (브라우저) |
+| S6c | Scene Images + Motion | 이미지 **기본: `barrotube-media-render` 스킬**(브라우저 ChatGPT) / 레거시 API (`--image-engine openai\|gemini`). 모션 **기본: Wan 2.2**(`generate-motion-wan.js`, 헤드리스 + 프레임 QA 재생성) · 옵션1 Grok(`BT_MOTION_ENGINE=grok`) | script | 신규 Shorts: `40_assets/images/scene_001..005.png` + `40_assets/videos/scene_001..005.mp4` (각 5/5) | 기본 0 (브라우저) / 레거시 **$0.04/이미지** | 1~2분/씬 (브라우저) |
 | S6d | Intro Card | **기본: `barrotube-media-render` 스킬** (브라우저 ChatGPT, PD가 타이틀 철자 검수) / 레거시: `generate-intro.js` v10 API (`--engine openai\|gemini`) | title + brand<br>타이틀의 기업명 → 연관 인물 캐리커처 + CI 로고 자동 주입 (`config/brand-entities.json`) | `45_intro.png` | 기본 0 / 레거시 ~$0.18 | 1~2분 (브라우저) |
 | S6e | Thumbnail | `barrotube-image-generator` | brand + script | `47_thumbnail.png` | ~$0.04 | 20초 |
-| S7 | Render | (자동) `render-direct.js` — 신규 Shorts는 Grok 클립 5/5 미달 시 기본 실패하며 각 클립을 반복하지 않고 TTS 길이에 맞춰 리타이밍. `--allow-stills`는 publish QA를 통과할 수 없는 레거시 전용 예외 | assets + script | `55_render/video.mp4` | 0 (FFmpeg) | 1~2분 |
+| S7 | Render | (자동) `render-direct.js` — 신규 Shorts는 모션 클립 5/5 미달 시 기본 실패하며 각 클립을 반복하지 않고 TTS 길이에 맞춰 리타이밍. `--allow-stills`는 publish QA를 통과할 수 없는 레거시 전용 예외 | assets + script | `55_render/video.mp4` | 0 (FFmpeg) | 1~2분 |
 | S7b | CapCut Draft | `barrotube-capcut-composer` (선택) | assets | `50_capcut_draft.json` | 0 | 1분 |
 | S8 | QA | `barrotube-qa-reviewer` | video.mp4 + assets | `60_qa_report.md` | ~$0.10 | 1~2분 |
 | S9 | Metadata | `barrotube-metadata-writer` | script + video | `70_publish_meta.json` | ~$0.03 | 1분 |
@@ -95,7 +95,7 @@ node scripts/automation/run-episode.js --episode EP-YYYY-NNNN --from S4 --execut
 
 QA score < 60 또는 blocker > 0:
 - `60_qa_report.md`의 "회귀 stage" 명시 확인
-- 일반 회귀: S4 (script 수정), S6c (이미지·Grok 클립 재생성), S7 (재렌더)
+- 일반 회귀: S4 (script 수정), S6c (이미지·모션 클립 재생성), S7 (재렌더)
 - 운영자 결정 후 해당 stage로 `--from`으로 재실행
 
 ## Fact Check HIGH 대응

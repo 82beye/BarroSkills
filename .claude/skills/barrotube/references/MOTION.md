@@ -1,16 +1,63 @@
-# 모션 클립 — HyperFrames 로컬 엔진
+# 모션 클립 — 엔진 우선순위
 
-씬 모션 클립(`40_assets/videos/scene_NNN.mp4`)을 브라우저 없이 로컬에서 만든다.
-`render-direct.js` 는 이 파일이 없으면 exit 3 으로 멈추므로, 이 단계가 파이프라인에서
-가장 자주 막히는 지점이었다.
+씬 모션 클립(`40_assets/videos/scene_NNN.mp4`). `render-direct.js` 는 이 파일이 없으면
+exit 3 으로 멈추므로, 이 단계가 파이프라인에서 가장 자주 막히던 지점이었다.
+
+우선순위의 정본은 `config/motion-engines.json` 이고, `lib/auto-pipeline.sh` 와
+`scripts/automation/produce-episode.js` 가 같은 기본값(`BT_MOTION_ENGINE:-wan`)을 쓴다.
+
+| 옵션 | 엔진 | 브라우저 | 규격 | 비용 |
+|---:|---|---|---|---|
+| **0 (기본)** | **Wan 2.2** (HF Space, 오픈소스) | 불필요 | 480×832 · 16fps · 4~5s | 무과금 (익명 ZeroGPU) |
+| 1 | Grok Imagine | **필요** (실제 Chrome) | 720×1264 · 10.04s 고정 | 계정 쿼터 |
+| 2 | HyperFrames 로컬 팬·줌 | 불필요 | 1080×1920 · TTS 길이 정확 | $0 |
+| 3 | none | — | 생략 (디버그 전용) | — |
 
 ```bash
-node scripts/automation/generate-motion.js --doctor
-node scripts/automation/generate-motion.js --episode workspace/episodes/EP-YYYY-NNNN --platform shorts
-node scripts/automation/generate-motion.js --episode <dir> --scene 003 --force   # 한 씬만 다시
+# 기본(Wan) — 아무것도 안 해도 이 경로로 간다
+bash lib/auto-pipeline.sh --slot us-close
+
+# 이번 회차만 Grok(옵션 1)으로
+BT_MOTION_ENGINE=grok bash lib/auto-pipeline.sh --slot us-close
+
+# 이번 회차만 로컬 폴백으로
+BT_MOTION_ENGINE=local-only bash lib/auto-pipeline.sh --slot us-close
+
+# 수동 실행
+node scripts/automation/generate-motion-wan.js --episode workspace/episodes/EP-YYYY-NNNN --platform shorts
+node scripts/automation/generate-motion-wan.js --episode <dir> --scene 003 --force
+node scripts/automation/generate-motion.js --doctor        # 로컬 폴백 엔진 점검
 ```
 
-## 왜 바꿨나 (실측)
+## 왜 Wan 이 기본인가 (2026-09-02 전환)
+
+Grok 은 **무인 실행에서 반복해서 섰다** — 로그인 계정 뒤바뀜·Cloudflare·유료 모달·일일
+쿼터. 2026-08-17·20·23·24 에 RED halt 4건이 났고 전부 사람이 손으로 풀어야 했다.
+Wan 은 헤드리스 HTTP 호출이라 그 실패 모드가 통째로 없다.
+
+대신 Wan 은 **모션 도중 마스코트 얼굴을 다시 그리다 뭉갠다**(눈이 노치 파인 사각형이
+되거나 입이 흰 격자 막대가 된다). 프롬프트로는 못 막는다 — 얼굴을 얼리라고 명시해도
+무시한다. 그래서 `qa-motion-frames.js` 가 **프레임 단위로 검사하고, 결함이 있으면 시드를
+바꿔 재생성**한다. 이 게이트가 없으면 Wan 을 기본으로 쓸 수 없다.
+
+- QA 설계 근거: `scripts/automation/lib/motion-qa.js` 헤더
+- 파일럿 실측·샘플: `workspace/pilots/wan22-motion/NOTES.md`
+
+## 쿼터 — Wan 을 크론에 걸 때 알아야 할 것
+
+익명 ZeroGPU 쿼터는 **시간당 수 회에서 마른다** (2026-09-02 실측: 연속 4회 성공 뒤
+`event: error / data: null` 로 거부). 에피소드 1편은 5클립이고 QA 재시도까지 붙으면
+최대 15회라 익명 쿼터로는 부족하다.
+
+- **권장**: `.env` 에 `HF_TOKEN=hf_xxx` — 무료 HuggingFace 계정 토큰이면 쿼터가 올라간다.
+- 소진돼도 파이프라인은 서지 않는다: `produce-episode.js` 가 로컬 HyperFrames 로 폴백하고,
+  `_engines.json` 에 `hyperframes` 가 찍히며 `motion_fallback_shipped` 경보가 사람에게 간다.
+  **조용히 슬라이드쇼가 나가지는 않는다.**
+
+720p·24fps 가 필요하면 `--post-720p`(보간+업스케일). 무료 Space 는 480×832·16fps 만 준다 —
+네이티브 720p 는 유료 GPU 나 로컬 GPU 가 필요하다.
+
+## 로컬 폴백(HyperFrames)은 왜 남겨 두나
 
 | | Grok Imagine (브라우저) | HyperFrames (로컬) |
 |---|---|---|

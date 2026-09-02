@@ -330,20 +330,32 @@ async function main() {
     // API 냐)는 모션 필요 여부와 무관한데, media-render 분기 안에 있던 탓에
     // BT_IMAGE_ENGINE=openai 로 우회하면 videos/ 가 빈 채로 통과해 슬라이드쇼가 나왔다
     // (2026-08-15 EP-0094 실측).
-    // 엔진 의미는 lib/auto-pipeline.sh 와 맞춘다 (BT_MOTION_ENGINE:-grok).
-    //   grok(기본) : Grok image→video — 전용 Playwright 프로필(~/.barrotube/grok-profile)
-    //   local-only : 로컬 HyperFrames (구 값 'hyperframes' 도 같게 취급)
-    //   none       : 모션 단계 생략
-    // 예전 기본값은 'hyperframes' 였는데, auto-pipeline 은 'grok' 이라 같은 EP 도 호출
-    // 경로에 따라 다른 엔진으로 구워졌다. 기본값을 grok 으로 통일한다.
-    const motionEngine = (process.env.BT_MOTION_ENGINE || 'grok').toLowerCase();
+    // 엔진 의미·우선순위의 정본은 config/motion-engines.json 이고, lib/auto-pipeline.sh 가
+    // 같은 기본값을 쓴다 (BT_MOTION_ENGINE:-wan).
+    //   wan(기본, 옵션0) : Wan 2.2 HF Space — 헤드리스. 프레임 QA 통과까지 시드 바꿔 재생성
+    //   grok(옵션1)      : Grok image→video — 브라우저(실제 Chrome AppleScript)
+    //   local-only       : 로컬 HyperFrames 팬·줌 (구 값 'hyperframes' 도 같게 취급)
+    //   none             : 모션 단계 생략
+    // 2026-09-02 기본값을 grok → wan 으로 뒤집었다. Grok 은 로그인 계정·Cloudflare·유료
+    // 모달에 묶여 무인 실행이 반복해서 섰고(2026-08-17·20·23·24 RED halt 4건), Wan 은
+    // 헤드리스라 그 실패 모드가 통째로 없다. 대신 Wan 은 얼굴을 뭉개므로 프레임 QA 가
+    // 필수인데, 그 게이트가 generate-motion-wan.js 안에 들어 있다.
+    const motionEngine = (process.env.BT_MOTION_ENGINE || 'wan').toLowerCase();
     const useLocalMotion = motionEngine === 'local-only' || motionEngine === 'hyperframes';
+    const useWanMotion = motionEngine === 'wan';
     const ensureMotion = () => {
       const stillsReady = sceneIds.length > 0
         && sceneIds.every(id => exists(join(p.imagesDir, `scene_${id}.png`)));
       if (!stillsReady || motionDone || platform !== 'shorts' || motionEngine === 'none') return;
       try {
-        if (useLocalMotion) {
+        if (useWanMotion) {
+          runTracked(absEp, episodeId, 'S6c', 'S6c Motion Clips (Wan 2.2 + 프레임 QA)', '08-image-generator',
+            'scripts/automation/generate-motion-wan.js', [
+              '--episode', relEp,
+              '--platform', platform,
+              '--attempts', process.env.BT_WAN_ATTEMPTS || '3',
+            ]);
+        } else if (useLocalMotion) {
           runTracked(absEp, episodeId, 'S6c', 'S6c Motion Clips (HyperFrames)', '08-image-generator',
             'scripts/automation/generate-motion.js', [
               '--episode', relEp,
@@ -360,7 +372,28 @@ async function main() {
         // 엔진이 죽어도 스택만 던지고 끝내지 않는다 — "무엇을 하면 되는지"
         // 안내까지 가야 사람이 이어받을 수 있다.
         console.error(`\n⚠️  모션 엔진 실패 (${motionEngine}): ${e.message}`);
-        if (!useLocalMotion) {
+        // Wan 이 통째로 못 구웠으면(익명 ZeroGPU 쿼터 소진이 대표 사유) 무인 회차가
+        // 클립 0개로 렌더까지 못 간다. 로컬 팬·줌으로라도 채워 파이프라인을 살린다 —
+        // 대신 조용히 넘어가지 않는다: _engines.json 에 hyperframes 가 찍히고,
+        // auto-pipeline 의 motion_fallback_shipped 경보가 사람에게 그 사실을 알린다.
+        if (useWanMotion && !motionExists()) {
+          console.error('   ↳ 로컬 HyperFrames 로 폴백합니다 (경보가 발송됩니다)');
+          try {
+            runTracked(absEp, episodeId, 'S6c', 'S6c Motion Clips (HyperFrames 폴백)', '08-image-generator',
+              'scripts/automation/generate-motion.js', [
+                '--episode', relEp,
+                '--platform', platform,
+              ]);
+          } catch (e2) {
+            console.error(`   ⚠️  로컬 폴백도 실패: ${e2.message}`);
+          }
+        }
+        if (useWanMotion) {
+          console.error('   결함 시트: 40_assets/videos/*.defects.png · QA 리포트: *.qa.json');
+          console.error('   시도 횟수 늘리기: BT_WAN_ATTEMPTS=5');
+          console.error('   이번 회차만 Grok 으로: BT_MOTION_ENGINE=grok');
+          console.error('   이번 회차만 로컬로:    BT_MOTION_ENGINE=local-only');
+        } else if (!useLocalMotion) {
           console.error('   Grok 프로필 로그인: node scripts/automation/grok-motion.js --login');
           console.error('   이번 회차만 로컬로:  BT_MOTION_ENGINE=local-only');
         }

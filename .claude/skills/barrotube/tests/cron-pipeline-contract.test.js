@@ -27,16 +27,19 @@ test('cron pipeline keeps browser assets, render, and publish in fail-closed ord
   const publish = source.indexOf('run_or_echo node scripts/automation/run-episode.js');
   assert.ok(chatgpt >= 0 && chatgpt < render && render < publish);
 
-  // 2026-08-14: 모션 정본은 Grok 이다 — 피사체가 실제로 움직여야 화면이 산다.
-  // 로컬 HyperFrames 는 브라우저가 막혔을 때 파이프라인이 멈추지 않게 하는 폴백이고,
-  // produce-episode 의 S6c 가 클립이 비어 있을 때만 돌린다.
-  // 기본값이 로컬로 뒤집히면 매일 정지 화면 같은 영상이 나간다.
-  assert.match(source, /MOTION_ENGINE="\$\{BT_MOTION_ENGINE:-grok\}"/,
-    '기본 모션 엔진은 Grok 이어야 한다');
+  // 2026-09-02: 모션 정본을 Grok → Wan 2.2 로 뒤집었다. Grok 은 로그인 계정·Cloudflare·
+  // 유료 모달에 묶여 무인 실행이 반복해서 섰고(08-17·20·23·24 RED halt 4건), Wan 은
+  // 헤드리스라 그 실패 모드가 없다. 기본값이 다시 grok 으로 돌아가면 그 정지가 재발한다.
+  assert.match(source, /MOTION_ENGINE="\$\{BT_MOTION_ENGINE:-wan\}"/,
+    '기본 모션 엔진은 Wan(옵션 0)이어야 한다');
+  assert.match(source, /local motion_engine="\$\{BT_MOTION_ENGINE:-wan\}"/,
+    'media_assets_ready 의 기본값도 같아야 한다 — 어긋나면 게이트가 엇갈린다');
   assert.ok(source.includes('2. 위 이미지가 모두 저장된 뒤에만 Chrome의 Grok'),
-    '브라우저에 Grok 클립을 요구하는 절차가 있어야 한다');
-  assert.ok(source.includes('로컬 HyperFrames 가 만든다'),
-    'local-only 로 돌릴 때의 안내도 남아 있어야 한다');
+    'grok 을 명시 지정했을 때의 브라우저 절차는 남아 있어야 한다');
+  // 브라우저에 클립을 요구하는 건 grok 을 명시했을 때뿐이다. wan 이 기본인데 여기가
+  // != local-only 로 남아 있으면, 브라우저가 만들지도 않을 클립을 기다리다 멈춘다.
+  assert.ok(!/if \[ "\$MOTION_ENGINE" != "local-only" \]/.test(source),
+    'Grok 전용 분기는 = "grok" 으로 좁혀야 한다');
 
   for (const required of [
     '40_assets/images/scene_${id}.png',
@@ -199,7 +202,7 @@ test('halt 안내문의 따옴표가 셸 문자열을 끊지 않는다', () => {
     '탈출구 안내까지 한 문자열 안에 들어 있어야 한다');
 });
 
-test('Grok motion is canon — a missing clip halts instead of silently falling back', () => {
+test('Grok 경로를 명시 지정했을 때는 클립 누락이 조용한 폴백 대신 halt 로 간다', () => {
   // HyperFrames 는 스틸에 팬·줌을 걸 뿐이고 피사체가 움직이지 않는다. 조용히 대체되면
   // 덜 사는 화면이 매일 나간다 — EP-0096·0097·0098 이 전부 그렇게 게시됐고 운영자가
   // 육안으로 발견했다. 폴백으로 내보내려면 BT_MOTION_ENGINE=local-only 로 명시해야 한다.
@@ -222,7 +225,7 @@ test('Grok motion is canon — a missing clip halts instead of silently falling 
   // Phase 8 의 산출물이라, Phase 7 이 영원히 통과할 수 없다 —
   // EP-0114·EP-0116·EP-0117 이 이미지·클립 5/5 인 채로 이것 때문에 halt 했다.
   const motionGates = source.split('\n')
-    .filter((l) => l.includes('media_assets_ready "$MEDIA_BASE"') && l.includes('local-only'));
+    .filter((l) => l.includes('media_assets_ready "$MEDIA_BASE"') && l.includes('MOTION_ENGINE'));
   assert.equal(motionGates.length, 2, 'Grok 게이트는 시도 전·후 두 곳이다');
   for (const g of motionGates) {
     assert.match(g, /media_assets_ready "\$MEDIA_BASE" motion/,
@@ -283,7 +286,7 @@ test('shipping HyperFrames motion when Grok is canon reaches a human', () => {
   assert.match(source, /motion_fallback_shipped/);
   assert.match(source, /notify_telegram "🎞/, '폴백 사실이 사람에게 도착해야 한다');
 
-  // 정본이 grok 일 때만 경고한다 — local-only 로 의도해서 돌린 회차까지 울리면 소음이 된다.
+  // 정본 엔진(grok·wan)일 때만 경고한다 — local-only 로 의도해서 돌린 회차까지 울리면 소음이 된다.
   const guard = source.indexOf('"$MOTION_ENGINE" = "grok"');
   const notify = source.indexOf('motion_fallback_shipped');
   assert.ok(guard > 0 && guard < notify);

@@ -125,9 +125,10 @@ run_with_timeout() {
 #   stills — 이미지만. 브라우저가 정말 필요한 건 시트를 붙이는 스틸뿐인 단계에서 쓴다.
 media_assets_ready() {
   local base="$1" mode="${2:-full}" id path hash hashes="" missing=""
-  # 모션은 Grok 이 정본이라 여기서 클립까지 요구한다. BT_MOTION_ENGINE=local-only 일 때만
-  # 스틸만 보고, 클립은 produce-episode 의 S6c(로컬 HyperFrames)가 만든다.
-  local motion_engine="${BT_MOTION_ENGINE:-grok}"
+  # 이 게이트는 **브라우저가 만들어야 할 자산**만 본다. 모션 정본이 Wan(헤드리스)으로
+  # 바뀐 뒤로 클립은 Phase 8 의 S6c 가 만들므로, 여기서 클립을 요구하는 건 브라우저가
+  # 실제로 클립을 굽는 grok 일 때뿐이다. (2026-09-02 기본값 grok → wan)
+  local motion_engine="${BT_MOTION_ENGINE:-wan}"
   for id in 001 002 003 004 005; do
     path="${base}/40_assets/images/scene_${id}.png"
     [ -s "$path" ] || missing="${missing}${missing:+, }images/scene_${id}.png"
@@ -136,7 +137,7 @@ media_assets_ready() {
     # 스틸뿐이고, 클립은 Phase 8 의 ensureMotion()(로컬 HyperFrames)이 스틸을 누가
     # 구웠든 채운다. 여기서 Grok 클립까지 요구하면 API 폴백으로 스틸을 살려도 그 다음
     # 게이트에서 다시 선다.
-    if [ "$mode" = "stills" ] || [ "$motion_engine" = "local-only" ]; then
+    if [ "$mode" = "stills" ] || [ "$motion_engine" != "grok" ]; then
       continue
     fi
 
@@ -529,21 +530,27 @@ fi
 # ─────────────────────────────────────────────────
 # Stage B — Phase 7: media-render (브라우저, 하이브리드)
 # ─────────────────────────────────────────────────
-# 모션은 Grok 이 정본이다 — 피사체가 실제로 움직이므로 화면이 산다. 로컬 HyperFrames 는
-# 브라우저가 막혔을 때(로그인·쿼터·유료 모달) 파이프라인이 멈추지 않게 하는 폴백이고,
-# produce-episode 의 S6c 가 클립이 비어 있을 때만 돌린다.
-# BT_MOTION_ENGINE=local-only 로 두면 브라우저에 Grok 을 아예 요구하지 않는다.
-MOTION_ENGINE="${BT_MOTION_ENGINE:-grok}"
-if [ "$MOTION_ENGINE" = "local-only" ]; then
-  log_stage "🎨 Phase 7 — ChatGPT 이미지 (브라우저) · 모션 클립은 로컬 HyperFrames"
-else
-  log_stage "🎨 Phase 7 — ChatGPT 이미지 → Grok 모션 클립 (브라우저)"
-fi
+# 모션 엔진 우선순위의 정본은 config/motion-engines.json 이다.
+#   wan(기본, 옵션0) 헤드리스 Wan 2.2 + 프레임 QA — 브라우저는 스틸만 담당
+#   grok(옵션1)      브라우저가 클립까지 굽는다 (로그인·Cloudflare·쿼터에 묶임)
+#   local-only       응급 폴백(HyperFrames 팬·줌)
+# 2026-09-02 기본값을 grok → wan 으로 뒤집었다. Grok 경로는 무인 실행에서 반복해서 섰고
+# (2026-08-17·20·23·24 RED halt 4건), Wan 은 그 실패 모드가 없다.
+MOTION_ENGINE="${BT_MOTION_ENGINE:-wan}"
+case "$MOTION_ENGINE" in
+  grok) log_stage "🎨 Phase 7 — ChatGPT 이미지 → Grok 모션 클립 (브라우저)" ;;
+  wan)  log_stage "🎨 Phase 7 — ChatGPT 이미지 (브라우저) · 모션 클립은 Wan 2.2 (S6c)" ;;
+  *)    log_stage "🎨 Phase 7 — ChatGPT 이미지 (브라우저) · 모션 클립은 로컬 HyperFrames" ;;
+esac
 
 MEDIA_BASE="${EP_DIR}/platforms/${PLATFORM}"
 
 if [ "$DRY_RUN" = "1" ]; then
-  echo "[DRY_RUN] codex exec → ChatGPT 이미지 ${SLOT_SCENES}장·인트로·썸네일 → Grok 영상 ${SLOT_SCENES}개"
+  if [ "$MOTION_ENGINE" = "grok" ]; then
+    echo "[DRY_RUN] codex exec → ChatGPT 이미지 ${SLOT_SCENES}장·인트로·썸네일 → Grok 영상 ${SLOT_SCENES}개"
+  else
+    echo "[DRY_RUN] codex exec → ChatGPT 이미지 ${SLOT_SCENES}장·인트로·썸네일 (모션은 Phase 8 S6c: ${MOTION_ENGINE})"
+  fi
 elif media_assets_ready "$MEDIA_BASE"; then
   echo "⏭  media-render 자산 12/12 검증 완료 — 건너뜀"
 elif [ "$BT_SKIP_MEDIA_RENDER" = "1" ]; then
@@ -580,7 +587,7 @@ else
   # HyperFrames 팬·줌은 브라우저가 통째로 막혔을 때의 응급 폴백일 뿐이다.
   # 첨부가 막히면 조용히 폴백하지 말고 Phase 7 게이트에서 멈춘다(아래) — 무엇을 켜야 하는지
   # 알려 주는 편이, 덜 사는 화면을 매일 내보내는 것보다 낫다.
-  if [ "$MOTION_ENGINE" != "local-only" ]; then
+  if [ "$MOTION_ENGINE" = "grok" ]; then
     MOTION_PATH_LINE="  모션 클립  ${MEDIA_BASE_REAL}/40_assets/videos/scene_NNN.mp4"
     MOTION_STEP_LINE="2. 위 이미지가 모두 저장된 뒤에만 Chrome의 Grok Imagine에서 각 scene_NNN.png를 첨부해 영상 ${SLOT_SCENES}개를 한 번에 하나씩 생성·저장하고 ffprobe한다."
     MOTION_RULES="Grok은 image-to-video 9:16/720p/10s만 사용한다. 매 컷 전 Video audio 버튼이 aria-pressed=true인지 확인한다.
@@ -590,7 +597,7 @@ AAC가 없으면 완료로 세지 말고 Video audio를 켠 뒤 같은 컷을 �
 영상 ${SLOT_SCENES}개 저장 후 SHA-256을 비교해 중복 바이트가 있으면 해당 뒤쪽 컷을 재생성한다."
   else
     MOTION_PATH_LINE=""
-    MOTION_STEP_LINE="2. 모션 클립은 만들지 마라. Grok Imagine 을 열 필요가 없다 — 저장된 스틸로 로컬 HyperFrames 가 만든다."
+    MOTION_STEP_LINE="2. 모션 클립은 만들지 마라. Grok Imagine 을 열 필요가 없다 — 저장된 스틸로 다음 단계(S6c)가 만든다."
     MOTION_RULES=""
   fi
 
@@ -732,6 +739,12 @@ ChatGPT 탭이 여러 개면 하나의 로그아웃 탭만 보고 중단하지 �
         -C "$PROJECT_ROOT" --add-dir "$EP_REAL" --add-dir "$DATA_REAL/workspace/docs" \
         --add-dir "$DATA_REAL/workspace/channels/econ-daily" --add-dir "$HOME/Downloads" \
         exec --ephemeral "Chrome 의 로그인된 ChatGPT 로 씬 ${NEXT_SCENE} 이미지 한 장만 만들어 저장해라. 다른 씬·인트로·썸네일·영상은 건드리지 마라.
+
+★ 이건 무인 cron 이다 — 물어볼 사람이 없다. 운영자는 이 작업의 브라우저 조작과 생성 실행을
+  이미 허용했다. 로그인·캡차·결제·한도 차단이 아니면 확인을 구하지 말고 전송까지 끝내라.
+  「보낼까요?」 로 턴을 끝내면 아무도 답하지 않아 그대로 무진전으로 집계된다
+  (2026-09-02 EP-0131: 프롬프트와 【이미지 만들기】 칩까지 다 붙여 놓고 전송 여부를 물어
+   두 번 연속 무진전 → 브라우저 패스가 통째로 버려지고 codex 폴백으로 넘어갔다).
 
 프롬프트: ${MEDIA_BASE_REAL}/30_script.md 에서 scene_id \"${NEXT_SCENE}\" 의 image_prompt 를 그대로 쓴다.
 저장: ${MEDIA_BASE_REAL}/40_assets/images/scene_${NEXT_SCENE}.png (9:16 세로)
@@ -921,7 +934,7 @@ SuperGrok 구독 모달이 뜨면 결제·무료 체험 절대 하지 말고 닫
   # 확장이 아니라 프로그램이라 codex 표면의 첨부 차단(숨은 input·파일 선택·Cmd+V)을 받지 않는다.
   # 전용 프로필(~/.barrotube/grok-profile)에 한 번 로그인해 두면 무인으로 돈다.
   # 한 컷이라도 실패하면 exit 1 이고, 아래 게이트가 남은 컷을 보고 판단한다.
-  if [ "$MOTION_ENGINE" != "local-only" ] && ! media_assets_ready "$MEDIA_BASE" motion; then
+  if [ "$MOTION_ENGINE" = "grok" ] && ! media_assets_ready "$MEDIA_BASE" motion; then
     # 디렉터리 존재가 아니라 **실제 로그인 여부**로 게이트한다.
     # 예전에는 폴더만 보고 시도해서, 로그인 안 된 프로필로 매일 RED halt 를 냈다
     # (2026-08-17·20·23·24 실측 4건 — 원인은 --use-mock-keychain 으로 sso 쿠키가
@@ -953,7 +966,7 @@ SuperGrok 구독 모달이 뜨면 결제·무료 체험 절대 하지 말고 닫
     fi
   fi
 
-  if [ "$MOTION_ENGINE" != "local-only" ] && ! media_assets_ready "$MEDIA_BASE" motion; then
+  if [ "$MOTION_ENGINE" = "grok" ] && ! media_assets_ready "$MEDIA_BASE" motion; then
     audit "grok_motion_missing" "RED" "ep=$EP_ID missing=${MEDIA_ASSETS_MISSING}"
     halt_for_human "Phase 7 Grok 모션" \
       "Grok 모션 클립이 없습니다: ${MEDIA_ASSETS_MISSING}
@@ -1026,7 +1039,7 @@ audit "auto_pipeline_produced" "INFO" "slot=$SLOT ep=$EP_ID"
 # 움직이고, HyperFrames 는 스틸에 팬·줌을 거는 것뿐이다. QA 는 "hyperframes 5" 라고 적기만
 # 하고 아무도 안 본다. 정본이 아닌 엔진으로 나갔으면 그 사실이 사람에게 도착해야 한다.
 # (2026-08-17 EP-0096: BT_MOTION_ENGINE=local-only 로 돌린 회차가 조용히 슬라이드쇼로 나갔다.)
-if [ "$DRY_RUN" = "0" ] && [ "$MOTION_ENGINE" = "grok" ]; then
+if [ "$DRY_RUN" = "0" ] && { [ "$MOTION_ENGINE" = "grok" ] || [ "$MOTION_ENGINE" = "wan" ]; }; then
   MOTION_MANIFEST="${MEDIA_BASE}/40_assets/videos/_engines.json"
   if [ -s "$MOTION_MANIFEST" ]; then
     FALLBACK_CLIPS=$(grep -c '"engine": *"hyperframes"' "$MOTION_MANIFEST" 2>/dev/null || echo 0)

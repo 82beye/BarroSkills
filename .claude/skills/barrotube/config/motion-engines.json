@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "_comment": "모션 엔진 우선순위. BT_MOTION_ENGINE 환경변수가 이 기본값을 덮어쓴다. 순서·의미의 정본은 이 파일이고, lib/auto-pipeline.sh 와 scripts/automation/produce-episode.js 가 같은 값을 쓴다.",
+  "default": "wan",
+  "options": [
+    {
+      "order": 0,
+      "id": "wan",
+      "label": "Wan 2.2 (오픈소스, HuggingFace Space)",
+      "script": "scripts/automation/generate-motion-wan.js",
+      "browser_required": false,
+      "cost": "무과금 — 익명 ZeroGPU 쿼터",
+      "output": "480x832 · 16fps · 최대 5s (720p·24fps 는 --post-720p 후처리)",
+      "qa": "qa-motion-frames.js 프레임 QA 통과까지 시드를 바꿔 재생성",
+      "note": "기본값. 헤드리스라 로그인·Cloudflare·유료 모달에 걸리지 않는다. 얼굴 붕괴는 프레임 QA 가 걸러낸다.",
+      "quota": "익명 ZeroGPU 는 시간당 수 회에서 마른다 (2026-09-02 실측: 4회 연속 후 소진). HF_TOKEN(무료 계정)을 넣으면 상향된다. 소진되면 produce-episode 가 로컬 HyperFrames 로 폴백하고 motion_fallback_shipped 경보를 올린다."
+    },
+    {
+      "order": 1,
+      "id": "grok",
+      "label": "Grok Imagine (브라우저)",
+      "script": "scripts/automation/grok-motion-applescript.js",
+      "fallback_script": "scripts/automation/grok-motion.js",
+      "browser_required": true,
+      "cost": "계정 쿼터",
+      "output": "720x1264 · 10.04s 고정 (AAC 오디오 필요)",
+      "qa": "media_assets_ready 의 ffprobe 게이트",
+      "note": "옵션 1. 실제 Chrome 을 AppleScript 로 몬다. 로그인 계정·Cloudflare·일일 쿼터에 묶이므로 명시 지정할 때만 쓴다."
+    },
+    {
+      "order": 2,
+      "id": "local-only",
+      "aliases": [
+        "hyperframes"
+      ],
+      "label": "HyperFrames 로컬 팬·줌",
+      "script": "scripts/automation/generate-motion.js",
+      "browser_required": false,
+      "cost": "$0",
+      "output": "1080x1920 네이티브 · TTS 길이에 정확히 맞춤",
+      "qa": "motion-verify.js",
+      "note": "응급 폴백. 피사체가 움직이지 않는 슬라이드쇼라 이걸로 나가면 QA 가 경고를 올린다."
+    },
+    {
+      "order": 3,
+      "id": "none",
+      "label": "모션 생략",
+      "browser_required": false,
+      "note": "클립을 만들지 않는다. render-direct 가 exit 3 으로 멈추므로 디버그 전용."
+    }
+  ],
+  "operator_notes": [
+    "이번 회차만 Grok 으로:      BT_MOTION_ENGINE=grok bash lib/auto-pipeline.sh --slot us-close",
+    "이번 회차만 로컬 폴백으로:  BT_MOTION_ENGINE=local-only bash lib/auto-pipeline.sh --slot us-close",
+    "Wan 시도 횟수 조정:         BT_WAN_ATTEMPTS=4 (기본 3)",
+    "Wan Space 교체:             BT_WAN_SPACE=<subdomain>",
+    "쿼터 상향(권장):            .env 에 HF_TOKEN=hf_xxx — 무료 HuggingFace 계정 토큰이면 충분하다"
+  ]
+}
