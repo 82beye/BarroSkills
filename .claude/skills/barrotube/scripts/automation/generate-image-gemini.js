@@ -11,6 +11,7 @@
  * Usage:
  *   node generate-image-gemini.js --prompt "..." --out scene.png [--aspect 9:16|16:9]
  *   node generate-image-gemini.js --script 30_script.md --out-dir assets/images/ [--force]
+ *   node generate-image-gemini.js --script 30_script.md --out-dir assets/images/ --scene 001,002
  *
  * 환경변수:
  *   GOOGLE_AI_API_KEY          (필수)
@@ -340,11 +341,25 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         console.log(`📋 Framing: ${stylePath.replace(process.cwd() + '/', '')}`);
         if (hasDna) console.log(`🧬 Character DNA: workspace/channels/${meta.channel_id}/character-dna.md`);
       }
-      console.log(`🎨 Generating ${meta.scenes.length} images via Gemini...`);
+      // --scene 003 또는 --scene 001,002 로 일부만 다시 굽는다. 엔진이 섞여 한 편 안에
+      // 화풍이 갈렸을 때(EP-0133) 문제 컷만 재생성하려면 이게 필요하다 — --force 만
+      // 있으면 멀쩡한 컷까지 전부 다시 구워 쿼터와 시간을 태운다.
+      const onlyScenes = opts.scene
+        ? new Set(String(opts.scene).split(',').map((x) => x.trim().padStart(3, '0')))
+        : null;
+      const targets = onlyScenes
+        ? meta.scenes.filter((sc) => onlyScenes.has(String(sc.scene_id).padStart(3, '0')))
+        : meta.scenes;
+      if (onlyScenes && !targets.length) {
+        console.error(`❌ --scene ${opts.scene} 에 해당하는 씬이 대본에 없습니다`);
+        process.exit(1);
+      }
+      console.log(`🎨 Generating ${targets.length}${onlyScenes ? `/${meta.scenes.length}` : ''} images...`);
 
-      for (const scene of meta.scenes) {
+      for (const scene of targets) {
         const outPath = join(outDir, `scene_${scene.scene_id}.png`);
-        if (existsSync(outPath) && !opts.force) {
+        // --scene 으로 콕 집었으면 이미 있어도 다시 굽는다 — 그게 이 옵션을 쓰는 이유다
+        if (existsSync(outPath) && !opts.force && !onlyScenes) {
           console.log(`  ⏭  Scene ${scene.scene_id} exists (use --force to regen)`);
           continue;
         }
@@ -512,7 +527,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       console.log(`\n🎨 All images saved in ${outDir}`);
     } else {
       console.error('Usage: generate-image-gemini.js --prompt "..." --out path.png [--aspect 9:16|16:9]');
-      console.error('   or: generate-image-gemini.js --script 30_script.md --out-dir assets/images/ [--force]');
+      console.error('   or: generate-image-gemini.js --script 30_script.md --out-dir assets/images/ [--force] [--scene 001,002]');
       process.exit(1);
     }
   } catch (e) {

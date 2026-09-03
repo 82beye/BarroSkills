@@ -27,12 +27,12 @@ test('cron pipeline keeps browser assets, render, and publish in fail-closed ord
   const publish = source.indexOf('run_or_echo node scripts/automation/run-episode.js');
   assert.ok(chatgpt >= 0 && chatgpt < render && render < publish);
 
-  // 2026-09-02: 모션 정본을 Grok → Wan 2.2 로 뒤집었다. Grok 은 로그인 계정·Cloudflare·
-  // 유료 모달에 묶여 무인 실행이 반복해서 섰고(08-17·20·23·24 RED halt 4건), Wan 은
-  // 헤드리스라 그 실패 모드가 없다. 기본값이 다시 grok 으로 돌아가면 그 정지가 재발한다.
-  assert.match(source, /MOTION_ENGINE="\$\{BT_MOTION_ENGINE:-wan\}"/,
-    '기본 모션 엔진은 Wan(옵션 0)이어야 한다');
-  assert.match(source, /local motion_engine="\$\{BT_MOTION_ENGINE:-wan\}"/,
+  // 2026-09-03: 운영자 판단으로 Grok 복귀. Wan 은 ZeroGPU 일일 쿼터가 검증과 프로덕션을
+  // 함께 감당하지 못해 EP-0133 이 5씬 중 3씬을 HyperFrames 로 떨어뜨렸고 게시 불가 판정을
+  // 받았다. 자동 경로는 grok → local-only 둘뿐이고 wan·ltx 는 명시 지정 전용이다.
+  assert.match(source, /MOTION_ENGINE="\$\{BT_MOTION_ENGINE:-grok\}"/,
+    '기본 모션 엔진은 Grok(옵션 0)이어야 한다');
+  assert.match(source, /local motion_engine="\$\{BT_MOTION_ENGINE:-grok\}"/,
     'media_assets_ready 의 기본값도 같아야 한다 — 어긋나면 게이트가 엇갈린다');
   assert.ok(source.includes('2. 위 이미지가 모두 저장된 뒤에만 Chrome의 Grok'),
     'grok 을 명시 지정했을 때의 브라우저 절차는 남아 있어야 한다');
@@ -183,63 +183,31 @@ test('produce-episode 가 config 단계별 엔진을 전역 env 로 덮지 않�
     '전역 override 는 운영자가 **명시**했을 때만 건다');
 });
 
-test('halt 안내문의 따옴표가 셸 문자열을 끊지 않는다', () => {
-  // 2026-08-27: 안내문에 이스케이프 안 된 " 를 넣어 halt_for_human 의 인자가 중간에서
-  // 끊겼다. `bash -n` 은 따옴표가 우연히 짝이 맞아 통과했고, 실행에서야 line 975
-  // syntax error 로 터졌다 — cron 포함 모든 실행이 막히는 상태였다.
-  // 문법 검사만으로는 못 잡으니 문자열 안의 raw " 를 직접 본다.
+test('Grok 폴백 안내문의 따옴표가 셸 문자열을 끊지 않는다', () => {
+  // 2026-08-26: 본문의 " 를 이스케이프하지 않아 안내문이 326자에서 끊기고 파이프라인이
+  // line 975 syntax error 로 죽었다. bash -n 은 따옴표가 우연히 짝이 맞아 통과했다.
+  // 지금은 halt 대신 notify_telegram 이지만 같은 함정이 그대로 있다.
   const src = readFileSync(AUTO, 'utf8');
-  const start = src.indexOf('halt_for_human "Phase 7 Grok 모션"');
-  assert.ok(start > 0, 'Grok halt 블록이 있어야 한다');
-  // 인자 문자열은 그 다음 " 부터 이스케이프되지 않은 " 까지다.
-  const body = src.slice(start + 'halt_for_human "Phase 7 Grok 모션"'.length);
-  const open = body.indexOf('"');
-  const arg = body.slice(open + 1);
+  const start = src.indexOf('notify_telegram "⚠️ <b>${EP_ID}</b> Grok 모션 실패');
+  assert.ok(start > 0, 'Grok 폴백 경보가 있어야 한다');
+  const body = src.slice(start + 'notify_telegram '.length);
+  const arg = body.slice(1);
   const endIdx = arg.search(/(?<!\\)"/);
-  assert.ok(endIdx > 500,
-    `안내문이 ${endIdx}자에서 끊긴다 — 본문의 " 를 \\" 로 이스케이프해야 한다`);
-  assert.match(arg.slice(0, endIdx), /BT_MOTION_ENGINE=local-only/,
-    '탈출구 안내까지 한 문자열 안에 들어 있어야 한다');
+  assert.ok(endIdx > 60, `경보문이 ${endIdx}자에서 끊긴다 — 본문의 " 를 \\" 로 이스케이프해야 한다`);
+  assert.match(arg.slice(0, endIdx), /grok-motion-applescript\.js --check/,
+    '계정 확인 안내까지 한 문자열 안에 들어 있어야 한다');
 });
 
-test('Grok 경로를 명시 지정했을 때는 클립 누락이 조용한 폴백 대신 halt 로 간다', () => {
-  // HyperFrames 는 스틸에 팬·줌을 걸 뿐이고 피사체가 움직이지 않는다. 조용히 대체되면
-  // 덜 사는 화면이 매일 나간다 — EP-0096·0097·0098 이 전부 그렇게 게시됐고 운영자가
-  // 육안으로 발견했다. 폴백으로 내보내려면 BT_MOTION_ENGINE=local-only 로 명시해야 한다.
+test('Grok 클립 누락은 발행을 멈추지 않고 폴백 + 경보로 간다', () => {
+  // 2026-09-03 운영자 지시: 자동 경로는 "Grok 아니면 HyperFrames" 둘뿐이고 어느 쪽이든
+  // 발행까지 간다. 예전에는 halt_for_human 으로 그날을 통째로 비웠다.
+  // 조용히 나가지는 않는다 — audit WARN + 텔레그램 경보가 사실을 사람에게 보낸다.
   const source = readFileSync(AUTO, 'utf8');
-  assert.match(source, /grok_motion_missing/);
-  assert.match(source, /halt_for_human "Phase 7 Grok 모션"/);
-  assert.match(source, /BT_MOTION_ENGINE=local-only/, '명시적 탈출구가 있어야 한다');
-
-  // 멈출 때는 **무엇을 보라고** 알려 줘야 한다. 예전 문구는 Playwright/Cloudflare 를
-  // 원인으로 지목했는데, 2026-08-26 EP-0116 의 실제 원인은 Finder 복사 타임아웃이었고
-  // 클립 5개는 이미 ~/Downloads 에 받아져 있었다. 진단을 30분 태운 문구다.
-  assert.match(source, /logs\/cron\/\$\{CRON_LOG_NAME\}\.err/,
-    '컷별 실패 사유는 stdout 이 아니라 stderr 에 있다 — 어디를 볼지 알려 줘야 한다');
-  assert.match(source, /~\/Downloads/,
-    '이미 받아진 클립이 있는지 먼저 보게 해야 한다 (재생성은 쿼터·20분이다)');
-  assert.ok(!/XAI_API_KEY/.test(source),
-    '읽는 코드가 없는 키를 설정하라고 안내하면 안 된다');
-
-  // 게이트는 motion 모드여야 한다. 기본값(full)은 인트로·썸네일까지 요구하는데 그 둘은
-  // Phase 8 의 산출물이라, Phase 7 이 영원히 통과할 수 없다 —
-  // EP-0114·EP-0116·EP-0117 이 이미지·클립 5/5 인 채로 이것 때문에 halt 했다.
-  const motionGates = source.split('\n')
-    .filter((l) => l.includes('media_assets_ready "$MEDIA_BASE"') && l.includes('MOTION_ENGINE'));
-  assert.equal(motionGates.length, 2, 'Grok 게이트는 시도 전·후 두 곳이다');
-  for (const g of motionGates) {
-    assert.match(g, /media_assets_ready "\$MEDIA_BASE" motion/,
-      'Grok 게이트가 full 로 떨어지면 Phase 8 산출물을 요구해 영원히 멈춘다');
-  }
-
-  // 브라우저에 모션을 요구하는 지시가 살아 있어야 한다 — 이걸 끄면 애초에 Grok 을 안 연다.
-  // 개수는 슬롯의 scene_count 에서 오므로 리터럴로 박지 않는다 (2026-08-31: 여기 '5개' 가
-  // 박혀 있어서 7씬 realestate 슬롯이 두 컷 모자란 지시를 받았다).
-  assert.match(source, /Grok Imagine에서 각 scene_NNN\.png를 첨부해 영상 \$\{SLOT_SCENES\}개를/);
-  assert.match(source, /SLOT_SCENES=\$\(json_get/,
-    'SLOT_SCENES 는 routines.json 의 slot.scene_count 에서 와야 한다');
-  assert.ok(!/BT_GROK_MOTION/.test(source),
-    '모션을 opt-in 으로 두면 정본이 폴백으로 뒤집힌다');
+  assert.ok(!/halt_for_human "Phase 7 Grok 모션"/.test(source), 'Grok 누락으로 halt 하지 않는다');
+  assert.match(source, /grok_motion_missing" "WARN"/);
+  assert.match(source, /action=fallback_to_hyperframes/);
+  assert.match(source, /logs\/cron\/\$\{CRON_LOG_NAME\}\.err|grok-motion-applescript\.js --check/,
+    '어디를 볼지 알려 줘야 한다');
 });
 
 test('the Grok image pass is opt-in because this surface cannot attach', () => {

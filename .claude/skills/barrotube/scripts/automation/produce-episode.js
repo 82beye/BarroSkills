@@ -332,15 +332,14 @@ async function main() {
     // (2026-08-15 EP-0094 실측).
     // 엔진 의미·우선순위의 정본은 config/motion-engines.json 이고, lib/auto-pipeline.sh 가
     // 같은 기본값을 쓴다 (BT_MOTION_ENGINE:-wan).
-    //   wan(기본, 옵션0) : Wan 2.2 HF Space — 헤드리스. 프레임 QA 통과까지 시드 바꿔 재생성
-    //   grok(옵션1)      : Grok image→video — 브라우저(실제 Chrome AppleScript)
+    //   grok(기본, 옵션0) : Grok image→video — 브라우저(실제 Chrome AppleScript)
+    //   wan(명시 지정)    : Wan 2.2 HF Space — 헤드리스. 프레임 QA 통과까지 시드 바꿔 재생성
     //   local-only       : 로컬 HyperFrames 팬·줌 (구 값 'hyperframes' 도 같게 취급)
     //   none             : 모션 단계 생략
-    // 2026-09-02 기본값을 grok → wan 으로 뒤집었다. Grok 은 로그인 계정·Cloudflare·유료
-    // 모달에 묶여 무인 실행이 반복해서 섰고(2026-08-17·20·23·24 RED halt 4건), Wan 은
-    // 헤드리스라 그 실패 모드가 통째로 없다. 대신 Wan 은 얼굴을 뭉개므로 프레임 QA 가
-    // 필수인데, 그 게이트가 generate-motion-wan.js 안에 들어 있다.
-    const motionEngine = (process.env.BT_MOTION_ENGINE || 'wan').toLowerCase();
+    // 2026-09-03 운영자 판단으로 grok 복귀 — 자동 경로는 grok → local-only 둘뿐이다.
+    // wan 은 ZeroGPU 일일 쿼터가 검증과 프로덕션을 함께 감당하지 못해 EP-0133 이 5씬 중
+    // 3씬을 HyperFrames 로 떨어뜨렸고, 그 결과물이 게시 불가 판정을 받았다. 명시 지정 전용.
+    const motionEngine = (process.env.BT_MOTION_ENGINE || 'grok').toLowerCase();
     const useLocalMotion = motionEngine === 'local-only' || motionEngine === 'hyperframes';
     const useWanMotion = motionEngine === 'wan';
     const ensureMotion = () => {
@@ -376,7 +375,11 @@ async function main() {
         // 클립 0개로 렌더까지 못 간다. 로컬 팬·줌으로라도 채워 파이프라인을 살린다 —
         // 대신 조용히 넘어가지 않는다: _engines.json 에 hyperframes 가 찍히고,
         // auto-pipeline 의 motion_fallback_shipped 경보가 사람에게 그 사실을 알린다.
-        if (useWanMotion && !motionExists()) {
+        // 선택한 엔진이 아무것도 못 구웠으면 로컬 팬·줌으로라도 채워 발행을 살린다.
+        // 예전에는 wan 일 때만 발동해서, 기본값이 grok 으로 바뀐 뒤 Grok 이 막히면
+        // 클립 0개로 렌더까지 못 갔다. 조용히 넘어가지는 않는다 — _engines.json 에
+        // hyperframes 가 찍히고 auto-pipeline 의 motion_fallback_shipped 경보가 나간다.
+        if (!useLocalMotion && !motionExists()) {
           console.error('   ↳ 로컬 HyperFrames 로 폴백합니다 (경보가 발송됩니다)');
           try {
             runTracked(absEp, episodeId, 'S6c', 'S6c Motion Clips (HyperFrames 폴백)', '08-image-generator',

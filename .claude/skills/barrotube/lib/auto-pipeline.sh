@@ -128,7 +128,7 @@ media_assets_ready() {
   # 이 게이트는 **브라우저가 만들어야 할 자산**만 본다. 모션 정본이 Wan(헤드리스)으로
   # 바뀐 뒤로 클립은 Phase 8 의 S6c 가 만들므로, 여기서 클립을 요구하는 건 브라우저가
   # 실제로 클립을 굽는 grok 일 때뿐이다. (2026-09-02 기본값 grok → wan)
-  local motion_engine="${BT_MOTION_ENGINE:-wan}"
+  local motion_engine="${BT_MOTION_ENGINE:-grok}"
   for id in 001 002 003 004 005; do
     path="${base}/40_assets/images/scene_${id}.png"
     [ -s "$path" ] || missing="${missing}${missing:+, }images/scene_${id}.png"
@@ -531,12 +531,14 @@ fi
 # Stage B — Phase 7: media-render (브라우저, 하이브리드)
 # ─────────────────────────────────────────────────
 # 모션 엔진 우선순위의 정본은 config/motion-engines.json 이다.
-#   wan(기본, 옵션0) 헤드리스 Wan 2.2 + 프레임 QA — 브라우저는 스틸만 담당
-#   grok(옵션1)      브라우저가 클립까지 굽는다 (로그인·Cloudflare·쿼터에 묶임)
-#   local-only       응급 폴백(HyperFrames 팬·줌)
-# 2026-09-02 기본값을 grok → wan 으로 뒤집었다. Grok 경로는 무인 실행에서 반복해서 섰고
-# (2026-08-17·20·23·24 RED halt 4건), Wan 은 그 실패 모드가 없다.
-MOTION_ENGINE="${BT_MOTION_ENGINE:-wan}"
+#   grok(기본, 옵션0) 브라우저가 클립까지 굽는다 — 피사체가 실제로 움직인다
+#   local-only       유일한 자동 폴백(HyperFrames 팬·줌)
+#   wan·ltx          명시 지정 전용. 자동 경로에 끼지 않는다
+# 2026-09-03 운영자 판단으로 grok 복귀. 2026-09-02 에 wan 으로 뒤집었었는데, ZeroGPU 일일
+# 쿼터가 검증과 프로덕션을 함께 감당하지 못해 EP-0133 이 5씬 중 3씬을 HyperFrames 로
+# 떨어뜨렸고 그 결과물이 게시 불가 판정을 받았다. 배경 움직임 실측 Grok 2.067 · Wan 1.689 ·
+# HyperFrames 0.439 — 피사체가 움직이는 화면이 이 채널의 기준이다.
+MOTION_ENGINE="${BT_MOTION_ENGINE:-grok}"
 
 # 브라우저가 **무엇을 만들 담당인지**는 config/image-engines.json 이 정한다.
 # 예전에는 이 프롬프트가 설정과 무관하게 씬·인트로·썸네일을 항상 요청했다. 2026-08-20 에
@@ -983,41 +985,18 @@ SuperGrok 구독 모달이 뜨면 결제·무료 체험 절대 하지 말고 닫
   fi
 
   if [ "$MOTION_ENGINE" = "grok" ] && ! media_assets_ready "$MEDIA_BASE" motion; then
-    audit "grok_motion_missing" "RED" "ep=$EP_ID missing=${MEDIA_ASSETS_MISSING}"
-    halt_for_human "Phase 7 Grok 모션" \
-      "Grok 모션 클립이 없습니다: ${MEDIA_ASSETS_MISSING}
-
-🔎 먼저 **왜 실패했는지** 보세요. 컷별 사유는 stdout 이 아니라 stderr 에 있습니다.
-   launchd 실행:  grep '❌ 씬 0' ${BARROTUBE_HOME}/logs/cron/${CRON_LOG_NAME}.err | tail -10
-   손으로 돌린 경우: 그 실행의 출력에 그대로 있습니다 (2>&1 로 합쳤다면 stdout 쪽).
-
-🔑 Grok 계정부터 확인하세요. 접근은 되는데 **다른 계정으로 로그인**돼 있으면 생성은 되고
-   다운로드 버튼이 안 잡혀 전 컷이 \"다운로드 버튼을 찾지 못했습니다\" 로 죽습니다
-   (2026-08-27 EP-2026-0118: 11분을 이렇게 헛돌았다).
-     node ${BARROTUBE_HOME}/scripts/automation/grok-motion-applescript.js --check
-
-💾 자주 나오는 함정 — **영상은 이미 받아져 있는데 복사만 실패한 경우**가 있습니다.
-   (2026-08-26 EP-2026-0116: Grok 생성·다운로드 5/5 성공, Finder 복사가 AppleEvent
-    타임아웃 -1712 로 5/5 실패 → \"클립이 없습니다\" 로 표시됨.)
-   ~/Downloads 에 해당 시각의 grok-video-*.mp4 가 있으면 재생성하지 말고 복사만 하세요.
-   그 뒤 아래 재개 명령이면 Phase 7 이 그대로 통과합니다.
-
-🖥  경로는 둘입니다. **어느 쪽이 실제로 쓰였는지는 감사 로그의 event 로 확인**하세요
-   (grok_motion_applescript / grok_motion_playwright / grok_motion_not_logged_in):
-     1순위  실제 Chrome + AppleScript — 확인: grok-motion-applescript.js --check
-     2순위  Playwright 전용 프로필     — 확인: grok-motion.js --status
-                                        로그인: grok-motion.js --login
-   ⚠️ Playwright 는 grok.com 에서 Cloudflare 에 막힌 이력이 있습니다(2026-08-24).
-      1순위가 ✅ 인데 실패했다면 --login 은 답이 아닙니다 — 위 stderr 를 보세요.
-
-🧩 45_intro.png·47_thumbnail.png 가 목록에 있어도 그건 브라우저 작업이 아닙니다.
-   씬 스틸에서 로컬로 만들 수 있습니다 (무비용):
-     node ${BARROTUBE_HOME}/scripts/automation/generate-cards.js --episode <EP> --platform ${PLATFORM} --kind both
-     node ${BARROTUBE_HOME}/scripts/automation/generate-thumbnail.js --episode <EP> --platform ${PLATFORM}
-
-   재개:  RESUME_EP=${EP_ID} bash ${BARROTUBE_HOME}/lib/auto-pipeline.sh --slot ${SLOT}
-   이번 회차만 로컬 팬·줌으로 내보내려면 BT_MOTION_ENGINE=local-only 를 붙이세요.
-   (권장하지 않습니다 — 멀쩡한 Grok 클립이 있어도 버리고 슬라이드쇼가 나갑니다.)"
+    # 예전에는 여기서 halt 했다. 지금은 **막지 않는다** — 운영자 지시(2026-09-03)로 자동
+    # 경로가 "Grok 아니면 HyperFrames" 둘뿐이 됐고, 어느 쪽이든 발행까지 간다.
+    # Phase 8 의 S6c 가 로컬 팬·줌으로 채우고, 아래 motion_fallback_shipped 경보가
+    # "정본이 아닌 엔진으로 나갔다"는 사실을 사람에게 보낸다. 멈춰서 그날을 통째로
+    # 비우는 것보다, 덜 좋은 화면을 내보내고 알리는 편이 낫다는 결정이다.
+    audit "grok_motion_missing" "WARN" "ep=$EP_ID missing=${MEDIA_ASSETS_MISSING} action=fallback_to_hyperframes"
+    echo "  ⚠️  Grok 모션 클립 없음: ${MEDIA_ASSETS_MISSING}"
+    echo "     → Phase 8 의 S6c 가 HyperFrames 로 채웁니다 (경보 발송됨)"
+    echo "     Grok 계정 확인: node ${BARROTUBE_HOME}/scripts/automation/grok-motion-applescript.js --check"
+    notify_telegram "⚠️ <b>${EP_ID}</b> Grok 모션 실패 → HyperFrames 폴백
+누락: ${MEDIA_ASSETS_MISSING}
+계정 확인: grok-motion-applescript.js --check"
   fi
 fi
 

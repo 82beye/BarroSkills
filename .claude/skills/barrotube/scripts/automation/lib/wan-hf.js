@@ -94,8 +94,10 @@ export function parseSSE(text) {
       // ZeroGPU 는 쿼터가 마르면 본문 없이 `event: error / data: null` 만 보낸다.
       // 그대로 흘리면 "Space 오류: null" 이 돼서 원인을 못 찾는다 (2026-09-02 실측).
       if (payload === 'null' || payload === '') {
-        throw new Error('ZeroGPU 쿼터 소진 또는 Space 거부 (본문 없음). '
-          + 'HF_TOKEN 을 설정하면 쿼터가 올라간다 — 무료 계정 토큰으로 충분하다.');
+        throw new Error(hfToken()
+          ? 'ZeroGPU 일일 쿼터 소진 (토큰 인증됨). 리셋은 그날 첫 사용 시점 +24h 다 — '
+            + '검증 실행이 창을 잠식하면 그날 프로덕션이 폴백으로 떨어진다.'
+          : 'ZeroGPU 쿼터 소진 (익명). HF_TOKEN 을 설정하면 쿼터가 올라간다 (PRO 2,400 GPU초/일).');
       }
       throw new Error(`Space 오류: ${payload.slice(0, 200)}`);
     }

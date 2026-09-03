@@ -10,17 +10,17 @@ import test from 'node:test';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (p) => readFileSync(join(ROOT, p), 'utf8');
 
-test('config/motion-engines.json — Wan 이 order 0 · 기본값이다', () => {
-  // 2026-09-02 4엔진을 같은 씬으로 실측한 결과다. 배경이 살아있는가(상단 40% 프레임간
-  // 움직임)와 구도를 지키는가(끝/첫 얼굴면적) 두 축을 모두 만족한 건 Wan 뿐이었다:
-  //   Wan 1.689/1.01 · Grok 1.647/1.22 · LTX 1.321/0.74 · HyperFrames 0.439/1.18
-  // 순서를 바꾸려면 그 측정을 다시 하고 근거를 config 의 note 에 남길 것.
+test('config/motion-engines.json — 자동 경로는 grok → local-only 둘뿐이다', () => {
+  // 2026-09-03 운영자 판단. Wan 기본값은 ZeroGPU 일일 쿼터가 검증과 프로덕션을 함께
+  // 감당하지 못해 EP-0133 이 5씬 중 3씬을 HyperFrames 로 떨어뜨렸고 게시 불가 판정을 받았다.
+  // 배경 움직임 실측 Grok 2.067 · Wan 1.689 · HyperFrames 0.439 — 피사체가 움직이는
+  // 화면이 이 채널의 기준이다. wan·ltx 는 명시 지정 전용으로 내렸다.
   const cfg = JSON.parse(read('config/motion-engines.json'));
-  assert.equal(cfg.default, 'wan');
+  assert.equal(cfg.default, 'grok');
   const byOrder = Object.fromEntries(cfg.options.map((o) => [o.order, o.id]));
-  assert.equal(byOrder[0], 'wan');
-  const wan = cfg.options.find((o) => o.id === 'wan');
-  assert.equal(wan.browser_required, false, 'Wan 은 헤드리스여야 기본값일 자격이 있다');
+  assert.equal(byOrder[0], 'grok');
+  assert.equal(byOrder[1], 'local-only', '유일한 자동 폴백');
+  assert.ok(['wan', 'ltx'].includes(byOrder[2]), 'wan·ltx 는 명시 지정 전용으로 뒤에');
   const grok = cfg.options.find((o) => o.id === 'grok');
   assert.equal(grok.browser_required, true);
   // LTX 는 규격이 우월한데도 밀렸다 — 그 이유가 config 에 남아 있어야 재논의를 막는다
@@ -73,9 +73,9 @@ test('QA 는 얼굴을 못 찾아도 기권하지 않고 직전 ROI 로 판정�
 test('셸과 JS 의 기본값이 같다 — 어긋나면 같은 EP 도 호출 경로에 따라 다른 엔진으로 구워진다', () => {
   const auto = read('lib/auto-pipeline.sh');
   const produce = read('scripts/automation/produce-episode.js');
-  assert.match(auto, /MOTION_ENGINE="\$\{BT_MOTION_ENGINE:-wan\}"/);
-  assert.match(auto, /local motion_engine="\$\{BT_MOTION_ENGINE:-wan\}"/);
-  assert.match(produce, /process\.env\.BT_MOTION_ENGINE \|\| 'wan'/);
+  assert.match(auto, /MOTION_ENGINE="\$\{BT_MOTION_ENGINE:-grok\}"/);
+  assert.match(auto, /local motion_engine="\$\{BT_MOTION_ENGINE:-grok\}"/);
+  assert.match(produce, /process\.env\.BT_MOTION_ENGINE \|\| 'grok'/);
 });
 
 test('produce-episode S6c — wan 은 QA 루프 스크립트로, grok/local 은 각자 스크립트로 간다', () => {
@@ -99,10 +99,14 @@ test('브라우저는 grok 을 명시했을 때만 클립을 요구한다', () =
 
 test('조용한 폴백 경보는 정본 엔진 두 개(wan·grok) 모두에서 울린다', () => {
   const auto = read('lib/auto-pipeline.sh');
+  // 정본 엔진(grok·wan)으로 돌렸는데 hyperframes 로 나갔으면 반드시 울려야 한다.
+  // local-only 로 의도해서 돌린 회차까지 울리면 소음이 된다.
   const guard = auto.indexOf('"$MOTION_ENGINE" = "grok" ] || [ "$MOTION_ENGINE" = "wan"');
-  const notify = auto.indexOf('motion_fallback_shipped');
-  assert.ok(guard > 0, 'wan 으로 돌린 회차가 hyperframes 로 대체돼도 사람에게 알려야 한다');
-  assert.ok(guard < notify);
+  // 주석에도 같은 단어가 나오므로 **실제 audit 호출** 위치로 비교한다
+  const notify = auto.indexOf('audit "motion_fallback_shipped"');
+  assert.ok(guard > 0, '정본 엔진 회차의 폴백은 사람에게 알려야 한다');
+  assert.ok(notify > 0, '폴백 경보 audit 호출이 있어야 한다');
+  assert.ok(guard < notify, '경보는 엔진 가드 안에서 울려야 한다');
 });
 
 test('generate-motion-wan.js — 에피소드 모드·매니페스트·QA 게이트를 갖춘다', () => {
@@ -126,14 +130,23 @@ test('SKILL.md·MOTION.md 가 바뀐 기본값을 반영한다', () => {
   assert.match(both, /BT_MOTION_ENGINE=grok/, 'Grok 을 옵션 1 로 쓰는 법이 적혀 있어야 한다');
 });
 
-test('Wan 이 통째로 실패하면 로컬 폴백으로 파이프라인을 살리고 경보를 남긴다', () => {
-  // 익명 ZeroGPU 쿼터는 시간당 수 회에서 마른다 (2026-09-02 실측). 무인 회차가 클립 0개로
-  // 렌더까지 못 가면 그날 발행이 통째로 빈다 — 폴백은 살리되 조용하면 안 된다.
+test('어느 엔진이든 클립 0개면 로컬 폴백으로 발행을 살리고 경보를 남긴다', () => {
+  // 폴백이 wan 일 때만 발동하던 시절이 있었다. 기본값이 grok 으로 바뀐 뒤 그대로 뒀다면
+  // Grok 이 막힐 때 클립 0개로 렌더까지 못 가 그날 발행이 통째로 비었을 것이다.
   const s = read('scripts/automation/produce-episode.js');
-  assert.match(s, /useWanMotion && !motionExists\(\)/, 'Wan 이 아무것도 못 구웠을 때만 폴백한다');
+  assert.match(s, /!useLocalMotion && !motionExists\(\)/, '엔진 종류를 가리지 않고 폴백한다');
   assert.match(s, /HyperFrames 폴백/);
   const auto = read('lib/auto-pipeline.sh');
   assert.match(auto, /motion_fallback_shipped/, '폴백 사실이 경보로 사람에게 도착해야 한다');
+});
+
+test('Grok 클립 누락은 halt 가 아니라 폴백 + 경보다 — 발행이 멈추면 안 된다', () => {
+  // 2026-09-03 운영자 지시: 자동 경로는 "Grok 아니면 HyperFrames" 둘뿐이고 어느 쪽이든
+  // 발행까지 간다. 멈춰서 그날을 통째로 비우는 것보다 덜 좋은 화면을 내보내고 알린다.
+  const auto = read('lib/auto-pipeline.sh');
+  assert.ok(!/halt_for_human "Phase 7 Grok 모션"/.test(auto), 'Grok 누락으로 halt 하지 않는다');
+  assert.match(auto, /action=fallback_to_hyperframes/);
+  assert.match(auto, /Grok 모션 실패 → HyperFrames 폴백/, '경보 문구');
 });
 
 test('쿼터 소진 오류가 원인을 말한다 — "Space 오류: null" 로 흘리지 않는다', () => {
