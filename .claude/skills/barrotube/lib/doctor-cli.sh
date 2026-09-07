@@ -115,7 +115,27 @@ case "${OAUTH_LEVEL:-UNKNOWN}" in
   *)        add_result "youtube_oauth" "INFO"   "발급 시각 미기록 — 다음 갱신 시 기록된다" ;;
 esac
 
-# 8. 최근 24h audit 활동
+# 8. codex CLI 실행 가능성
+#
+# command -v 만으로는 이 고장을 못 잡는다. 2026-09-06 npm 자동 업데이트가 플랫폼
+# 패키지(@openai/codex-darwin-arm64)를 vendor/ 만 남기고 package.json 없이 풀어서,
+# 런처의 require.resolve 가 실패했다 — bin 심볼릭도 함께 빠져 PATH 에서도 사라졌다.
+# 같은 고장이 2026-09-04 에도 났고, 두 번 다 새벽 파이프라인이 Phase 7 에서 멈춘 뒤에야
+# 발견됐다(EP-2026-0140). S6c 씬 이미지가 전부 codex 라 이게 죽으면 그날 편이 안 나간다.
+# 그래서 실제로 --version 을 돌려 본다. 실행 비용은 수십 ms 다.
+CODEX_FIX="npm install -g @openai/codex@latest"
+if ! command -v codex >/dev/null 2>&1; then
+  add_result "codex_cli" "RED" "PATH 에 codex 없음 — ${CODEX_FIX}"
+else
+  CODEX_VER=$(codex --version 2>&1 | head -1 | tr -d '"' | tr -d '\n')
+  if printf '%s' "$CODEX_VER" | grep -qi "codex"; then
+    add_result "codex_cli" "GREEN" "$CODEX_VER"
+  else
+    add_result "codex_cli" "RED" "설치는 있으나 실행 실패(${CODEX_VER:0:60}) — ${CODEX_FIX}"
+  fi
+fi
+
+# 9. 최근 24h audit 활동
 AUDIT_TODAY=$(wc -l < "$AUDIT_LOG" 2>/dev/null || echo 0)
 add_result "audit_today" "INFO" "$AUDIT_TODAY entries"
 

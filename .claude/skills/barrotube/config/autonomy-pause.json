@@ -43,6 +43,18 @@
       "action": "factcheck_max_rewrites=3",
       "by": "orchestrator (Phase 6 재작성 루프 실장)",
       "note": "이 값은 오래 선언만 돼 있고 소비하는 코드가 없었다. auto-pipeline Phase 6 에 루프를 붙이며 실측: EP-2026-0096 이 게이트를 벗어나는 데 3라운드가 걸렸다(날짜·편향 → HIGH 미검증 수치 → emphasis_tokens·단정). 재작성 1회는 claude -p 1콜 + 팩트체크 1콜이라 06:00→08:00 발행 창에 여유가 있다."
+    },
+    {
+      "at": "2026-09-04T07:56:00+09:00",
+      "action": "publish_reject_window_minutes=10 (임시)",
+      "by": "orchestrator (운영자 명시 지시: EP-2026-0136 을 8시대에 게시)",
+      "note": "슬롯 08:00 을 이미 넘긴 만회 실행. 운영자가 대화로 실시간 감독 중이라 30분 창을 10분으로 축소. 실행 종료 후 30 으로 복구할 것."
+    },
+    {
+      "at": "2026-09-04T08:33:00+09:00",
+      "action": "publish_reject_window_minutes=30 (복구)",
+      "by": "orchestrator",
+      "note": "EP-2026-0136 만회 실행 종료. 임시 10분 → 정상 30분으로 되돌림."
     }
   ],
   "notes": {

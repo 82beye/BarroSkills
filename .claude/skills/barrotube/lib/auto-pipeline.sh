@@ -700,8 +700,17 @@ ${MOTION_RULES}
 ChatGPT 탭이 여러 개면 하나의 로그아웃 탭만 보고 중단하지 말고 모든 기존 chatgpt.com 탭을 확인해 프로필+composer가 보이는 탭을 사용한다.
 명시적 로그인 폼/캡차가 보이고 composer가 없을 때만 해당 탭을 Chrome 전면에 남긴 뒤 중단한다 — 우회하지 마라."
 
-  command -v codex >/dev/null 2>&1 \
-    || halt_for_human "Phase 7 media-render" "codex CLI를 PATH에서 찾지 못했습니다 (launchd plist PATH 확인)."
+  # PATH 존재만 보면 안 된다 — 2026-09-06 npm 업데이트가 플랫폼 패키지를 package.json
+  # 없이 풀어서 "PATH 엔 있는데 실행하면 죽는" 상태가 나왔다(2026-09-04 에도 동일).
+  # 그때 이 가드는 plist PATH 를 의심하라는 문구를 보냈고, 운영자가 엉뚱한 곳을 팠다.
+  # 실제로 돌려 보고, 고치는 명령을 그대로 적어 보낸다.
+  if ! command -v codex >/dev/null 2>&1; then
+    halt_for_human "Phase 7 media-render" \
+      "codex CLI 가 PATH 에 없습니다. 복구: npm install -g @openai/codex@latest (그래도 안 되면 launchd plist PATH 확인)"
+  elif ! codex --version >/dev/null 2>&1; then
+    halt_for_human "Phase 7 media-render" \
+      "codex CLI 는 있는데 실행이 안 됩니다 (플랫폼 패키지 파손 가능성). 복구: npm install -g @openai/codex@latest"
+  fi
 
   # 에이전트가 왜 못 만들었는지는 그 출력에만 있다. 잡아 두지 않으면 halt 문구가
   # "자산 불완전 + 크레딧 고갈" 로만 나가서, 실제 원인(로그인·시드 부재)을 가린다.
@@ -1012,6 +1021,12 @@ log_stage "🎬 Phase 8 — S6~S9 자산·렌더·QA·메타 (💰 TTS 비용)"
 if [ "${BT_NO_SCHEDULE:-0}" = "1" ]; then
   unset BT_PUBLISH_AT
   echo "  ⏸  BT_NO_SCHEDULE=1 — 예약 없이 private 업로드 (운영자가 수동 공개)"
+elif [ -n "${BT_PUBLISH_AT:-}" ]; then
+  # 호출자가 명시한 값이 슬롯 기본값을 이긴다.
+  # 여기서 무조건 슬롯값으로 덮어쓰던 동안, 슬롯 시각을 놓친 만회 실행은 항상 깨졌다:
+  # 덮어쓴 시각이 업로드 시점엔 이미 과거라 resolvePublishAt 이 null 을 돌리고,
+  # 영상이 private 로 올라가 아무도 모르게 사라진다 (2026-09-04 EP-0136, 09-05 EP-0138).
+  echo "  ⏰ 예약 공개 목표(호출자 지정): ${BT_PUBLISH_AT}"
 elif [ -n "$PUBLISH_AT" ]; then
   export BT_PUBLISH_AT="$PUBLISH_AT"
   echo "  ⏰ 예약 공개 목표: ${PUBLISH_AT} KST"
