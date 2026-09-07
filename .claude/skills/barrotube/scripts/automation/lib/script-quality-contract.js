@@ -30,10 +30,11 @@ const UNIT = '(?:퍼센트|프로|포인트|원|달러|엔|위안|년|개월|분
  *
  * 수사 3음절 이상이면 그 자체로 수치고("삼점사"), 2음절 이하는 단위가 붙어야 수치다.
  * 1음절은 공백으로 떨어져 있을 때만 센다 — 안 그러면 "일명"·"유일" 같은 보통 낱말이
- * 수치로 잡힌다.
+ * 수치로 잡힌다. 앞이 한글이면 그 1음절은 조사다 — "반전이 달러"를 "이 달러"로 세면
+ * 멀쩡한 문장이 수치 상한에 걸린다(EP-2026-0128 에서 자동 재집필이 두 번 죽은 원인).
  */
 export const SPOKEN_NUMBER = new RegExp(
-  `${NUM}{3,}|${NUM}{2,}\\s*${UNIT}|${NUM}\\s+${UNIT}`,
+  `${NUM}{3,}|${NUM}{2,}\\s*${UNIT}|(?<![가-힣])${NUM}\\s+${UNIT}`,
   'g',
 );
 
@@ -44,7 +45,13 @@ export const SPOKEN_NUMBER = new RegExp(
 export const MECHANISM_MARKERS = [
   '때문', '덕분', '덕에', '탓', '이유', '영향', '여파', '반영', '이어', '이끌',
   '의미', '뜻', '신호', '셈', '결과', '따라서', '그래서', '바람에', '까닭',
+  // 2026-09-05 추가: 실제 대본이 쓰는데 목록에 없어 오탐하던 연결어미.
+  // "고용이 잘 나오자 확률이 뛰었다"(EP-0138 씬003)는 명백한 인과인데 걸렸다.
+  '면서', '겹쳐', '겹치', '상쇄', '작용', '로 인', '에 힘입', '끌어내', '끌어올', '촉발',
 ];
+
+/** "…나오자 / 터지자" 처럼 용언 + '자' 로 붙는 인과. 감탄사 "자," 와 구분해야 한다. */
+export const MECHANISM_VERB_JA = /(?:되|하|오|나오|가|뛰|빠지|오르|내리|터지|꺾이|풀리|막히)자[\s,]/;
 
 /** 결론 자리를 차지하고 아무것도 말하지 않는 표현. */
 export const HEDGE_MARKERS = [
@@ -100,7 +107,7 @@ export function countSpokenNumbers(narration) {
 
 function hasMechanism(narration) {
   const text = String(narration || '');
-  return MECHANISM_MARKERS.some((m) => text.includes(m));
+  return MECHANISM_MARKERS.some((m) => text.includes(m)) || MECHANISM_VERB_JA.test(text);
 }
 
 function countHedges(narration) {
@@ -149,9 +156,16 @@ export function validateScript(scenes) {
       });
     }
 
+    // rewrite:true 인 이유 — severity 는 warn 그대로 둔다.
+    // warn 이던 동안 이 규칙은 한 번도 재작성을 부르지 못했다(생성기 루프가 error 에서만
+    // 되돌린다). 2026-09-05 실측: 최근 8회차가 전부 이 경고를 달고 나갔고, 분석 씬
+    // 301개 중 169개(56%)가 인과를 말하지 않았다 — 계약 B·D 가 문서로만 남아 있었다.
+    // 그렇다고 error 로 올리면 기존 대본 129편 중 94편이 막혀 게이트가 꺼진다
+    // (tests/script-quality-contract.js 의 "통과율 50%" 가드레일이 이걸 잡는다).
+    // 그래서 '막지는 않되 한 번 되돌린다' 로 나눴다. 재작성 후에도 남으면 기록하고 진행한다.
     if (ANALYTIC_ROLES.includes(role) && !hasMechanism(narration) && !filler.length) {
       issues.push({
-        rule: 'no-mechanism', severity: 'warn', scene_id: id,
+        rule: 'no-mechanism', severity: 'warn', rewrite: true, scene_id: id,
         message: `씬 ${id}(${role}): 인과를 주장하는 표현이 없다 — 사실 나열일 수 있다`,
         suggestion: `"A 때문에 B" / "B 라는 뜻입니다" 처럼 왜 그런지를 한 문장으로 말해라 (${MECHANISM_MARKERS.slice(0, 6).join('·')} 등).`,
       });

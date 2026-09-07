@@ -114,6 +114,12 @@ ${slot.timing_caveat}
    - **분석 명제** — 아래 네 줄을 반드시 이 이름 그대로 쓴다. 대본의 인과는 여기서만 나온다.
      * 관찰: 오늘 데이터에서 확인되는 사실 (지수 등락률 말고, 통념과 어긋나는 쪽)
      * 메커니즘: 왜 그렇게 됐는지 한 문장. "A 때문에 B"
+       A 는 **오늘 일어난 일**이어야 한다. 며칠 전 사건을 오늘의 촉발 요인으로 쓰지 마라.
+       각 사건에 날짜(YYYY-MM-DD)를 확인하고, 당일 시황 기사가 지목하는 원인을 최우선으로 써라.
+       배경으로 언급할 거면 시점을 밝혀라 — "지난주 X 가 깔아 놓은 판에서 오늘 Y 가…".
+       (2026-09-07 EP-0141: 델 실적 09-02·오픈AI 신모델 09-03 을 당일 급등 원인으로 엮어
+        대본이 없는 사건을 만들었고, 팩트체크가 4라운드를 소모했다. 실제 원인은 당일 나온
+        KB증권 메모리 재고 진단이었고 그날 시황 기사 전체가 그것만 지목했다.)
      * 함의: 한국 시청자가 이 때문에 다르게 봐야 할 것 하나
      * 반증: 이 해석이 틀렸다면 내일 무엇이 보일지
    - 아래 ${skeleton.length}컷 구조에 맞춘 씬별 메시지
@@ -188,7 +194,18 @@ function writeFallbackAnalysis({ slotName, slot, skeleton, date, inputs, outDir 
   const news = readJson(inputs['뉴스'].path, {});
   const items = (news.sources || []).flatMap((source) => source.items || []).slice(0, 3);
   const quotes = market.quotes || [];
-  const topic = items[0]?.title || (quotes.length ? `${slot.label}: 주요 지수와 환율 흐름` : '');
+  // 데스크가 고른 토픽이 있으면 그걸 쓴다.
+  // 폴백은 "리서치 LLM 이 죽었을 때" 도는 경로인데, 그렇다고 **데스크까지 죽은 것은 아니다**.
+  // 예전에는 무조건 items[0].title 을 썼고, 그건 기사 제목이 아니라 뉴스 사이트의
+  // 섹션·내비게이션 문구일 때가 있다 — 2026-09-01 kr-close 실측: 데스크가
+  // "이란-미국 재충돌로 유가는 급등했는데 금은 2주 저점" 을 뽑아 뒀는데도 토픽이
+  // "뉴스로 보는 증시일정" 으로 덮여 EP-0130 이 그 상태로 대본 생성까지 갔다.
+  const scopedDeskTopic = join(outDir, `desk-topic-${slotName}.json`);
+  const deskTopicPath = existsSync(scopedDeskTopic) ? scopedDeskTopic : join(outDir, 'desk-topic.json');
+  const desk = existsSync(deskTopicPath) ? readJson(deskTopicPath, {}) : {};
+  const topicSource = desk.topic ? 'desk' : (items[0]?.title ? 'headline' : 'quotes');
+  const topic = desk.topic || items[0]?.title || (quotes.length ? `${slot.label}: 주요 지수와 환율 흐름` : '');
+  const angle = desk.angle || slot.angle;
   if (!topic) return false;
 
   const weekday = new Date(`${date}T12:00:00+09:00`).getUTCDay();
@@ -203,10 +220,11 @@ function writeFallbackAnalysis({ slotName, slot, skeleton, date, inputs, outDir 
   const sceneLines = skeleton.map((scene) => `- ${scene.n}. ${scene.role}: ${scene.intent}`).join('\n');
 
   writeFileSync(join(outDir, `research-${slotName}.md`), `---\ndate: ${date}\nslot: ${slotName}\nsource: deterministic-fallback\ncontent_mode: ${contentMode}\n---\n\n# 시장 리서치\n\n## 선정 토픽\n\n${topic}\n\n## 시세 스냅샷\n\n${quoteLines}\n\n## 주요 뉴스\n\n${newsLines}\n\n## 분석 한계\n\n자동 리서치 모델을 사용할 수 없어 수집 원문만 정리했다. 소셜 반응과 기사 밖 주장은 사용하지 않으며, 모든 수치는 대본 팩트체크에서 다시 검증한다.\n`);
-  writeFileSync(join(outDir, `strategy-${slotName}.md`), `---\ndate: ${date}\nslot: ${slotName}\nsource: deterministic-fallback\ncontent_mode: ${contentMode}\n---\n\n# 콘텐츠 전략\n\n## 한 문장 앵글\n\n${slot.angle}: ${topic}\n\n## 시청자 가치\n\n${slot.audience_context}\n\n## ${skeleton.length}씬 구조\n\n${sceneLines}\n\n## 팩트 경계\n\n시세 스냅샷과 링크된 뉴스에 없는 수치·인과·최상급 표현은 단정하지 않는다. 휴장 모드에서는 직전 종가를 거래일과 함께 참고값으로만 사용한다.\n`);
+  writeFileSync(join(outDir, `strategy-${slotName}.md`), `---\ndate: ${date}\nslot: ${slotName}\nsource: deterministic-fallback\ncontent_mode: ${contentMode}\n---\n\n# 콘텐츠 전략\n\n## 한 문장 앵글\n\n${angle}: ${topic}\n\n## 시청자 가치\n\n${slot.audience_context}\n\n## ${skeleton.length}씬 구조\n\n${sceneLines}\n\n## 팩트 경계\n\n시세 스냅샷과 링크된 뉴스에 없는 수치·인과·최상급 표현은 단정하지 않는다. 휴장 모드에서는 직전 종가를 거래일과 함께 참고값으로만 사용한다.\n`);
   writeFileSync(join(outDir, `topic-${slotName}.json`), `${JSON.stringify({
     topic,
-    angle: slot.angle,
+    angle,
+    topic_source: topicSource,
     content_mode: contentMode,
     key_numbers: quotes.filter((q) => q.price_text != null || q.price != null)
       .map((q) => `${q.name || q.symbol} ${q.price_text ?? q.price}`).slice(0, 5),

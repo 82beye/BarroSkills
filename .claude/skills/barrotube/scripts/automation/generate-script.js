@@ -205,7 +205,7 @@ ${buildAnalystContractBlock(sceneCount)}
 7. Target audience: 20~40대 한국 투자자.
 8. FORBIDDEN: specific stock buy/sell recommendations, "무조건/100%/확실/이것만 하면 부자", 정치 편향.
 9. CRITICAL — narration is FOR TTS ONLY. DO NOT include in narration: emojis (📚 🚨 etc), bracket tags ([1/5]), intro card text, subtitle overlays, or any text that appears as visual-only elements. Those belong to video/subtitle layers — not to spoken audio.
-10. CRITICAL — Hook scene (씬 001) MUST include the SINGLE most impactful numeric value from the brief (percentage, count, date, dollar amount). Generic hooks without a specific number fail impact check.
+10. CRITICAL — Hook scene (씬 001): speak AT MOST ONE number, and the same scene must say why it matters to the viewer. A hook that only recites a figure fails — index moves are on every channel (see RULE 4-CONTRACT D). Prefer opening on the counter-intuitive fact: what moved against expectations, who disagreed, what broke the usual pattern. Put the remaining figures in subtitle_text.
 11. CRITICAL — image_prompt MUST NOT contain any text/words/numbers/company-names/labels to be rendered as text in the image. The image model will literally draw any text you mention. Use visual metaphors only:
     - BAD:  "pie chart labeled '80% of market cap' with company names 'Apple, Microsoft, Amazon'"
     - GOOD: "pie chart with one large highlighted wedge, three small anonymous company building icons stacked beside it"
@@ -529,7 +529,9 @@ async function main() {
 
     qualityIssues = validateScript(scenes);
     qualityIssues.forEach((i) => console.error(`   ${formatIssue(i)}`));
-    if (!qualityIssues.some((i) => i.severity === 'error')) break;
+    // error 는 게이트, rewrite 는 '막지는 않되 한 번 되돌린다'. 후자가 없던 동안
+    // no-mechanism(사실 나열) 경고가 매 회차 기록만 되고 그대로 나갔다 (2026-09-05).
+    if (!qualityIssues.some((i) => i.severity === 'error' || i.rewrite)) break;
 
     if (attempt === 2) {
       console.warn('   ⚠ 재작성 후에도 품질 계약 위반이 남았다 — frontmatter 에 기록하고 진행한다');
