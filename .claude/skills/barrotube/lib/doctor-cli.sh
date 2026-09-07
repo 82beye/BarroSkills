@@ -77,14 +77,29 @@ else
 fi
 
 # 4. In-flight lock
+#
+# stale 락은 보고만 하면 안 된다. 락은 다음 회차 전체를 막는데 해제가 사람 손을
+# 기다리면 그동안 슬롯이 통째로 빈다(EP-2026-0134·0138 등 반복). 감시자가 이미
+# "pid 죽음" 을 확인했으니 여기서 정리한다 — 죽은 프로세스의 락은 정의상 아무도
+# 쓰고 있지 않다.
+#
+# forceRelease 를 직접 부르지 않는 이유: 판정과 삭제 사이에 새 프로세스가 락을
+# 잡을 수 있고, 그때 무조건 지우면 **살아 있는 작업의 락**을 뺏어 두 에피소드가
+# 동시에 돈다. release-stale 은 지우기 직전에 pid·started_at 을 다시 확인한다.
 if [ -f workspace/.in-flight.json ]; then
   LOCK_PID=$(python3 -c "import json; print(json.load(open('workspace/.in-flight.json')).get('pid', ''))" 2>/dev/null)
+  LOCK_EP=$(python3 -c "import json; print(json.load(open('workspace/.in-flight.json')).get('episode_id', '?'))" 2>/dev/null)
   if [ -n "$LOCK_PID" ] && ps -p "$LOCK_PID" > /dev/null 2>&1; then
-    add_result "in_flight_lock" "YELLOW" "active EP, PID=$LOCK_PID alive"
-  elif [ -n "$LOCK_PID" ]; then
-    add_result "in_flight_lock" "RED" "STALE lock, PID=$LOCK_PID dead"
+    add_result "in_flight_lock" "YELLOW" "active ${LOCK_EP}, PID=$LOCK_PID alive"
   else
-    add_result "in_flight_lock" "GREEN" "clear"
+    RS=$(node scripts/automation/in-flight-lock.js release-stale 2>&1 | tr -d '\n"' | cut -c1-120)
+    if printf '%s' "$RS" | grep -q "Released stale lock"; then
+      add_result "in_flight_lock" "YELLOW" "STALE ${LOCK_EP} (PID=${LOCK_PID:-?} dead) — 자동 해제함"
+    elif printf '%s' "$RS" | grep -qE "No lock|Lock is live"; then
+      add_result "in_flight_lock" "GREEN" "clear (${RS})"
+    else
+      add_result "in_flight_lock" "RED" "STALE ${LOCK_EP} 해제 실패 — ${RS}"
+    fi
   fi
 else
   add_result "in_flight_lock" "GREEN" "no lock"

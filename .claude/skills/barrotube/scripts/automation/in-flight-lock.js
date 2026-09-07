@@ -204,6 +204,31 @@ export function forceRelease() {
   return true;
 }
 
+/**
+ * stale 로 판정된 락만, 그 사이 주인이 바뀌지 않았을 때만 지운다.
+ *
+ * forceRelease 를 감시자(doctor)가 그냥 쓰면 안 되는 이유: 판정과 삭제 사이에 새
+ * 프로세스가 락을 잡을 수 있다. 그때 무조건 unlink 하면 **살아 있는 작업의 락**을
+ * 뺏어 두 에피소드가 동시에 돌게 된다 — 락이 막으려던 바로 그 상황이다.
+ * 그래서 지우기 직전에 다시 읽어 pid·started_at 이 판정 때와 같은지 확인한다.
+ *
+ * @returns {{released: boolean, reason: string, lock: object|null}}
+ */
+export function releaseIfStale() {
+  const seen = getCurrentLock();
+  if (!seen) return { released: false, reason: 'no_lock', lock: null };
+  if (!isStale(seen)) return { released: false, reason: 'alive', lock: seen };
+
+  // 판정 직후 재확인 — 그 사이 다른 프로세스가 잡았으면 건드리지 않는다.
+  const now = getCurrentLock();
+  if (!now) return { released: false, reason: 'vanished', lock: seen };
+  if (now.pid !== seen.pid || now.started_at !== seen.started_at) {
+    return { released: false, reason: 'reacquired', lock: now };
+  }
+  unlinkSync(LOCK_FILE);
+  return { released: true, reason: seen.__corrupt ? 'corrupt' : 'pid_dead', lock: seen };
+}
+
 export function heartbeat(episodeId, stage = null) {
   const cur = getCurrentLock();
   if (!cur || cur.__corrupt) return false;
@@ -256,6 +281,15 @@ function cliRelease(episodeId) {
     console.error(`❌ ${e.message}`);
     process.exit(1);
   }
+}
+
+function cliReleaseStale() {
+  const r = releaseIfStale();
+  if (r.released) console.log(`✅ Released stale lock (${r.lock.episode_id}, ${r.reason}).`);
+  else if (r.reason === 'no_lock') console.log('ℹ No lock.');
+  else if (r.reason === 'alive') console.log(`ℹ Lock is live (${r.lock.episode_id}, pid=${r.lock.pid}) — kept.`);
+  else console.log(`ℹ Lock changed while checking (${r.reason}) — kept.`);
+  process.exit(r.released || r.reason === 'no_lock' || r.reason === 'alive' ? 0 : 0);
 }
 
 function cliForceRelease() {
@@ -334,6 +368,7 @@ if (isDirect) {
     case 'heartbeat':      cliHeartbeat(values.episode, values.stage); break;
     case 'release':        cliRelease(values.episode); break;
     case 'force-release':  cliForceRelease(); break;
+    case 'release-stale':  cliReleaseStale(); break;
     case '-h':
     case '--help':
     case 'help':
