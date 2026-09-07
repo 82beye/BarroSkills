@@ -33,6 +33,20 @@ const BT_GROK_ACCOUNT = process.env.BT_GROK_ACCOUNT || '82beye@gmail.com';
 const FINDER_TIMEOUT_SEC = Number(process.env.BT_GROK_FINDER_TIMEOUT || 300);
 const CUT_DELAY_MS = Number(process.env.BT_GROK_CUT_DELAY_MS ?? 12000);
 const GEN_TIMEOUT_MS = Number(process.env.BT_GROK_TIMEOUT_MS || 6 * 60 * 1000);
+/**
+ * 서비스가 멎었을 때 몇 컷까지 시도해 보고 접을지.
+ *
+ * 컷당 타임아웃이 6분이라 5컷을 끝까지 밀면 30분이 사라진다. 2026-09-04 EP-2026-0134
+ * 가 그렇게 돌다 발행 창을 놓쳤다 — 게시물은 만들어지는데 영상이 끝내 렌더되지 않는
+ * 서비스측 정체였고, 씬을 바꿔도 결과는 같았다.
+ *
+ * 1컷 실패는 콘텐츠 사유(모더레이션)일 수 있으니 접지 않는다. **성공이 하나도 없는 채**
+ * 연속 타임아웃이 이 값에 닿으면 서비스 문제로 보고 남은 컷을 포기한다 —
+ * 파이프라인이 곧바로 HyperFrames 폴백으로 넘어가 그날 편은 나간다.
+ */
+const STALL_ABORT_AFTER = Number(process.env.BT_GROK_STALL_ABORT || 2);
+/** 서비스 정체 신호. 컷 고유 사유(중복·오디오 없음)와 구분해야 한다. */
+const STALL_PATTERN = /준비되지 않았습니다|내려받지 못했습니다/;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const md5 = (p) => createHash('md5').update(readFileSync(p)).digest('hex');
@@ -41,32 +55,54 @@ const md5 = (p) => createHash('md5').update(readFileSync(p)).digest('hex');
 /**
  * Chrome 탭에서 JS 실행.
  *
- * 탭 **인덱스를 고정하지 않는다.** 사용자가 평소 쓰는 브라우저라 실행 중에도
- * 탭이 닫히고 순서가 바뀐다 — 고정하면 "유효하지 않은 인덱스 (-1719)" 로 죽는다
- * (2026-08-25 EP-0114 us-close: 씬 002~005 가 전부 이걸로 실패했다).
- * 매 호출마다 grok.com 탭을 다시 찾고, 없으면 만든다.
+ * 탭 **인덱스는 고정하지 않고, 탭 id 로 고정한다.**
+ *
+ * 인덱스 고정은 "유효하지 않은 인덱스 (-1719)" 로 죽는다 — 사용자가 평소 쓰는
+ * 브라우저라 실행 중에도 탭이 닫히고 순서가 바뀐다 (2026-08-25 EP-0114: 씬
+ * 002~005 가 전부 이걸로 실패). 그래서 한동안 "매 호출마다 grok.com 첫 탭을 다시
+ * 찾는" 방식을 썼는데, 이건 **grok 탭이 둘 이상이면 조용히 틀린다**:
+ * AppleScript 의 `windows` 는 인덱스가 아니라 z-order 라, 창 포커스가 바뀌면
+ * 제출과 수신이 서로 다른 탭에서 일어난다. 2026-09-01 EP-0127·0128 실측 —
+ * 프롬프트는 /imagine 에 넣고 영상은 /imagine/saved(저장 갤러리)에서 읽어,
+ * 에피소드와 무관한 예전 생성물 10컷이 그대로 렌더까지 갔다.
+ *
+ * 탭 id 는 순서가 바뀌어도 같은 탭을 가리키므로 두 실패를 모두 피한다.
  */
+let GROK_TAB_ID = null;
+
 function chromeJS(js) {
   // `with timeout` 이 없으면 AppleEvent 는 60초에 끊긴다. 영상 생성 중인 Chrome 은
   // 그보다 오래 응답을 못 주는 순간이 있어서 -1712 (AppleEvent timed out) 로 죽었고,
   // 그 에러가 "Apple Events 자바스크립트가 꺼져 있다" 는 메시지로 오인되기도 했다.
   // (2026-08-30 EP-0124 실측: scene_001 이 4분 대기 중 -1712 로 실패.)
+  const match = GROK_TAB_ID === null
+    ? '(URL of t) contains "grok.com"'
+    : `(id of t) is "${GROK_TAB_ID}"`;
   const script = `on run argv
   set j to item 1 of argv
   with timeout of 300 seconds
     tell application "Google Chrome"
       repeat with w in windows
         repeat with t in tabs of w
-          if (URL of t) contains "grok.com" then return (execute t javascript j)
+          if ${match} then return (execute t javascript j)
         end repeat
       end repeat
       error "GROK_TAB_GONE"
     end tell
   end timeout
 end run`;
-  return execFileSync('osascript', ['-e', script, js], {
-    encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
-  }).trim();
+  // `missing value` 는 JS 가 undefined 를 돌려줬다는 뜻이다 — 페이지가 아직 스크립트를
+  // 못 받는 순간(리렌더·네비게이션 직후)에 나온다. 그대로 넘기면 호출부의 JSON.parse 가
+  // "Unexpected token 'm'" 로 죽어 원인이 안 보인다. 잠깐 두고 다시 시도한다.
+  let last = '';
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    last = execFileSync('osascript', ['-e', script, js], {
+      encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
+    }).trim();
+    if (last !== 'missing value') return last;
+    execFileSync('sleep', ['1']);
+  }
+  throw new Error(`Chrome 이 결과를 주지 않았습니다 (missing value) — ${js.slice(0, 80)}…`);
 }
 
 /** 지금 Grok 에 로그인된 계정 이메일. 못 읽으면 null (검사를 건너뛴다). */
@@ -77,57 +113,77 @@ function signedInAs() {
   } catch { return null; }
 }
 
-/** grok.com 탭을 찾는다. 없으면 새 탭으로 연다. → {windowIdx, tabIdx} */
+/**
+ * grok.com 탭을 찾아 **id 로 고정한다**. 없으면 새 탭으로 연다.
+ * → {tabId, windowIdx, tabIdx}
+ *
+ * **작성기 탭만 고른다.** /imagine/saved 는 저장 갤러리고 /imagine/post/... 는 게시물
+ * 상세라, 둘 다 프롬프트를 넣을 작성기가 없다. 갤러리에 붙으면 videoSrcs 의 차집합이
+ * "이번에 생성한 컷" 이 아니게 되고(2026-09-01 EP-0127·0128 사고), 게시물 상세에
+ * 붙으면 "제출 버튼을 찾지 못했습니다" 로 죽는다.
+ * 후보가 없으면 새 탭을 연다 — 로그인은 프로필 단위라 새 탭도 그대로 로그인돼 있다.
+ */
 function findGrokTab() {
   const finder = `tell application "Google Chrome"
   set wi to 0
+  set fallback to "none"
   repeat with w in windows
     set wi to wi + 1
     set ti to 0
     repeat with t in tabs of w
       set ti to ti + 1
-      if (URL of t) contains "grok.com" then return (wi as string) & "," & (ti as string)
+      set u to (URL of t)
+      if u contains "grok.com" then
+        set row to (id of t as string) & "," & (wi as string) & "," & (ti as string)
+        if u contains "/imagine" and u does not contain "/imagine/saved" and u does not contain "/imagine/post" then return row
+        if fallback is "none" then set fallback to row
+      end if
     end repeat
   end repeat
-  return "none"
+  return fallback
 end tell`;
   const r = execFileSync('osascript', ['-e', finder], { encoding: 'utf8' }).trim();
   if (r !== 'none') {
-    const [w, t] = r.split(',').map(Number);
-    return { windowIdx: w, tabIdx: t };
+    const [id, w, t] = r.split(',');
+    GROK_TAB_ID = id;
+    return { tabId: id, windowIdx: Number(w), tabIdx: Number(t) };
   }
   // 새 탭
   const opener = `tell application "Google Chrome"
   if (count of windows) = 0 then make new window
-  tell front window
-    make new tab with properties {URL:"${GROK_URL}"}
-    return ((index of front window) as string) & "," & ((count of tabs) as string)
-  end tell
+  set nt to make new tab at end of tabs of front window with properties {URL:"${GROK_URL}"}
+  return ((id of nt) as string) & "," & ((count of tabs of front window) as string)
 end tell`;
   const r2 = execFileSync('osascript', ['-e', opener], { encoding: 'utf8' }).trim();
-  const [w, t] = r2.split(',').map(Number);
-  return { windowIdx: w, tabIdx: t };
+  const [id, t] = r2.split(',');
+  GROK_TAB_ID = id;
+  return { tabId: id, windowIdx: 1, tabIdx: Number(t) };
 }
 
 function navigate(_tab, url) {
-  // grok 탭을 찾아 URL 을 바꾼다. 없으면 새로 만든다.
+  // 고정된 작업 탭의 URL 을 바꾼다. chromeJS 와 **같은 탭**이어야 한다 —
+  // 아니면 프롬프트를 넣은 탭과 영상을 읽는 탭이 갈린다.
+  const match = GROK_TAB_ID === null
+    ? '(URL of t) contains "grok.com"'
+    : `(id of t) is "${GROK_TAB_ID}"`;
   const s = `on run argv
   set u to item 1 of argv
   tell application "Google Chrome"
     repeat with w in windows
       repeat with t in tabs of w
-        if (URL of t) contains "grok.com" then
+        if ${match} then
           set URL of t to u
           return "ok"
         end if
       end repeat
     end repeat
     if (count of windows) = 0 then make new window
-    tell front window to make new tab with properties {URL:u}
-    return "new"
+    tell front window to set nt to make new tab with properties {URL:u}
+    return "new:" & ((id of nt) as string)
   end tell
 end run`;
-  execFileSync('osascript', ['-e', s, url], { encoding: 'utf8' });
+  const r = execFileSync('osascript', ['-e', s, url], { encoding: 'utf8' }).trim();
+  if (r.startsWith('new:')) GROK_TAB_ID = r.slice(4);
 }
 
 /** 페이지가 쓸 준비가 될 때까지 — file input 이 보일 때까지 */
@@ -182,26 +238,71 @@ async function attachStill(tab, pngPath) {
   }
   if (!sent) throw new Error(`base64 전송 실패 (${b64.length}자)`);
 
-  const js = `(function(){
-    var b64=window.__btB64;
-    var bin=atob(b64), arr=new Uint8Array(bin.length);
-    for(var i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
-    var f=new File([arr],"still.png",{type:"image/png"});
-    var dt=new DataTransfer(); dt.items.add(f);
-    var inp=document.querySelector('input[type="file"]');
-    if(!inp) return JSON.stringify({ok:false,why:"no input"});
-    inp.files=dt.files;
-    inp.dispatchEvent(new Event("change",{bubbles:true}));
-    return JSON.stringify({ok:true});
-  })()`;
-  chromeJS(js);
-  // 첨부 판정은 반환값이 아니라 Remove image / blob 썸네일로 한다
-  for (let i = 0; i < 12; i++) {
-    await sleep(1500);
-    const r = JSON.parse(chromeJS(`(function(){return JSON.stringify({rb:[].slice.call(document.querySelectorAll('button')).some(function(b){return b.getAttribute('aria-label')==='Remove image';}),th:!!document.querySelector('img[src^="blob:"]')});})()`));
-    if (r.rb || r.th) return true;
+  // 이전 컷의 첨부가 남아 있으면 먼저 지운다. 안 지우면 두 가지가 망가진다 —
+  // 남은 스틸로 이번 컷이 생성되거나, 그 잔재가 아래 검증을 거짓 통과시킨다.
+  chromeJS(`(function(){
+    var b=[].slice.call(document.querySelectorAll('button')).filter(function(x){return x.getAttribute('aria-label')==='Remove image';})[0];
+    if(b) b.click();
+    return 'ok';
+  })()`);
+  await sleep(800);
+
+  const uiState = () => JSON.parse(chromeJS(`(function(){
+    return JSON.stringify({
+      rb:[].slice.call(document.querySelectorAll('button')).some(function(b){return b.getAttribute('aria-label')==='Remove image';}),
+      th:!!document.querySelector('img[src^="blob:"]')
+    });
+  })()`));
+
+  // 지워졌는지 먼저 확인한다. 이게 이번 첨부를 직전 컷의 잔재와 갈라 주는 기준선이다.
+  for (let i = 0; i < 8; i++) {
+    const s0 = uiState();
+    if (!s0.rb && !s0.th) break;
+    await sleep(700);
   }
-  throw new Error('첨부 확인 실패 (Remove image·썸네일 미검출)');
+
+  const js = `(function(){
+    try{
+      var b64=window.__btB64;
+      var bin=atob(b64), arr=new Uint8Array(bin.length);
+      for(var i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
+      var f=new File([arr],"still.png",{type:"image/png"});
+      var dt=new DataTransfer(); dt.items.add(f);
+      var inps=[].slice.call(document.querySelectorAll('input[type="file"]'));
+      var inp=inps.filter(function(x){return x.closest('form')&&/image\\//.test(x.accept||'');})[0]
+              || inps.filter(function(x){return x.closest('form');})[0] || inps[0];
+      if(!inp) return JSON.stringify({ok:false,why:"no input"});
+      inp.files=dt.files;
+      var n=inp.files.length, sz=(inp.files[0]||{}).size||0;
+      // change 는 할당 확인 **뒤에** 쏜다 — 앱이 파일을 가져가며 input 을 비우기 때문에
+      // 이 뒤로는 files.length 가 0 이 되고, 그건 실패가 아니라 성공의 흔적이다.
+      inp.dispatchEvent(new Event("change",{bubbles:true}));
+      return JSON.stringify({ok:n===1,n:n,size:sz});
+    }catch(e){ return JSON.stringify({ok:false,why:e.name+': '+e.message}); }
+  })()`;
+
+  // 판정 순서가 핵심이다.
+  //   1) 할당 직후의 input.files (change 전) — 파일이 실제로 들어갔는가
+  //   2) 그 다음 UI 썸네일/Remove image 가 **새로** 뜨는가 — 앱이 받아들였는가
+  // 예전에는 2)만 봤다. 그런데 그 둘은 직전 컷의 첨부가 남아도 그대로 보여서,
+  // 이번 주입이 실패해도 통과했다. 2026-09-01 실측: 첨부 없이 제출이 나가
+  // Grok 이 스틸과 무관한 영상을 만들었고("attached image" 지시만 남아 모델이
+  // 자유롭게 그렸다) EP-0127·0128 10컷이 그렇게 버려졌다.
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const r = JSON.parse(chromeJS(js));
+    if (r.ok && r.size > 0) {
+      for (let i = 0; i < 12; i++) {
+        await sleep(1200);
+        const s1 = uiState();
+        if (s1.rb || s1.th) return true;
+      }
+      console.warn('     첨부는 들어갔는데 UI 가 받지 않았다 — 재시도');
+    } else {
+      console.warn(`     첨부 재시도 ${attempt}/3 (${r.why || `files=${r.n}`})`);
+    }
+    await sleep(1500);
+  }
+  throw new Error('첨부 확인 실패 (주입 후 썸네일·Remove image 미검출)');
 }
 
 /** 프롬프트 입력 + 옵션 확정 + 제출 */
@@ -217,68 +318,97 @@ async function submitPrompt(tab, prompt) {
   if (!ins.ok) throw new Error('컴포저를 찾지 못했습니다');
   await sleep(900);
 
-  // 720p / 10s 확정 + 쿠키 동의 제거 + 제출
-  const submitJs = `(function(){
+  // 옵션 확정 — **이미 켜진 것은 다시 누르지 않는다.**
+  // 예전에는 720p·10s 를 무조건 클릭하고 곧바로 제출을 눌렀다. 켜져 있는 토글을 다시
+  // 누르면 꺼지고, 그 리렌더 도중에 들어간 제출 클릭은 조용히 흘러간다
+  // (2026-09-02 EP-0131 씬 002·005: 프롬프트·첨부·활성 제출 버튼이 다 갖춰졌는데도
+  //  "제출이 반영되지 않았습니다" 로 죽었다. 사람이 같은 버튼을 누르면 3초 만에 넘어갔다.)
+  chromeJS(`(function(){
     var B=[].slice.call(document.querySelectorAll('button'));
     ['720p','10s'].forEach(function(t){
       var b=B.filter(function(x){return (x.textContent||'').trim()===t;})[0];
-      if(b) b.click();
+      if(b && b.getAttribute('aria-pressed')!=='true') b.click();
     });
     var rj=B.filter(function(b){return (b.textContent||'').trim()==='모두 거부';})[0];
     if(rj) rj.click();
+    return 'ok';
+  })()`);
+  await sleep(1200);
+
+  // 제출 — 누르고 끝내지 않고, 이동을 확인하며 다시 누른다.
+  const clickSubmit = () => JSON.parse(chromeJS(`(function(){
     var el=document.querySelector('[contenteditable="true"]');
+    if(!el) return JSON.stringify({ok:false,why:'no composer'});
     var form=el.closest('form');
     var sb=[].slice.call((form||document).querySelectorAll('button')).filter(function(b){return b.type==='submit';})[0];
-    if(!sb) return JSON.stringify({ok:false,why:"no submit"});
-    var before=location.pathname;
+    if(!sb) return JSON.stringify({ok:false,why:'no submit'});
+    if(sb.disabled) return JSON.stringify({ok:false,why:'disabled'});
     sb.click();
-    return JSON.stringify({ok:true,before:before});
-  })()`;
-  await sleep(600);
-  const sub = JSON.parse(chromeJS(submitJs));
-  if (!sub.ok) throw new Error('제출 버튼을 찾지 못했습니다');
+    return JSON.stringify({ok:true});
+  })()`));
 
-  // 제출 확인 — /imagine/post/<id> 로 이동해야 한다
-  for (let i = 0; i < 12; i++) {
-    await sleep(2000);
-    const p = chromeJS(`location.pathname`);
-    if (p.includes('/imagine/post/')) return p;
+  let why = '';
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    const r = clickSubmit();
+    if (!r.ok) {
+      why = r.why;
+      if (why === 'no submit' && attempt === 1) throw new Error('제출 버튼을 찾지 못했습니다');
+      await sleep(2500);
+      continue;
+    }
+    for (let i = 0; i < 8; i++) {
+      await sleep(2000);
+      const p = chromeJS('location.pathname');
+      if (p.includes('/imagine/post/')) return p;
+    }
+    console.warn(`     제출이 안 먹었다 — 다시 누른다 ${attempt}/4`);
   }
-  throw new Error('제출이 반영되지 않았습니다');
-}
-
-/** 생성 완료까지 폴링 후 다운로드 클릭 */
-/**
- * 페이지에 걸린 생성 영상 URL 목록. 히스토리 썸네일도 같은 <video> 라서
- * "제출 전에 없던 URL" 이 이번 컷이다 — 레이아웃이 바뀌어도 이 차집합은 성립한다.
- */
-function videoSrcs(tab) {
-  const raw = chromeJS(`(function(){
-    var vs=[].slice.call(document.querySelectorAll('video'));
-    var out=[];
-    for(var i=0;i<vs.length;i++){var s=vs[i].currentSrc||vs[i].src||'';if(s.indexOf('generated_video')>=0)out.push(s);}
-    return JSON.stringify(out);
-  })()`);
-  try { return JSON.parse(raw); } catch { return []; }
+  throw new Error(`제출이 반영되지 않았습니다${why ? ` (${why})` : ''}`);
 }
 
 /**
- * 새 영상 URL 이 뜰 때까지 기다린다. 이것이 곧 생성 완료 신호다.
+ * 이번 컷의 영상 URL. **우리 게시물 것만** 고른다.
  *
- * 왜 버튼을 안 쓰나: 2026-08-30 Grok UI 에서 최상위 "다운로드" 버튼이 사라지고
- * 「게시물 작업」 메뉴 안으로 들어갔다. 버튼 라벨을 쫓으면 UI 가 바뀔 때마다 깨진다.
- * URL 차집합은 DOM 구조에 거의 의존하지 않는다.
+ * 예전에는 "제출 전에 없던 <video> src" 를 이번 컷으로 봤다. 그건 틀렸다
+ * (2026-09-01 EP-0127·0128 실측). /imagine 과 게시물 페이지에는 계정의 과거
+ * 생성물 **히스토리 썸네일 스트립**(<button> 안 50×50 <video>)이 깔려 있고
+ * lazy-load 로 계속 새 URL 이 얹힌다. 차집합은 그 옛 생성물을 집어 왔고,
+ * 에피소드와 무관한 판타지 클립 10컷이 렌더까지 갔다.
+ * 결정적으로 **스트립에는 방금 만든 게시물이 들어오지도 않는다** — 실측 0건.
+ *
+ * 본 영상은 <button> 밖의 큰 <video> 이고, 그 poster 에 게시물 id 가 박혀 있다:
+ *   .../generated/<postId>/preview_image.jpg  →  .../generated/<postId>/generated_video.mp4
+ * submitPrompt 가 이미 /imagine/post/<postId> 로의 이동을 확인하고 그 경로를
+ * 돌려주므로, 그 id 로 우리 것만 특정한다.
+ *
+ * 다운로드 버튼은 여전히 쓰지 않는다 — 2026-08-30 Grok UI 에서 최상위 "다운로드" 가
+ * 「게시물 작업」 메뉴 안으로 들어갔고, 버튼 라벨을 쫓으면 UI 가 바뀔 때마다 깨진다.
  */
-async function waitForNewVideo(tab, before) {
-  const seen = new Set(before);
+async function waitForOwnVideo(tab, postPath) {
+  const postId = (postPath.split('/imagine/post/')[1] || '').split('?')[0];
+  if (!postId) throw new Error(`게시물 id 를 읽지 못했습니다: ${postPath}`);
+
   const t0 = Date.now();
   while (Date.now() - t0 < GEN_TIMEOUT_MS) {
     await sleep(5000);
-    const now = videoSrcs(tab);
-    const fresh = now.filter(u => !seen.has(u));
-    if (fresh.length) return fresh[0];
+    // 본 영상 = <button> 밖의 <video>. 스트립 썸네일은 전부 버튼 안이라 이걸로 갈린다.
+    // poster 는 인코딩 전에도 뜨므로 준비 판정에 쓰지 않는다 — 브라우저가 실제
+    // 리소스를 물었을 때만 채워지는 currentSrc + readyState 를 신호로 쓴다.
+    // currentSrc·readyState 는 쓰지 않는다 — 백그라운드 탭에서는 Chrome 이 <video>
+    // 리소스를 아예 안 물어서 둘 다 영영 비어 있다(2026-09-01: 6분 타임아웃).
+    // poster 는 렌더만으로 채워지므로 백그라운드에서도 읽힌다.
+    let poster = '';
+    try {
+      poster = chromeJS(`(function(){
+        var v=[].slice.call(document.querySelectorAll('video')).filter(function(x){return !x.closest('button');})[0];
+        return (v && v.poster) ? v.poster : '';
+      })()`);
+    } catch { continue; }
+    if (poster.includes(`/generated/${postId}/`)) {
+      return poster.replace('preview_image.jpg', 'generated_video.mp4');
+    }
   }
-  throw new Error(`새 영상 URL 이 ${Math.round(GEN_TIMEOUT_MS / 1000)}초 안에 뜨지 않았습니다`);
+  throw new Error(`게시물 ${postId} 의 영상이 ${Math.round(GEN_TIMEOUT_MS / 1000)}초 안에 준비되지 않았습니다`);
 }
 
 /**
@@ -541,7 +671,7 @@ async function main() {
   );
 
   console.log(`🖥  실제 Chrome (AppleScript) — w${tab.windowIdx}t${tab.tabIdx}`);
-  let made = 0, failed = 0;
+  let made = 0, failed = 0, stalls = 0;
 
   for (const [i, scene] of wanted.entries()) {
     const still = join(imagesDir, `scene_${scene.id}.png`);
@@ -553,10 +683,15 @@ async function main() {
       navigate(tab, GROK_URL);
       await waitReady(tab, 60000);
       await attachStill(tab, still);
-      const beforeSrcs = videoSrcs(tab);
-      await submitPrompt(tab, motionFor(scene));
-      const videoUrl = await waitForNewVideo(tab, beforeSrcs);
-      await fetchVideoToFile(tab, videoUrl, outPath);
+      const postPath = await submitPrompt(tab, motionFor(scene));
+      const videoUrl = await waitForOwnVideo(tab, postPath);
+      // poster 는 인코딩이 끝나기 전에도 뜬다 — 실제로 받아질 때까지가 완료 신호다.
+      let fetched = false, lastErr = null;
+      for (let i = 0; i < 30 && !fetched; i++) {
+        try { await fetchVideoToFile(tab, videoUrl, outPath); fetched = true; }
+        catch (e) { lastErr = e; await sleep(10000); }
+      }
+      if (!fetched) throw new Error(`영상을 내려받지 못했습니다: ${lastErr?.message || '이유 불명'}`);
 
       // 중복 판정은 쓰기 직후 산출물에서 한다. 같은 파일이 두 씬에 박히면
       // 같은 화면이 두 번 나가는 영상이 발행된다 (2026-08-26 EP-0116 실측).
@@ -578,9 +713,18 @@ async function main() {
 
       made += 1;
       console.log(`  ✅ 씬 ${scene.id} → ${outPath}`);
+      stalls = 0;   // 하나라도 나왔으면 서비스는 살아 있다
     } catch (e) {
       failed += 1;
       console.warn(`  ❌ 씬 ${scene.id}: ${e.message}`);
+      if (STALL_PATTERN.test(e.message)) stalls += 1; else stalls = 0;
+      if (made === 0 && stalls >= STALL_ABORT_AFTER) {
+        const left = wanted.length - i - 1;
+        console.error(`  ⛔ 연속 ${stalls}컷이 생성 정체로 실패했고 성공이 없습니다 — Grok 서비스측 문제로 봅니다.`);
+        console.error(`     남은 ${left}컷을 시도하지 않고 멈춥니다 (컷당 ${Math.round(GEN_TIMEOUT_MS / 60000)}분 × ${left}컷을 아낍니다).`);
+        console.error('     파이프라인이 HyperFrames 폴백으로 이어갑니다. 한도가 의심되면 Chrome 에서 grok.com/imagine 을 직접 확인하세요.');
+        break;
+      }
     }
 
     if (CUT_DELAY_MS > 0 && i < wanted.length - 1) {
