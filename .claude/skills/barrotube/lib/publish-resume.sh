@@ -43,6 +43,23 @@ for ep_dir in $(ls -d "$EPISODES"/EP-* 2>/dev/null | sort | tail -5); do
     [ -s "$result" ] && continue            # 이미 올라갔다
     [ -s "$video" ] || continue             # 렌더가 없으면 올릴 것도 없다
 
+    # 거부창이 열려 있으면 손대지 않는다.
+    #
+    # auto-pipeline 이 Phase 10 에서 승인 토큰을 스스로 발급하고(auto_approve_on_qa_pass),
+    # Phase 12 는 거부창 뒤에 막혀 있어 결과 파일이 아직 없다. 그 조합이 위 세 조건과
+    # 정확히 일치해서, 창이 열려 있는 EP 가 여기 타깃으로 잡혔다. 2026-09-08 EP-2026-0143:
+    # 창 17:20:54~17:50:59 인데 이 스크립트가 17:32 에 올려 버려, 운영자가 /reject 를
+    # 칠 수 있는 18분이 무의미해졌다. 중복 발행은 아니었지만(뒤에 duplicate 가드가 걸림)
+    # **취소 기회 자체가 사라진 것**이 문제다.
+    #
+    # 방치된 승인을 되살리는 이 스크립트의 목적은 그대로다 — 마감이 지난 표식은
+    # reject_window_open 이 스스로 지우고 통과시킨다.
+    if reject_window_open "$ep_id"; then
+      echo "⏭  ${ep_id} (${platform}) — 거부창이 열려 있다 (마감 ${REJECT_WINDOW_DEADLINE}) · 건너뜀"
+      audit "publish_resume_window_open" "INFO" "ep=$ep_id platform=$platform deadline=${REJECT_WINDOW_DEADLINE}"
+      continue
+    fi
+
     found=$((found + 1))
     echo "▶ ${ep_id} (${platform}) — 승인 완료·미게시"
     if [ "$DRY_RUN" = "1" ]; then

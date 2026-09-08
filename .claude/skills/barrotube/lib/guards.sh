@@ -224,8 +224,25 @@ wait_telegram_reject_window() {
   local ep="$1"
   local minutes=$(python3 -c "import json;print(json.load(open('$AUTONOMY_FILE')).get('guards',{}).get('publish_reject_window_minutes',30))")
   local reject_file="${BARROTUBE_HOME}/workspace/.reject-window/${ep}.flag"
+  local open_file="${BARROTUBE_HOME}/workspace/.reject-window/${ep}.open"
   mkdir -p "$(dirname "$reject_file")"
   rm -f "$reject_file"   # 시작 시 클리어
+
+  # 창이 열려 있다는 사실을 **파일로** 남긴다.
+  #
+  # 예전에는 아무 표식도 없어서 "이 EP 는 지금 취소 대기 중" 을 다른 프로세스가
+  # 알 방법이 없었다. 그래서 publish-resume 크론(07:30·17:30)이 창 한가운데서
+  # 같은 EP 를 먼저 올려 버렸다 — 2026-09-08 EP-2026-0143 실측: 창이
+  # 17:20:54~17:50:59 인데 업로드가 17:32 에 끝났고, 그 18분 동안 운영자의
+  # /reject 는 아무 효력이 없었다. 슬롯(16:00)과 크론(17:30)의 구조적 겹침이라
+  # 우연이 아니다 — Phase 11 에 74~90분 만에 닿으면 항상 겹친다.
+  #
+  # 마감 시각을 적는 이유: 파이프라인이 창 도중 죽으면 표식이 남는데, 그게 영원히
+  # 발행을 막으면 "승인됐는데 안 올라간 EP 를 되살린다" 는 publish-resume 의
+  # 존재 이유가 사라진다. 지난 표식은 무시하고 지운다.
+  local deadline
+  deadline=$(python3 -c "import datetime;print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(minutes=$minutes)).isoformat())")
+  printf '%s\n' "$deadline" > "$open_file"
 
   notify_telegram "🟡 <b>${ep}</b> reject window 시작 (${minutes}분)\n취소하려면 <code>/reject ${ep}</code>"
   audit "telegram_reject_window_start" "INFO" "ep=$ep minutes=$minutes"
@@ -237,12 +254,36 @@ wait_telegram_reject_window() {
       echo "🛑 운영자 reject 수신 — publish 중단"
       audit "telegram_reject_window" "REJECTED" "ep=$ep at_minute=$i"
       notify_telegram "🛑 <b>${ep}</b> publish 취소됨 (운영자 reject)"
+      rm -f "$open_file"
       return 1
     fi
     i=$((i+1))
   done
+  rm -f "$open_file"
   audit "telegram_reject_window_passed" "INFO" "ep=$ep waited=${minutes}min"
   return 0
+}
+
+# 거부창이 지금 열려 있나. 0=열림(건드리지 마라) · 1=아님.
+# 마감이 지난 표식은 파이프라인이 죽어 남긴 것이므로 지우고 1 을 돌린다.
+reject_window_open() {
+  local ep="$1"
+  local open_file="${BARROTUBE_HOME}/workspace/.reject-window/${ep}.open"
+  [ -s "$open_file" ] || return 1
+  REJECT_WINDOW_DEADLINE=$(head -1 "$open_file")
+  if BT_RW_DEADLINE="$REJECT_WINDOW_DEADLINE" python3 -c "
+import sys, os, datetime
+raw = os.environ.get('BT_RW_DEADLINE', '').strip()
+try:
+    d = datetime.datetime.fromisoformat(raw)
+except Exception:
+    sys.exit(1)
+sys.exit(0 if datetime.datetime.now(datetime.timezone.utc) < d else 1)
+" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$open_file"   # 지난 표식 — 창을 돌던 프로세스가 죽었다
+  return 1
 }
 
 # ─────────────────────────────────────────────────
