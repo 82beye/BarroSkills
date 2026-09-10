@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   ageDays, vpd, baselineVpd, recentVideos, hitRate, likeRate,
   netDelta, weeklyViewsGrowth, grade, overallGrade, computeScorecard, normalizeIndex,
+  indexViewsAt, viewsAtAge, avgViewPct,
 } from '../scripts/automation/lib/growth-kpi.js';
 
 const NOW = new Date('2026-08-31T12:00:00Z');
@@ -11,6 +12,19 @@ const daysAgo = (d) => new Date(NOW.getTime() - d * 86400_000).toISOString();
 const vid = (d, views, likes = 0, over = {}) => ({
   videoId: `v${d}`, title: `t${d}`, publishedAt: daysAgo(d), views, likes, comments: 0, ...over,
 });
+
+/** 게시 후 48h 시점 관측을 붙인 영상. 나이 정합 히트율은 이 값을 본다. */
+const vidAt48 = (d, at48, final = at48, likes = 0) => {
+  const pub = new Date(NOW.getTime() - d * 86400_000);
+  return {
+    videoId: `w${d}`, title: `w${d}`, publishedAt: pub.toISOString(),
+    views: final, likes, comments: 0,
+    stats_history: [
+      { at: new Date(pub.getTime() + 47 * 3600_000).toISOString(), views: at48, likes },
+      { at: NOW.toISOString(), views: final, likes },
+    ],
+  };
+};
 
 test('ageDays·vpd — 24h 미만은 하루로 클램프, 파싱 불가는 null', () => {
   assert.ok(Math.abs(ageDays(vid(3, 0), NOW) - 3) < 1e-9);
@@ -28,11 +42,34 @@ test('baselineVpd — 7~37d 창, 표본 3 미만이면 null', () => {
   assert.equal(baselineVpd([...base3, vid(3, 99999), vid(40, 1)], NOW), 100);
 });
 
-test('hitRate — 기준선 1.5배 이상 비율, 기준선 없으면 null', () => {
-  const base = [vid(10, 1000), vid(20, 2000), vid(30, 3000)]; // baseline vpd=100
-  const recent = [vid(2, 400), vid(3, 100)]; // vpd 200(hit), 33(miss)
+test('hitRate — 48h 조회를 같은 자로 견준다 (나이 편향 회귀 방지)', () => {
+  // 기준선: 48h 에 1000 을 받은 영상 3편 → median 1000, 히트 기준 1500
+  const base = [vidAt48(10, 1000), vidAt48(20, 1000), vidAt48(30, 1000)];
+  const recent = [vidAt48(3, 1600), vidAt48(4, 900)]; // 히트 1 / 미스 1
   assert.equal(hitRate([...base, ...recent], NOW), 0.5);
-  assert.equal(hitRate(recent, NOW), null); // 기준선 표본 부족
+  assert.equal(hitRate(recent, NOW), null, '기준선 표본이 3 미만이면 null');
+
+  // 나이만 다르고 성과가 같은 영상은 같은 판정을 받아야 한다.
+  // 예전 vpd 방식에서는 3일차가 히트, 30일차가 미스로 갈렸다.
+  const same = hitRate([...base, vidAt48(3, 1600)], NOW);
+  const older = hitRate([...base, vidAt48(30, 1600)], NOW, { windowDays: 40 });
+  assert.equal(same, 1, '3일차 1600 은 히트');
+  assert.ok(older > 0, '30일차 1600 도 히트여야 한다 — 나이로 탈락시키지 않는다');
+
+  // 아직 48h 를 못 넘긴 영상은 실패로 세지 않는다 (분모에서 빠진다)
+  const young = hitRate([...base, vidAt48(3, 1600), vid(0.5, 20)], NOW);
+  assert.equal(young, 1, '48h 미만은 판정 대상이 아니다');
+});
+
+test('indexViewsAt — 채널 viewCount 대신 영상별 관측을 시점으로 합산한다', () => {
+  // 채널 statistics.viewCount 는 Shorts 를 안 세서 주간 증분이 +16 으로 나왔고,
+  // 그게 구독 전환 분모로 들어가 375/1k(GREEN)를 만들었다 (2026-09-10).
+  const vs = [vidAt48(10, 500, 900), vidAt48(20, 300, 700)];
+  assert.equal(indexViewsAt(vs, NOW), 1600, '최신 관측 합');
+  const earlier = new Date(NOW.getTime() - 9 * 86400_000);
+  assert.equal(indexViewsAt(vs, earlier), 300, '그 시점에 관측된 것만 센다');
+  assert.equal(indexViewsAt([], NOW), null, '관측 없으면 null');
+  assert.equal(viewsAtAge(vidAt48(10, 500, 900), 48), 500);
 });
 
 test('likeRate — Σlikes/Σviews, 최근 조회 0이면 null', () => {
@@ -88,7 +125,14 @@ test('computeScorecard — 관측 0 상태에서도 죽지 않고 NA 스코어�
   const config = JSON.parse(readFileSync(new URL('../config/growth.json', import.meta.url), 'utf-8'));
   const empty = computeScorecard({ videos: [], history: [], config, now: NOW });
   assert.ok(['NA', 'RED'].includes(empty.overall)); // 발행 0/13 은 RED 로 잡혀야 정상
-  assert.equal(empty.kpis.length, 6);
+  // 개수는 config 에서 파생한다 — 지표를 하나 늘릴 때마다 이 테스트가 깨지면
+  // 진짜 계약(모든 정의된 지표가 스코어카드에 나온다)이 가려진다.
+  assert.equal(empty.kpis.length, Object.keys(config.kpis).length);
+  assert.deepEqual(
+    empty.kpis.map((x) => x.id).sort(),
+    Object.keys(config.kpis).sort(),
+    'config 에 정의된 지표는 빠짐없이 스코어카드에 실려야 한다',
+  );
 
   const videos = [
     ...[10, 15, 20, 30].map((d) => vid(d, d * 100, d)),
@@ -123,4 +167,23 @@ test('normalizeIndex — stats_history 마지막 관측을 편다', () => {
   assert.equal(v.views, 99);
   assert.equal(v.likes, 5);
   assert.equal(normalizeIndex({}).length, 0);
+});
+
+test('avgViewPct — 조회 가중 평균, Analytics 없으면 null', () => {
+  // 시청률은 Shorts 피드 노출의 선행지표다. 조회가 많은 날이 더 무겁게 반영돼야
+  // "많이 퍼진 영상이 어떻게 소비됐나" 를 대표한다.
+  const rows = [
+    { day: '2026-08-30', views: 1000, averageViewPercentage: 80 },
+    { day: '2026-08-31', views: 100, averageViewPercentage: 40 },
+  ];
+  const now = new Date('2026-08-31T12:00:00Z');
+  const got = avgViewPct(rows, now);
+  assert.ok(Math.abs(got - (1000 * 80 + 100 * 40) / 1100 / 100) < 1e-9, '조회 가중이어야 한다');
+
+  assert.equal(avgViewPct([], now), null);
+  assert.equal(avgViewPct(null, now), null);
+  // 창 밖의 날은 빠진다
+  assert.equal(avgViewPct([{ day: '2026-08-01', views: 999, averageViewPercentage: 90 }], now), null);
+  // 조회 0 인 날은 분모를 오염시키지 않는다
+  assert.equal(avgViewPct([...rows, { day: '2026-08-31', views: 0, averageViewPercentage: 5 }], now), got);
 });

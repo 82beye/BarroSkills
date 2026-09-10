@@ -55,6 +55,14 @@
       "yellow": 0.5,
       "direction": "gte",
       "format": "float"
+    },
+    "avg_view_pct_7d": {
+      "label": "평균 시청률(7d)",
+      "_comment": "Analytics averageViewPercentage 7일 가중평균. Shorts 피드 노출을 가르는 선행지표 — 2026-09-10 실측: 60%↑ 12편 조회 중앙값 976 vs 60%↓ 5편 651.",
+      "green": 0.65,
+      "yellow": 0.55,
+      "direction": "gte",
+      "format": "pct"
     }
   },
   "experiments": {

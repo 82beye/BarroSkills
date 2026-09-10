@@ -15,7 +15,7 @@
  *   node growth-kpi.js --date 2026-08-31
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { computeScorecard, normalizeIndex } from './lib/growth-kpi.js';
@@ -38,6 +38,19 @@ function loadHistory(path) {
     .filter(Boolean);
 }
 
+/** 가장 최근 analytics-*.json 을 {day, views, averageViewPercentage, ...} 배열로 편다. */
+function loadAnalyticsRows(dir) {
+  let files = [];
+  try {
+    files = readdirSync(dir).filter((f) => /^analytics-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort();
+  } catch { return null; }
+  if (!files.length) return null;
+  const doc = loadJSON(join(dir, files[files.length - 1]));
+  const cols = (doc?.columnHeaders ?? []).map((c) => c.name);
+  if (!cols.length || !Array.isArray(doc?.rows)) return null;
+  return doc.rows.map((r) => Object.fromEntries(cols.map((c, i) => [c, r[i]])));
+}
+
 function main() {
   const { values } = parseArgs({ options: { date: { type: 'string' } } });
   const date = values.date || new Date().toISOString().slice(0, 10);
@@ -50,7 +63,10 @@ function main() {
   const history = loadHistory(join(CH_DIR, 'history.jsonl'));
 
   const videos = normalizeIndex(index);
-  const card = computeScorecard({ videos, history, config, now });
+  // Analytics 행(일별 시청률)은 fetch-channel-stats 가 analytics-YYYY-MM-DD.json 으로 남긴다.
+  // 없으면 그 지표만 NA 로 떨어지고 나머지는 그대로 계산된다.
+  const analytics = loadAnalyticsRows(CH_DIR);
+  const card = computeScorecard({ videos, history, config, now, analytics });
 
   const expState = loadJSON(join(ROOT, 'workspace', 'growth', 'experiments.json'), {});
   const curExp = expState.current ?? null;

@@ -67,18 +67,41 @@ async function yt(token, path, params) {
   return body;
 }
 
-/** Analytics API 프로브. 스코프 없으면(401/403) null — 정상 강등. */
+/**
+ * Analytics API 프로브. 실패해도 파이프라인은 계속 돈다 — 다만 **왜** 실패했는지는 남긴다.
+ *
+ * 예전에는 어떤 실패든 null 을 돌려주고 로그에 "스코프 없음" 한 줄만 찍었다.
+ * 2026-09-10 실측: 스코프는 정상이었고 진짜 원인은 Cloud 프로젝트에서 이 API 가
+ * 꺼져 있던 것(SERVICE_DISABLED)이었다. 잘못된 원인이 로그에 박혀 있으면
+ * 운영자가 엉뚱한 곳을 고친다.
+ */
+export const ANALYTICS_REASON = { value: null };
+
 async function tryAnalytics(token, channelId, date) {
   const end = date;
   const start = new Date(Date.parse(date) - 6 * 86400_000).toISOString().slice(0, 10);
   const params = new URLSearchParams({
     ids: `channel==${channelId}`, startDate: start, endDate: end,
-    metrics: 'views,estimatedMinutesWatched,averageViewDuration,subscribersGained,subscribersLost',
+    // averageViewPercentage 가 핵심이다 — 길이가 다른 영상을 같은 자로 재는 유일한 값이고,
+    // Shorts 피드 노출을 가르는 선행지표다 (2026-09-10 실측: 60%↑ 12편 조회 중앙값 976 vs
+    // 60%↓ 5편 651). averageViewDuration 만 있으면 3분 포맷과 60초 포맷이 섞여 비교가 안 된다.
+    metrics: 'views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,subscribersGained,subscribersLost',
     dimensions: 'day',
   });
   const res = await fetch(`${ANALYTICS_API}?${params}`, { headers: { Authorization: `Bearer ${token}` } });
-  if (res.status === 401 || res.status === 403) return null;
-  if (!res.ok) return null;
+  if (!res.ok) {
+    let msg = '';
+    try { msg = JSON.stringify(await res.json()); } catch { /* 본문 없음 */ }
+    if (/SERVICE_DISABLED|has not been used in project|is disabled/i.test(msg)) {
+      ANALYTICS_REASON.value = 'API 비활성 — Cloud 콘솔에서 YouTube Analytics API 를 켜라';
+    } else if (res.status === 401 || res.status === 403) {
+      ANALYTICS_REASON.value = `스코프 없음 또는 권한 부족 (${res.status}) — yt-analytics.readonly 재동의`;
+    } else {
+      ANALYTICS_REASON.value = `Analytics ${res.status}: ${msg.slice(0, 120)}`;
+    }
+    return null;
+  }
+  ANALYTICS_REASON.value = null;
   return res.json();
 }
 
@@ -180,7 +203,7 @@ async function main() {
 
   console.log(`📊 fetch-channel-stats: ${c.snippet?.title} — subs=${stats.subscriberCount} views=${stats.viewCount} videos=${stats.videoCount}`);
   console.log(`   인덱스 ${Object.keys(index.videos).length}편 (이번 회차 ${fetched}편 갱신${firstRun ? ' · 첫 실행 백필' : ''})`);
-  console.log(`   Analytics API: ${an ? '✓ 수집' : '스코프 없음 — 건너뜀 (yt-analytics.readonly 재동의 시 자동 활성)'}`);
+  console.log(`   Analytics API: ${an ? '✓ 수집' : `건너뜀 — ${ANALYTICS_REASON.value || '원인 미상'}`}`);
 }
 
 main().catch((e) => {
