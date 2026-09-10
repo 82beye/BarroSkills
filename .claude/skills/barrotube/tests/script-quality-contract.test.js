@@ -30,6 +30,14 @@ test('spoken numbers are counted, index names spelled in Korean are not', () => 
   // 보통 낱말이 수사로 잡히면 안 된다.
   assert.equal(countSpokenNumbers('일명 그림자 금융이라 불립니다').length, 0);
   assert.equal(countSpokenNumbers('만일에 대비해야 합니다').length, 0);
+
+  // 앞이 한글이면 그 한 음절은 수사가 아니라 조사다. 이걸 세면 멀쩡한 문장이
+  // 씬 상한에 걸려 자동 재집필이 통째로 막힌다 (EP-2026-0128 실사례).
+  assert.equal(countSpokenNumbers('수급 반전이 달러 재료를 압도했다').length, 0, '"…반전이 달러" 의 조사 이');
+  assert.equal(countSpokenNumbers('전망이 원 단위로 갈린다').length, 0, '"…전망이 원" 의 조사 이');
+  // 다만 진짜 수사는 문장 첫머리에서도 계속 세야 한다.
+  assert.equal(countSpokenNumbers('이 퍼센트 올랐습니다').length, 1);
+  assert.equal(countSpokenNumbers('금리는 오 퍼센트입니다').length, 1);
 });
 
 test('a scene may speak only a couple of numbers — the screen shows the rest for free', () => {
@@ -127,4 +135,40 @@ test('the gate accepts most of what the channel already ships', () => {
   }
   const rate = pass / files.length;
   assert.ok(rate > 0.5, `기존 대본 통과율이 ${Math.round(rate * 100)}% 로 떨어졌다 — 규칙이 과하다`);
+});
+
+
+test('hook-too-long — 훅 10초 상한, 되돌리되 막지는 않는다', async () => {
+  const { validateScript, HOOK_MAX_SECONDS } = await import('../scripts/automation/lib/script-quality-contract.js');
+  const body = (over = {}) => ([
+    { scene_id: '001', role: 'hook', narration: '코스피가 크게 올랐습니다. 왜일까요?', target_seconds: 9, ...over },
+    { scene_id: '002', role: 'context', narration: '배경입니다.', target_seconds: 13 },
+    { scene_id: '003', role: 'insight', narration: '수급 때문입니다.', target_seconds: 13 },
+    { scene_id: '004', role: 'implication', narration: '그래서 이런 뜻입니다.', target_seconds: 13 },
+    { scene_id: '005', role: 'cta', narration: '팔로우하세요.', target_seconds: 12 },
+  ]);
+
+  assert.equal(validateScript(body()).filter((i) => i.rule === 'hook-too-long').length, 0, '9초는 통과');
+
+  const long = validateScript(body({ target_seconds: HOOK_MAX_SECONDS + 0.5 }))
+    .filter((i) => i.rule === 'hook-too-long');
+  assert.equal(long.length, 1, '상한 초과는 잡힌다');
+  assert.equal(long[0].severity, 'warn', '게이트를 막지는 않는다');
+  assert.equal(long[0].rewrite, true, '한 번은 되돌린다');
+
+  // 3분 포맷은 표본이 2편뿐이라 이 규칙을 적용하지 않는다 — 근거 없는 확대 금지.
+  const longFormat = [
+    { scene_id: '001', role: 'hook', narration: '훅.', target_seconds: 24 },
+    ...Array.from({ length: 6 }, (_, i) => ({
+      scene_id: `00${i + 2}`, role: 'context', narration: '본문.', target_seconds: 25,
+    })),
+  ];
+  assert.equal(
+    validateScript(longFormat).filter((i) => i.rule === 'hook-too-long').length, 0,
+    '총 90초 초과 대본에는 적용하지 않는다',
+  );
+
+  // 계약 블록의 숫자가 검증기와 갈라지면 안 된다
+  const { buildAnalystContractBlock } = await import('../scripts/automation/lib/script-quality-contract.js');
+  assert.match(buildAnalystContractBlock(5), new RegExp(`훅\\(씬 1\\)은 ${HOOK_MAX_SECONDS}초`));
 });

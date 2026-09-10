@@ -87,6 +87,23 @@ export const ANALYTIC_ROLES = ['insight', 'implication', 'cause', 'impact'];
 export const PROPER_NOUN_NUMERALS = ['에스앤피오백', '러셀이천', '유로스톡스오십', '니케이이백이십오'];
 
 /**
+ * 훅(씬 1)이 써도 되는 초. 60초 포맷 기준.
+ *
+ * 근거 — 2026-09-10 YouTube Analytics 실측(60초 포맷 15편):
+ *   훅 ≥ 10초 : 3편, 평균 시청률 56.5%
+ *   훅 <  10초 : 12편, 평균 시청률 70.4%
+ * 리텐션 곡선을 보면 승부는 영상 길이의 5~20% 구간, 즉 3~12초에서 갈린다.
+ * 상위 2편은 그 구간에서 30~35%p 를 잃는데 하위 2편은 47~48%p 를 잃는다.
+ * 훅이 길어질수록 그 구간을 훅 하나로 다 쓰게 되고, 시청자는 다음 장면을 보기 전에 떠난다.
+ *
+ * 이 채널은 유입의 96.9% 가 Shorts 피드다 — 시청률이 곧 노출이고, 노출이 곧 조회다.
+ */
+export const HOOK_MAX_SECONDS = 10;
+
+/** 이 상한을 적용할 대본 길이. 3분 포맷은 표본이 2편뿐이라 단정하지 않는다. */
+export const HOOK_RULE_MAX_TOTAL_SECONDS = 90;
+
+/**
  * 씬 하나가 말해도 되는 수치 개수.
  * 20초를 넘는 씬은 한 개 더 쓸 여유가 있다 — 롱폼까지 같은 규칙으로 덮는다.
  */
@@ -126,6 +143,7 @@ export function validateScript(scenes) {
   if (!Array.isArray(scenes) || scenes.length === 0) return issues;
 
   const totalCap = totalSpokenNumberCap(scenes.length);
+  const totalSeconds = scenes.reduce((n, sc) => n + (Number(sc.target_seconds) || 0), 0);
   let totalNumbers = 0;
   let totalHedges = 0;
   const seenNumbers = new Set();
@@ -144,6 +162,14 @@ export function validateScript(scenes) {
         rule: 'spoken-number-budget', severity: 'error', scene_id: id,
         message: `씬 ${id}: 말한 수치 ${numbers.length}개 (상한 ${cap}) — ${numbers.join(', ')}`,
         suggestion: '가장 중요한 수치 하나만 말하고 나머지는 subtitle_text 로 옮겨라. 남는 초는 그 수치가 왜 그런지에 써라.',
+      });
+    }
+
+    if (role === 'hook' && Number(scene.target_seconds) > HOOK_MAX_SECONDS && totalSeconds <= HOOK_RULE_MAX_TOTAL_SECONDS) {
+      issues.push({
+        rule: 'hook-too-long', severity: 'warn', rewrite: true, scene_id: id,
+        message: `씬 ${id}(hook): ${scene.target_seconds}초 — 상한 ${HOOK_MAX_SECONDS}초`,
+        suggestion: '훅에서 배경 설명을 빼고 한 문장으로 줄여라. 시청자는 3~12초 안에 계속 볼지 정한다 — 그 구간을 훅 하나로 쓰면 다음 장면까지 못 간다.',
       });
     }
 
@@ -210,6 +236,10 @@ export function validateScript(scenes) {
 export function buildAnalystContractBlock(sceneCount) {
   return `
 RULE 4-CONTRACT — 분석 밀도 (machine-checked by validate-script-quality.js):
+
+0. 훅(씬 1)은 ${HOOK_MAX_SECONDS}초를 넘기지 마라. 시청자는 3~12초 안에 계속 볼지 정한다
+   (2026-09-10 실측: 훅 10초 이상 3편 시청률 56.5% vs 10초 미만 12편 70.4%).
+   배경 설명은 씬 2로 넘기고, 훅은 "무엇이 이상한가" 한 문장이면 된다.
 
 A. 말할 수치는 비싸다. narration 의 숫자는 한글 수사로 읽힌다 — "+0.26%" 는
    "영점이육 퍼센트" 여덟 음절이고, 60초 대본의 2%다. 같은 숫자가 subtitle_text 에는
