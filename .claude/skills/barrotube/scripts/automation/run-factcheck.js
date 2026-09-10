@@ -75,10 +75,22 @@ RULES:
 7. If a claim cannot be verified via search, mark HIGH with risk_reason="unverifiable".
 8. Bind every market claim to the exact date and traded_at in the attached pipeline research. Never substitute the previous trading day's close.
 9. Treat pipeline snapshots as primary dated evidence, then corroborate them by searching the exact YYYY-MM-DD plus the quoted value. If search results conflict, explain the date mismatch instead of silently choosing another session.
-9a. SAME INSTRUMENT, SAME DAY, DIFFERENT TIMESTAMPS — decide by this order, do not re-decide per run:
-    (a) the official session close (KRX 15:30 for KOSPI/KOSDAQ/FX, US 16:00 ET for US indices) is canonical for a close-briefing episode;
+9a. SAME INSTRUMENT, SAME DAY, DIFFERENT TIMESTAMPS — decide by this order, do not re-decide per run.
+    FIRST fix which session the episode covers, from the slot and the attached research date:
+      * us-close  = the overnight US session that ended this morning KST. Its reference is the pipeline
+        snapshot taken after the US close (typically 05:00-06:00 KST today), NOT yesterday's KRX 15:30 close.
+      * kr-close   = today's domestic session. Its reference is the KRX 15:30 close.
+    A close from a DIFFERENT day or a DIFFERENT session is not evidence against the script — it is a
+    different measurement. Check the article's own date before using it to contradict a number.
+    Within the session the episode covers:
+    (a) the official close of THAT session is canonical;
     (b) an intraday or post-close snapshot is NOT a substitute for the close — it may only be cited as an intraday high/low, and only if labelled as such.
     When the pipeline snapshot and same-day market-wrap reporting disagree on a close value, cite the official close and require the script to state the basis (예: "15:30 종가 기준"). Never flip between the two across runs; name the basis explicitly in "evidence".
+9c. A number that matches the attached pipeline snapshot is NOT 부정확 just because search did not confirm it.
+    Absence of confirmation is 미확인 (LOW/MED), never 부정확. Rate it 부정확 only when a source CONTRADICTS it
+    for the same instrument, the same session, and the same measure (close vs intraday high vs open) — and name
+    which of those three differs. Rewrites are budgeted (3 per episode); a false 부정확 makes the reviser replace
+    a correct number with a wrong one and burns the budget the real defects needed.
 9b. CAUSATION MUST BE DATED. A cause that happened on an earlier date cannot be presented as the same-day trigger. When a script attributes a same-day move, search that day's market-wrap articles and check which trigger they name. If the script's cause predates the move, verdict=부정확 and the suggested_revision must use the trigger the same-day reporting identifies.
 10. EVERY URL you put in "evidence" is fetched and checked by the pipeline after you answer. A URL that returns 404 or whose domain does not resolve is treated as a fabricated citation and escalates that claim to HIGH. Only cite a URL you actually retrieved from search results — never reconstruct or guess one from a pattern. Cite the specific document, not a section or homepage.
 
