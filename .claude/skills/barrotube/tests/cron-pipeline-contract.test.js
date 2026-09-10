@@ -291,7 +291,12 @@ test('a browser pass that runs out of context is topped up scene by scene', () =
 
   // 무진전이면 멈춰야 한다 — 같은 씬에 codex 를 무한히 던지면 타임아웃까지 태운다.
   assert.match(source, /TOPUP_STALLED" -lt 2/);
-  assert.match(source, /BT_CHATGPT_TOPUP_MAX:-6/);
+  // 상한은 씬 수에서 나와야 한다. 6 으로 고정돼 있던 동안 7씬 슬롯은 완주가 산술적으로
+  // 불가능했다 — 첫 패스가 0장이면 남은 6회로 7장을 못 채운다 (2026-09-10 EP-2026-0147:
+  // 1/6~6/6 을 다 쓰고 5/7 에서 멈췄다).
+  assert.match(source, /BT_CHATGPT_TOPUP_MAX:-\$\(\( SLOT_SCENES \+ 2 \)\)/,
+    'top-up 상한은 SLOT_SCENES 에서 파생돼야 한다');
+  assert.ok(!/BT_CHATGPT_TOPUP_MAX:-\d/.test(source), '고정 숫자 상한은 7씬 슬롯을 막는다');
   // 한 번에 한 씬만. 프롬프트가 다시 커지면 같은 소진에 빠진다.
   assert.match(source, /씬 \$\{NEXT_SCENE\} 이미지 한 장만/);
 });
@@ -601,4 +606,45 @@ test('the pipeline survives a bare launchd PATH', () => {
   assert.equal(r.status, 0, `must exit 0 under a bare PATH: ${r.stderr}`);
   assert.match(r.stdout, /경쟁 인텔 루틴/);
   assert.doesNotMatch(r.stdout + r.stderr, /node: command not found|node 를 찾을 수 없습니다/);
+});
+
+
+test('시드 대화 판정 전에 지연 렌더를 기다린다', () => {
+  // ChatGPT 는 대화 본문을 늦게 그린다. 열자마자 판정하면 멀쩡한 시드를 「없음」 으로 버린다
+  // (2026-09-10: 재시드해 정상 동작하던 대화를 두 슬롯이 모두 "시드 대화 없음" 으로 처리).
+  const source = readFileSync(AUTO, 'utf8');
+  assert.match(source, /지연 렌더/, '지연 렌더를 프롬프트가 알려 줘야 한다');
+  assert.match(source, /최소 20초/, '판정 전 대기 시간이 명시돼야 한다');
+  assert.match(source, /새로고침해 다시/, '한 번은 새로고침하고 다시 기다려야 한다');
+});
+
+test('슬롯 스케줄이 서로 겹치지 않는다 — in-flight 락은 겹치면 뒤쪽을 죽인다', () => {
+  // 락은 설계대로 직렬화하지만, 겹치게 짜면 뒤에 온 쪽이 이미 만든 자산을 버리고 exit 2 로 죽는다.
+  // 2026-09-10 실측: kr-close(16:00, 3.5h)가 이미지 5/5 를 끝내고 Phase 8 에서
+  // realestate(17:00)가 쥔 락에 막혀 종료. 목요일 2회 모두 두 슬롯 동반 실패했다.
+  const routines = JSON.parse(readFileSync(join(ROOT, 'config', 'routines.json'), 'utf8'));
+  const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const RUN_HOURS = 4;   // 실측 최장 3.5h + 여유
+
+  const windows = [];
+  for (const [name, slot] of Object.entries(routines.slots ?? {})) {
+    const cron = String(slot.cron ?? '');
+    const hm = cron.match(/(\d{1,2}):(\d{2})/);
+    if (!hm) continue;
+    const start = Number(hm[1]) + Number(hm[2]) / 60;
+    const dayTok = cron.match(/(Mon|Tue|Wed|Thu|Fri|Sat|Sun)/g);
+    const days = dayTok && !/-/.test(cron.split(' ')[0]) ? dayTok
+      : /Mon-Fri/.test(cron) ? DAYS.slice(0, 5) : DAYS;
+    for (const d of days) windows.push({ name, day: d, start, end: start + RUN_HOURS });
+  }
+
+  for (let i = 0; i < windows.length; i++) {
+    for (let j = i + 1; j < windows.length; j++) {
+      const a = windows[i]; const b = windows[j];
+      if (a.name === b.name || a.day !== b.day) continue;
+      const overlap = a.start < b.end && b.start < a.end;
+      assert.ok(!overlap,
+        `${a.day}: ${a.name}(${a.start}시~) 와 ${b.name}(${b.start}시~) 가 겹친다 — 뒤쪽이 락에 막혀 죽는다`);
+    }
+  }
 });
