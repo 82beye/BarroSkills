@@ -39,7 +39,14 @@ const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 // 'youtube' = 채널 전체 read/write (업로드 + 썸네일 + 재생목록 + 댓글 등)
 // 'youtube.upload' 단독으로는 playlists.insert 불가 → 'youtube' 확장 필요
-const SCOPE = 'https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/youtube.upload';
+// yt-analytics.readonly 는 노출수·CTR·시청지속률·트래픽소스를 준다 — 조회가 왜 줄었는지를
+// 가르는 유일한 출처다. 이게 없으면 growth 루프가 매 회차 'Analytics API: 스코프 없음' 으로
+// 건너뛰고, KPI 는 '언제 얼마나' 까지만 말할 수 있다 (2026-09-10).
+const SCOPE = [
+  'https://www.googleapis.com/auth/youtube',
+  'https://www.googleapis.com/auth/youtube.upload',
+  'https://www.googleapis.com/auth/yt-analytics.readonly',
+].join(' ');
 
 function findFreePort() {
   return new Promise((resolve) => {

@@ -58,14 +58,24 @@ test('install-cron.sh — growth 루틴이 등록돼 있다', () => {
   assert.ok(/growth\)/.test(src));
 });
 
-test('OAuth SCOPE 는 자동화가 넓히지 않는다 — analytics 스코프는 운영자 재동의 전용', () => {
+test('OAuth SCOPE — 크론은 넓히지 않고, 운영자가 붙인 권한을 떨구지도 않는다', () => {
   // renew-youtube-oauth.js 는 크론에서 AppleScript 로 동의 화면을 자동 클릭한다.
-  // 여기 SCOPE 에 yt-analytics 가 섞이면 운영자 모르게 권한이 넓어진다 — 금지.
-  for (const f of ['scripts/automation/setup-youtube-oauth.js', 'scripts/automation/renew-youtube-oauth.js']) {
-    const m = read(f).match(/const SCOPE = '([^']+)'/);
-    assert.ok(m, `${f} SCOPE 상수`);
-    assert.ok(!m[1].includes('yt-analytics'), `${f} 가 analytics 스코프를 자동 요청하면 안 된다`);
-  }
+  // 하드코딩 목록에 yt-analytics 가 섞이면 운영자 모르게 권한이 넓어진다 — 여전히 금지.
+  const renew = read('scripts/automation/renew-youtube-oauth.js');
+  const base = renew.match(/const BASE_SCOPE = '([^']+)'/);
+  assert.ok(base, 'renew 의 BASE_SCOPE 상수');
+  assert.ok(!base[1].includes('yt-analytics'), 'renew 가 analytics 를 자동 요청하면 안 된다');
+
+  // 반대 사고도 막는다: 운영자가 직접 동의해 붙인 스코프를 갱신이 조용히 되돌리면
+  // 다음 날 Analytics 가 죽는다. 그래서 요청 스코프는 '지금 토큰이 가진 것'에서 온다.
+  assert.match(renew, /async function currentScopes\(/, '보유 스코프를 읽는 경로가 있어야 한다');
+  assert.match(renew, /scope: await currentScopes\(/, '동의 URL 이 그 값을 써야 한다');
+  assert.ok(!/scope: SCOPE\b/.test(renew), '하드코딩 SCOPE 를 그대로 요청하면 안 된다');
+
+  // setup-youtube-oauth.js 는 운영자가 직접 실행하고 동의 화면을 눈으로 본다.
+  // 여기서는 analytics 를 요청해도 된다 — 자동 클릭 경로가 아니다.
+  const setup = read('scripts/automation/setup-youtube-oauth.js');
+  assert.match(setup, /yt-analytics\.readonly/, '운영자 대화형 경로는 analytics 를 포함한다');
   // 수집기는 스코프 없음(401/403)을 조용히 강등해야 한다
   const fetcher = read('scripts/automation/fetch-channel-stats.js');
   assert.ok(fetcher.includes('403'));
