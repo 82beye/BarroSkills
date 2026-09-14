@@ -613,7 +613,14 @@ test('시드 대화 판정 전에 지연 렌더를 기다린다', () => {
   // ChatGPT 는 대화 본문을 늦게 그린다. 열자마자 판정하면 멀쩡한 시드를 「없음」 으로 버린다
   // (2026-09-10: 재시드해 정상 동작하던 대화를 두 슬롯이 모두 "시드 대화 없음" 으로 처리).
   const source = readFileSync(AUTO, 'utf8');
-  assert.match(source, /지연 렌더/, '지연 렌더를 프롬프트가 알려 줘야 한다');
+  // **두 프롬프트 모두** 알아야 한다. 2026-09-11 실측: top-up 에만 넣었더니
+  // 「시드 대화 없음」 이 메인 패스에서 그대로 3건씩 재발했다 — 그 문구를 내는 곳이
+  // 둘인데 한쪽만 고쳤던 것이다.
+  const seedVerdicts = source.match(/「시드 대화 없음」/g) ?? [];
+  const waitNotices = source.match(/지연 렌더/g) ?? [];
+  assert.ok(seedVerdicts.length >= 2, '시드 판정 지점이 둘 이상이라는 전제');
+  assert.equal(waitNotices.length, seedVerdicts.length,
+    '「시드 대화 없음」 을 지시하는 모든 곳에 지연 렌더 대기가 붙어야 한다');
   assert.match(source, /최소 20초/, '판정 전 대기 시간이 명시돼야 한다');
   assert.match(source, /새로고침해 다시/, '한 번은 새로고침하고 다시 기다려야 한다');
 });
