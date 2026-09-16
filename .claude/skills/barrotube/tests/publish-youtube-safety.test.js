@@ -9,6 +9,7 @@ import {
   publishYouTube,
   releasePublishResultReservation,
   reservePublishResult,
+  saveUploadSession,
 } from '../scripts/automation/publish-youtube.js';
 
 function temporaryDirectory(t, prefix) {
@@ -79,10 +80,10 @@ test('publishYouTube uploads the approved buffer when the source changes during 
       initializedBody = JSON.parse(String(init.body));
       return new Response(null, {
         status: 200,
-        headers: { location: 'https://upload.invalid/session' },
+        headers: { location: 'https://www.googleapis.com/upload/youtube/session-test' },
       });
     }
-    if (url === 'https://upload.invalid/session') {
+    if (url === 'https://www.googleapis.com/upload/youtube/session-test') {
       uploadedBytes = Buffer.from(init.body);
       return new Response(JSON.stringify({ id: 'uploaded-video-id' }), {
         status: 200,
@@ -192,9 +193,9 @@ test('an ambiguous resumable PUT keeps the reconciliation lock', async (t) => {
       return new Response(JSON.stringify({ items: [{ id: 'UC_TEST' }] }), { status: 200 });
     }
     if (url.includes('/upload/youtube/v3/videos?')) {
-      return new Response(null, { status: 200, headers: { location: 'https://upload.invalid/ambiguous' } });
+      return new Response(null, { status: 200, headers: { location: 'https://www.googleapis.com/upload/youtube/ambiguous' } });
     }
-    if (url === 'https://upload.invalid/ambiguous') throw new Error('response lost after PUT started');
+    if (url === 'https://www.googleapis.com/upload/youtube/ambiguous') throw new Error('response lost after PUT started');
     throw new Error(`Unexpected network request: ${url}`);
   };
 
@@ -217,4 +218,47 @@ test('an ambiguous resumable PUT keeps the reconciliation lock', async (t) => {
   releasePublishResultReservation(reservation, { uploaded: attempted, persisted: false });
   assert.equal(attempted, true);
   assert.equal(existsSync(reservation.lockPath), true, 'ambiguous upload requires manual reconciliation');
+});
+
+test('a lost PUT response resumes the same saved session from its confirmed offset', async (t) => {
+  const directory = temporaryDirectory(t, 'bt-youtube-resume-');
+  const reservation = reservePublishResult(join(directory, 'result.json'));
+  setTemporaryEnv(t, { BT_RESUME_CLIENT: 'id', BT_RESUME_SECRET: 'secret', BT_RESUME_TOKEN: 'token' });
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const bytes = Buffer.from('abcdefgh');
+  let initCount = 0, putCount = 0, probes = 0;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.includes('oauth2.googleapis.com')) return new Response('{"access_token":"token"}');
+    if (url.includes('/youtube/v3/channels?')) return new Response('{"items":[{"id":"UC_TEST"}]}');
+    if (url.includes('/upload/youtube/v3/videos?')) {
+      initCount++;
+      return new Response(null, { headers: { location: 'https://www.googleapis.com/upload/youtube/resume-test' } });
+    }
+    assert.equal(url, 'https://www.googleapis.com/upload/youtube/resume-test');
+    assert.equal(init.headers.Authorization, 'Bearer token');
+    assert.equal(init.redirect, 'error');
+    if (init.headers['Content-Range'] === 'bytes */8') {
+      probes++;
+      return new Response(null, { status: 308, headers: { Range: 'bytes=0-3' } });
+    }
+    putCount++;
+    if (putCount === 1) throw new Error('connection dropped');
+    assert.deepEqual(Buffer.from(init.body), Buffer.from('efgh'));
+    assert.equal(init.headers['Content-Range'], 'bytes 4-7/8');
+    return new Response('{"id":"resumed-video"}', { status: 201 });
+  };
+  const result = await publishYouTube({
+    videoPath: 'fixture.mp4', videoBuffer: bytes,
+    meta: { title: 'resume', categoryId: '22', privacyStatus: 'private' },
+    expectedChannelId: 'UC_TEST', credentialEnv: { clientIdEnv: 'BT_RESUME_CLIENT', clientSecretEnv: 'BT_RESUME_SECRET', refreshTokenEnv: 'BT_RESUME_TOKEN' },
+    onUploadSession: (session) => saveUploadSession(reservation, session),
+  });
+  assert.deepEqual([initCount, putCount, probes], [1, 2, 1]);
+  assert.equal(result.videoId, 'resumed-video');
+  const saved = JSON.parse(readFileSync(reservation.lockPath, 'utf8'));
+  assert.equal(saved.file_size, bytes.length);
+  assert.match(saved.video_sha256, /^[a-f0-9]{64}$/);
+  assert.equal(saved.channel_id, 'UC_TEST');
 });
