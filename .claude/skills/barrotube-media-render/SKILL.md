@@ -53,12 +53,13 @@ topic, write the reel script first, then render.
    - 씬 이미지 → `40_assets/images/scene_NNN.png`
    - 모션 클립 → `40_assets/videos/scene_NNN.mp4`
    - **신규 Shorts S6c 완료 게이트:** ChatGPT 씬 이미지 5장 + 모션 클립 5개(각 5/5).
-     모션 클립의 **기본 엔진은 로컬 HyperFrames** 다 — 브라우저가 필요 없다.
-     `node scripts/automation/generate-motion.js --episode <dir> --platform shorts`
-     (barrotube 스킬). 승인된 스틸 자체를 헤드리스 크롬으로 움직이므로 캐릭터 드리프트가
-     0 이고 길이가 TTS 에 정확히 맞는다. Grok image-to-video 는 `BT_MOTION_ENGINE=none`
-     일 때 또는 피사체 자체가 움직여야 하는 컷에서 명시적으로 쓴다. 근거·게이트·실측은
-     `barrotube/references/MOTION.md`.
+     모션 클립의 **기본 엔진은 Grok**이다. 정본은 `barrotube/config/motion-engines.json`.
+     `grok-motion-applescript.js`가 사용자의 Chrome을 이용하며, `grok-motion.js`는
+     전용 Playwright 프로필을 쓰는 대체 경로다. Grok 실패 시 파이프라인은
+     `generate-motion.js`의 로컬 HyperFrames 팬·줌으로 이어질 수 있다.
+     실제 엔진은 `40_assets/videos/_engines.json`과 실행 로그로 확인한다.
+     `BT_MOTION_ENGINE=local-only`는 로컬 엔진 명시 선택이고, `none`은 모션 생성 비활성화다.
+     폴백 산출물의 QA 통과를 Grok 생성 성공으로 보고하지 않는다.
    - **인트로 카드 → `45_intro.png`** — 타이틀 대형 골드 타이포 + 채널 배지 +
      다크 배경, 9:16. **저장 전 타이틀 철자를 확대(zoom) 검수** — AI 한글 렌더
      오타가 실제로 발생한다(실사례: "메타"→"머타"). 오타면 재생성.
@@ -131,32 +132,21 @@ topic, write the reel script first, then render.
      에이전트 작업 도중 텍스트로 바뀌어 있었다(`clipboard info` 로 확인). 붙여넣기
      직전에 반드시 다시 적재하고, 그래도 썸네일이 안 뜨면 위 `file_upload` 경로로 가라.
      `osascript -e 'set the clipboard to (read (POSIX file "<png>") as «class PNGf»)'`
-   - **첨부 가능 여부는 표면마다 다르다 — 섞어 읽지 마라.** 위 클립보드 우회는
-     **claude-in-chrome**(대화형 세션)에서 확인된 것이다. **codex 의 Chrome 표면에서는
-     세 경로가 모두 막힌다**: Playwright 숨은 input 주입(보안 정책), 컴포저 파일 선택
-     UI(선택 이벤트 미발생), Cmd+V(붙여도 썸네일·`Remove image` 안 뜸).
-     2026-08-17 auto-pipeline 무인 실행에서 codex 가 클립보드를 직접 재적재한 뒤
-     Cmd+V 까지 시도했으나 실패했다 — 두 번 연속, 서로 다른 호출에서.
-     따라서 **cron(codex) 경로는 시트 첨부를 전제할 수 없다.** 시트가 필요한 생성은
-     대화형 세션에서 하거나, 이미지 API 폴백(크레딧 필요)에 맡겨야 한다.
-     외부 Playwright MCP 로 우회할 수도 없다 — codex 의 `control-chrome` 스킬이
-     "Do not use external MCP browser-control tools" 로 금지하고, 승인 모드를 `auto` 로
-     열어도 호출이 취소된다(2026-08-17 실측).
-   - **첨부 권한은 사이트마다 갈린다 (2026-08-18 실측).** codex 가 직접 안내한
-     `chrome://extensions → ChatGPT 확장 → 세부정보 → 「파일 URL에 대한 액세스 허용」`
-     은 **ChatGPT 에만** 듣는다. 같은 권한을 켠 상태에서도 Grok 은
-     "로컬 파일 선택이 확장 표면에서 열리지 않아" 로 막힌다 — 그 확장의 관할이 아니기 때문이다.
-     즉 **Grok image→video 는 여전히 대화형 claude-in-chrome 의 `file_upload` 로만 확실하다.**
-     "권한 켜면 다 풀린다" 고 넘겨짚지 마라 — ChatGPT 와 Grok 을 따로 확인해야 한다.
-   - **씬 이미지는 되고 Grok 모션은 안 되는 이유.** 씬 이미지는 시트 **한 장**만 있으면
-     되므로, 시트가 이미 첨부된 **시드 대화**에서 이어 요청해 첨부를 우회한다
-     (`barrotube/config/image-engines.json` 의 `media_render.chatgpt_seed_conversation`).
-     Grok image→video 는 **컷마다 다른 스틸**을 올려야 해서 같은 우회가 성립하지 않는다.
-     그래서 **무인 실행의 모션은 로컬 HyperFrames 로 나가고**, auto-pipeline 이
-     `🎞 모션 N컷이 HyperFrames 폴백` 텔레그램을 보낸다. Grok 모션이 필요하면 그 알림을
-     받은 뒤 대화형 세션에서 교체한다(EP-0096·0097 실제로 그렇게 처리).
-     같은 이유로 auto-pipeline 의 Grok **이미지** 패스는 기본 꺼져 있다 —
-     첨부가 되는 표면에서만 `BT_GROK_IMAGE=1` 로 켠다.
+   - **첨부·로그인·권한은 브라우저 표면별로 확인한다.** 과거 특정 확장에서 실패한
+     결과를 현재 모든 Codex/Claude 환경에 일반화하지 않는다. Chrome AppleScript 경로는
+     macOS 자동화 권한과 Chrome의 「Apple Events의 자바스크립트 허용」이 필요하다.
+     `node scripts/automation/grok-motion-applescript.js --check`로 확인한다.
+     같은 이름의 자동화용 Chrome이 별도로 실행될 수 있으므로 일반 Chrome의 PID와
+     창·탭 ID를 고정한다. 권한 오류가 나면 먼저 어느 프로세스가 반환했는지 확인한다.
+     이 검사는 로그인과 720p/10s 선택 상태까지 확인하지만 실제 생성·다운로드를 보증하지 않는다.
+     전용 프로필 경로는 `node scripts/automation/grok-motion.js --status`로 확인하며,
+     쿠키 존재만으로 성공 판정하지 않고 실제 작성기와 파일 입력을 확인한다.
+     권한 거부·로그아웃·차단은 원인을 보고하고 해당 경로를 멈춘다. 보안 설정을 임의로
+     완화하거나 금지된 표면으로 우회하지 않는다.
+   - **씬 이미지는 기존 시드 대화의 캐릭터 시트를 이용할 수 있다.**
+     `barrotube/config/image-engines.json`의 `media_render.chatgpt_seed_conversation`을
+     확인한다. Grok 모션은 컷마다 해당 스틸의 첨부를 확인해야 한다.
+     Grok **이미지** 패스는 별도 기능이며 `BT_GROK_IMAGE=1`로 명시 선택한다.
    - **프롬프트는 영문으로 입력한다.** 브라우저 자동화로 한글을 타이핑하면 공백이 사라지고
      (`이대화맨위에첨부한…`) 뒤 문장이 통째로 잘리는 일이 있다(2026-08-17 ChatGPT·실측).
      image_prompt 는 원래 영문이므로, 앞에 붙이는 지시문만 영문으로 쓰면 된다.
@@ -304,6 +294,10 @@ Follow `references/grok-video.md`. In short: open grok.com/imagine, set the opti
 bar to **비디오 / 720p / 10s / 9:16 / Video audio ON** and verify it. `Video audio`
 버튼은 보이는 것만으로 충분하지 않으며 매 컷 `aria-pressed="true"`여야 한다. Then:
 
+720p/10s 라디오 옵션은 `aria-checked="true"`를 확인한다. 업그레이드 창이 뜨거나
+선택이 유지되지 않으면 첨부·생성 전에 중단한다. 480p/6초 결과를 기본 요구사항의
+완료로 기록하지 않는다. 결제·체험을 시작하지 않고 기존 HyperFrames 폴백으로 넘긴다.
+
 - **Image→video (required for new BarroTube Shorts):** attach the ChatGPT image you just
   saved (the "+" in the prompt bar) and give a short **motion** prompt.
 - **Text→video (standalone/legacy only):** just type `video_prompt`. It is not accepted
@@ -314,7 +308,8 @@ Send, watch the **"생성 중 NN%"** progress to 100%, then click **다운로드
 
 업로드 완료는 filename locator가 아니라 `Remove image` 버튼/첨부 thumbnail로 판정한다.
 제출 직후 `/imagine` URL이 잠시 남을 수 있으므로 URL 반환만으로 실패 처리하지 말고 새
-`/imagine/post/<id>` 또는 현재 생성 진행 표시를 기다린다. 다운로드 후 `ffprobe`에서
+`/imagine/post/<id>` 또는 현재 생성 진행 표시를 기다린다. 첨부만으로도 게시물 URL이
+생기므로 제출 직전 경로와 다른 새 영상 게시물 ID를 확인한다. 다운로드 후 `ffprobe`에서
 H.264 세로 영상과 **AAC 오디오 스트림**이 모두 보여야 수락한다. 오디오가 없으면 파일을
 완료로 세지 말고 `Video audio`를 켠 뒤 같은 컷을 다시 생성한다.
 
@@ -323,8 +318,7 @@ only after the downloaded video passes `ffprobe`.
 
 ### Step 3 — File the outputs into the project folders
 
-Move each download out of `~/Downloads` into the right folder, validate, rename by slug,
-and (with approval) remove the original:
+Move each download out of `~/Downloads` into the right folder, validate, and rename by slug:
 
 ```bash
 # image
@@ -335,10 +329,13 @@ python scripts/move_media.py --kind video --slug <slug> \
   --dest-root /Users/beye/BarroAiFactory
 ```
 
-`move_media.py` picks the newest matching file in Downloads (png for image,
-`grok-video-*.mp4`/mp4 for video), verifies it (PNG signature / `ffprobe` for the mp4:
-expect ~720×1280, ~10s), copies it to `Image/<slug>.png` or `video/<slug>.mp4`, and
-prints the final path. See its `--help`.
+`move_media.py` accepts PNG/JPEG/WebP images and MP4 video. It fully decodes images
+with Pillow and requires a successful `ffprobe` result for video. It validates the slug,
+rejects source symlinks, copies atomically, and compares SHA-256 before deleting the source.
+Existing destinations require `--overwrite`; failures preserve the source. Use `--source`
+to pin a specific download; automatic selection only accepts recent matching files.
+Image extensions follow the actual format. Scene dimensions, duration, audio, and motion
+still need the downstream QA gate. See `--help`.
 
 **Deleting the Downloads original may require approval** depending on the current sandbox
 or browser surface. If deletion fails or is denied, leave the original and keep the copied
@@ -361,7 +358,7 @@ its output must fail publish QA.
 - `56_capcut_export/video.mp4` — final CapCut export.
 - `distribution/{reels,tiktok,youtube}/video.mp4` symlinks to the CapCut export.
 
-### Caption layer — HyperFrames (pilot, opt-in)
+### Caption layer — HyperFrames (BarroTube EP default)
 
 Burned-in captions are PNGs baked by a Python/PIL script, because this ffmpeg build has no
 libass/drawtext. That leaves exactly one possible effect: the colour changes. Animated
@@ -480,7 +477,8 @@ source reel has `60_qa_report.images.json: ok` and otherwise left as "human must
   modal (especially when a daily/free quota is spent). **Never purchase or start a paid
   trial on the user's behalf.** Close the modal, report it, and offer alternatives
   (try later, switch account, use ChatGPT for the still only). For a new BarroTube Short,
-  still-only output leaves S6c blocked until all five Grok clips exist.
+  still-only output leaves S6c blocked until all five validated motion clips exist.
+  BarroTube's configured local fallback may provide those clips; record that engine explicitly.
 - **Grok options can already be correct.** The option bar often defaults to a prior
   selection — zoom in and *verify* 비디오/720p/10s/9:16 rather than blindly clicking.
 - **Account drift.** The logged-in account may differ between runs (check the
@@ -520,12 +518,9 @@ source reel has `60_qa_report.images.json: ok` and otherwise left as "human must
   later.
 - **Grok file upload may not expose a modal.** If `browser_file_upload` says there is
   no modal state, use `page.locator('input[type="file"]').first().setInputFiles(path)`.
-- **claude-in-chrome: attach an image via macOS clipboard, not file paths.** `file_upload`
-  rejects host paths and `localhost`/`base64` bridges are blocked. To attach a still or the
-  character sheet to ChatGPT or Grok: `osascript -e 'set the clipboard to (read (POSIX file
-  "<png>") as «class PNGf»)'` then click the composer + **Cmd+V**. The **first paste right
-  after a fresh page load no-ops** — retry the click+Cmd+V in a separate action and confirm
-  the thumbnail. Same flakiness applies to the first text `type` after navigation.
+- **claude-in-chrome attachment order:** copy to the allowed session folder, then use
+  `file_upload`. Clipboard paste is a fallback; reload the image immediately before pasting
+  and verify the thumbnail. A denied permission is not a reason to change security settings.
 - **claude-in-chrome: downloads DO land on disk — Bash just can't `ls` them.** macOS TCC
   blocks the Bash process from readdir/read of `~/Downloads` (so `ls` shows empty, `cp` gives
   "Operation not permitted"), but the browser download itself succeeds. Retrieve it by reading
@@ -585,18 +580,45 @@ source reel has `60_qa_report.images.json: ok` and otherwise left as "human must
 - **Grok Imagine: press Enter to submit.** Clicking the submit arrow intermittently drops
   the typed prompt (the composer clears, the image stays attached, nothing generates).
   Download lives in the post-details panel, not on the player.
-- **Stale `playwright-mcp` processes break tab control.** 10 instances (some 10 days old)
-  were holding the same user-data-dir; every browser step timed out with
-  "탭 제어가 반복 시간 초과". `pkill -f playwright-mcp` before a long browser run.
-- **Grok motion clips have no audio track — that is fine.** `render-direct.js` probes with
-  `probeHasAudio()` and mixes TTS only when the clip is silent.
-- **Grok clips are 720x1264 / 10.04s — always.** The scene is retimed to the TTS length, so a
+- **Browser process ownership:** close only the context/process this job created.
+  Never use broad `pkill` patterns or kill other agents' Chrome processes to fix a profile lock.
+- **Audio requirements depend on the consumer.** Standalone rendering can mix TTS over
+  silent motion. The BarroTube Grok gate requires AAC, so check Video audio before generating.
+- **Measured Grok clips were 720x1264 / 10.04s.** Probe each new download; these are observations,
+  not a permanent service guarantee. The scene is retimed to the TTS length, so a
   14.8s scene plays its 10.04s clip at **0.68×** (visible slow motion) and the 720-wide frame is
   upscaled to 1080. Measured across EP-0091/0092, all ten clips. The local HyperFrames engine
   renders 1080x1920 at the exact scene length, so neither happens.
 - **A file in `videos/` is not proof of motion.** `render-direct.js` turns Ken Burns *off* when a
   clip exists, so a still-frame clip ships a frozen scene — and a count-only check passes it 5/5.
   QA now compares the clip's own first/last frames (`Motion liveness`, BLOCK).
+
+## BarroTube cron and KPI verification
+
+macOS automation uses `com.barroskills.barrotube.*` LaunchAgents. Compare installed
+calendars with `barrotube/config/routines.json`; installation alone does not prove a
+successful run. From the BarroTube skill directory:
+
+```bash
+bash lib/install-cron.sh list
+BT_NO_NOTIFY=1 bash lib/doctor-cli.sh
+BT_NO_NOTIFY=1 bash lib/growth-pipeline.sh
+```
+
+The last command refreshes channel observations, KPI, and growth directives without
+sending Telegram messages. A failed fetch must stop the growth loop with exit 1.
+Check KPI `inputs.observed_at`, `analytics_latest_day`, and `metrics_version`; a fresh
+RED performance score is different from a broken collector. Missing comparison
+observations must remain NA rather than becoming zero or a different population's total.
+
+Publishing requires matching approval hashes, QA, the active master switch, and the
+operator rejection gate. An undelivered rejection-window notification blocks publication.
+Never delete `80_publish_result.json.lock` merely because its PID died: a remote upload
+may already exist. Preserve the saved session and reconcile its status before retrying;
+an upload reported as `processing` is not completed publication.
+
+Keep credentials out of command arguments and logs. Secret files, resumable upload
+session files, and LaunchAgent files must be readable only by their owner.
 
 ## Output
 

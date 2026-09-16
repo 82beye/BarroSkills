@@ -6,8 +6,8 @@
  *   Playwright 는 headless·headed 모두 grok.com 에서 Cloudflare 에 막힌다
  *   ("Sorry, you have been blocked"). CDP attach 도 같다. 반면 사용자가 평소 쓰는
  *   Chrome 은 멀쩡히 열린다 — 차이는 자동화 표면이지 로그인이 아니다.
- *   AppleScript 의 `execute javascript` 는 CDP 포트도 webdriver 플래그도 쓰지 않아
- *   자동화 지문이 남지 않는다. cron(launchd Aqua 세션)에서 그대로 돈다.
+ *   Apple Events 로 일반 Chrome 프로필의 세션을 재사용한다.
+ *   cron(launchd Aqua 세션)에서도 macOS와 Chrome의 자동화 권한이 필요하다.
  *
  * 첨부는 DataTransfer 주입으로 한다 — 파일 선택 UI·클립보드·Playwright 파일 API 를
  * 전부 우회한다. 기존 문서가 "codex 표면에서는 첨부 3경로가 모두 막힌다" 고 적어 둔
@@ -17,7 +17,7 @@
  *
  * Usage:
  *   node grok-motion-applescript.js --episode <dir> [--platform shorts] [--scene 003] [--force]
- *   node grok-motion-applescript.js --check      # 세션·차단 상태만 확인 (0=사용가능, 3=불가)
+ *   node grok-motion-applescript.js --check      # 세션·720p/10s 선택 확인 (0=준비됨, 3=불가)
  */
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, copyFileSync, statSync, unlinkSync } from 'node:fs';
@@ -25,11 +25,18 @@ import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { parseArgs } from 'node:util';
 import { createHash } from 'node:crypto';
+import { verifyGrokClip } from './lib/motion-verify.js';
 
 const GROK_URL = 'https://grok.com/imagine';
 /** Finder 가 바빠도 버티게 한다. 기본 AppleEvent 타임아웃(60초)이 -1712 의 원인이었다. */
 /** 기대하는 Grok 로그인 계정. 비우면 계정 검사를 하지 않는다. */
-const BT_GROK_ACCOUNT = process.env.BT_GROK_ACCOUNT || '82beye@gmail.com';
+// 계정 정본은 config/motion-engines.json 의 grok_account 다. 코드에 이메일을 중복하지 않는다.
+const BT_GROK_ACCOUNT = process.env.BT_GROK_ACCOUNT || (() => {
+  try {
+    const p = join(resolve(import.meta.dirname, '../..'), 'config', 'motion-engines.json');
+    return JSON.parse(readFileSync(p, 'utf-8')).grok_account || '';
+  } catch { return ''; }
+})();
 const FINDER_TIMEOUT_SEC = Number(process.env.BT_GROK_FINDER_TIMEOUT || 300);
 const CUT_DELAY_MS = Number(process.env.BT_GROK_CUT_DELAY_MS ?? 12000);
 const GEN_TIMEOUT_MS = Number(process.env.BT_GROK_TIMEOUT_MS || 6 * 60 * 1000);
@@ -69,36 +76,67 @@ const md5 = (p) => createHash('md5').update(readFileSync(p)).digest('hex');
  * 탭 id 는 순서가 바뀌어도 같은 탭을 가리키므로 두 실패를 모두 피한다.
  */
 let GROK_TAB_ID = null;
+let GROK_WINDOW_ID = null;
+let CHROME_PID = null;
+
+function runChrome(action, value = '') {
+  if (CHROME_PID === null) {
+    const candidates = execFileSync('ps', ['-axo', 'pid=,args='], { encoding: 'utf8' })
+      .split('\n').map(line => /^\s*(\d+)\s+(.+)$/.exec(line)).filter(Boolean)
+      .filter(([, , cmd]) => /^\/.*\/Google Chrome\.app\/Contents\/MacOS\/Google Chrome(?:\s|$)/.test(cmd)
+        && !/(?:^|\s)--(?:user-data-dir|remote-debugging-port|remote-debugging-pipe|headless)(?:[=\s]|$)/.test(cmd));
+    if (candidates.length !== 1) throw new Error('로그인된 일반 Chrome 프로세스를 하나로 확인할 수 없습니다');
+    CHROME_PID = Number(candidates[0][1]);
+  }
+  // 앱 이름은 같은 이름의 Playwright Chrome으로 연결될 수 있다. PID와 창/탭 ID를 고정한다.
+  const script = `function run(argv) {
+    var chrome = Application(Number(argv[0])), action = argv[1], value = argv[4];
+    if (action !== 'find') {
+      var target = chrome.windows.byId(argv[2]).tabs.byId(argv[3]);
+      if (action === 'eval') return target.execute({javascript: value});
+      target.url = value;
+      return 'ok';
+    }
+    var windows = chrome.windows(), fallback = null;
+    for (var wi = 0; wi < windows.length; wi++) {
+      var tabs = windows[wi].tabs();
+      for (var ti = 0; ti < tabs.length; ti++) {
+        var url = tabs[ti].url();
+        if (url.indexOf('https://grok.com/') !== 0 && url.indexOf('https://accounts.x.ai/') !== 0) continue;
+        var row = {windowId: windows[wi].id(), tabId: tabs[ti].id(), windowIdx: wi + 1, tabIdx: ti + 1};
+        if (url === value || url.indexOf(value + '?') === 0 || url.indexOf(value + '#') === 0) return JSON.stringify(row);
+        if (!fallback) fallback = row;
+      }
+    }
+    if (fallback) return JSON.stringify(fallback);
+    if (!windows.length) throw new Error('일반 Chrome 창이 없습니다');
+    var tab = chrome.Tab({url: value});
+    windows[0].tabs.push(tab);
+    return JSON.stringify({windowId: windows[0].id(), tabId: tab.id(), windowIdx: 1, tabIdx: windows[0].tabs.length});
+  }`;
+  try {
+    return execFileSync('osascript', ['-l', 'JavaScript', '-e', script, String(CHROME_PID), action,
+      GROK_WINDOW_ID || '', GROK_TAB_ID || '', value], {
+      encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'], timeout: 30_000,
+    }).trim();
+  } catch (e) {
+    const stderr = String(e.stderr || '');
+    const denied = /(?:JavaScript|자바스크립트).*(?:disabled|꺼져)|\(-1743\)/is.test(stderr);
+    const err = new Error(denied
+      ? 'Chrome 자동화 권한 필요 — 보기 > 개발자 > Apple Events의 자바스크립트 허용 및 macOS 자동화 권한을 확인하세요'
+      : (stderr.trim().slice(-500) || `Chrome Apple Events 실패 (${e.code || e.status})`));
+    if (denied) err.code = 'BROWSER_PERMISSION';
+    throw err;
+  }
+}
 
 function chromeJS(js) {
-  // `with timeout` 이 없으면 AppleEvent 는 60초에 끊긴다. 영상 생성 중인 Chrome 은
-  // 그보다 오래 응답을 못 주는 순간이 있어서 -1712 (AppleEvent timed out) 로 죽었고,
-  // 그 에러가 "Apple Events 자바스크립트가 꺼져 있다" 는 메시지로 오인되기도 했다.
-  // (2026-08-30 EP-0124 실측: scene_001 이 4분 대기 중 -1712 로 실패.)
-  const match = GROK_TAB_ID === null
-    ? '(URL of t) contains "grok.com"'
-    : `(id of t) is "${GROK_TAB_ID}"`;
-  const script = `on run argv
-  set j to item 1 of argv
-  with timeout of 300 seconds
-    tell application "Google Chrome"
-      repeat with w in windows
-        repeat with t in tabs of w
-          if ${match} then return (execute t javascript j)
-        end repeat
-      end repeat
-      error "GROK_TAB_GONE"
-    end tell
-  end timeout
-end run`;
   // `missing value` 는 JS 가 undefined 를 돌려줬다는 뜻이다 — 페이지가 아직 스크립트를
   // 못 받는 순간(리렌더·네비게이션 직후)에 나온다. 그대로 넘기면 호출부의 JSON.parse 가
   // "Unexpected token 'm'" 로 죽어 원인이 안 보인다. 잠깐 두고 다시 시도한다.
   let last = '';
   for (let attempt = 1; attempt <= 3; attempt++) {
-    last = execFileSync('osascript', ['-e', script, js], {
-      encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
-    }).trim();
+    last = runChrome('eval', js);
     if (last !== 'missing value') return last;
     execFileSync('sleep', ['1']);
   }
@@ -124,66 +162,16 @@ function signedInAs() {
  * 후보가 없으면 새 탭을 연다 — 로그인은 프로필 단위라 새 탭도 그대로 로그인돼 있다.
  */
 function findGrokTab() {
-  const finder = `tell application "Google Chrome"
-  set wi to 0
-  set fallback to "none"
-  repeat with w in windows
-    set wi to wi + 1
-    set ti to 0
-    repeat with t in tabs of w
-      set ti to ti + 1
-      set u to (URL of t)
-      if u contains "grok.com" then
-        set row to (id of t as string) & "," & (wi as string) & "," & (ti as string)
-        if u contains "/imagine" and u does not contain "/imagine/saved" and u does not contain "/imagine/post" then return row
-        if fallback is "none" then set fallback to row
-      end if
-    end repeat
-  end repeat
-  return fallback
-end tell`;
-  const r = execFileSync('osascript', ['-e', finder], { encoding: 'utf8' }).trim();
-  if (r !== 'none') {
-    const [id, w, t] = r.split(',');
-    GROK_TAB_ID = id;
-    return { tabId: id, windowIdx: Number(w), tabIdx: Number(t) };
-  }
-  // 새 탭
-  const opener = `tell application "Google Chrome"
-  if (count of windows) = 0 then make new window
-  set nt to make new tab at end of tabs of front window with properties {URL:"${GROK_URL}"}
-  return ((id of nt) as string) & "," & ((count of tabs of front window) as string)
-end tell`;
-  const r2 = execFileSync('osascript', ['-e', opener], { encoding: 'utf8' }).trim();
-  const [id, t] = r2.split(',');
-  GROK_TAB_ID = id;
-  return { tabId: id, windowIdx: 1, tabIdx: Number(t) };
+  const tab = JSON.parse(runChrome('find', GROK_URL));
+  GROK_TAB_ID = String(tab.tabId);
+  GROK_WINDOW_ID = String(tab.windowId);
+  return tab;
 }
 
 function navigate(_tab, url) {
   // 고정된 작업 탭의 URL 을 바꾼다. chromeJS 와 **같은 탭**이어야 한다 —
   // 아니면 프롬프트를 넣은 탭과 영상을 읽는 탭이 갈린다.
-  const match = GROK_TAB_ID === null
-    ? '(URL of t) contains "grok.com"'
-    : `(id of t) is "${GROK_TAB_ID}"`;
-  const s = `on run argv
-  set u to item 1 of argv
-  tell application "Google Chrome"
-    repeat with w in windows
-      repeat with t in tabs of w
-        if ${match} then
-          set URL of t to u
-          return "ok"
-        end if
-      end repeat
-    end repeat
-    if (count of windows) = 0 then make new window
-    tell front window to set nt to make new tab with properties {URL:u}
-    return "new:" & ((id of nt) as string)
-  end tell
-end run`;
-  const r = execFileSync('osascript', ['-e', s, url], { encoding: 'utf8' }).trim();
-  if (r.startsWith('new:')) GROK_TAB_ID = r.slice(4);
+  runChrome('navigate', url);
 }
 
 /** 페이지가 쓸 준비가 될 때까지 — file input 이 보일 때까지 */
@@ -193,10 +181,13 @@ async function waitReady(tab, timeoutMs = 45000) {
     await sleep(2500);
     let r;
     try {
-      r = JSON.parse(chromeJS(`(function(){var t=document.body.innerText;return JSON.stringify({blocked:/blocked|unable to access/i.test(t),fi:document.querySelectorAll('input[type="file"]').length,login:t.indexOf('가입하기')>=0});})()`));
-    } catch { continue; }
+      r = JSON.parse(chromeJS(`(function(){var t=document.body.innerText;return JSON.stringify({blocked:/blocked|unable to access/i.test(t),fi:document.querySelectorAll('input[type="file"]').length,login:location.hostname==='accounts.x.ai'||t.indexOf('가입하기')>=0});})()`));
+    } catch (e) {
+      if (e.code === 'BROWSER_PERMISSION') throw e;
+      continue;
+    }
     if (r.blocked) throw new Error('Cloudflare 차단 — 실제 Chrome 에서도 막혔습니다');
-    if (r.login) throw new Error('Grok 로그아웃 상태 — Chrome 에서 로그인하세요');
+    if (r.login) { const e = new Error('Grok 로그아웃 상태 — Chrome 에서 로그인하세요'); e.code = 'GROK_LOGIN'; throw e; }
     if (r.fi > 0) return true;
   }
   throw new Error('페이지 준비 실패 (file input 미검출)');
@@ -305,6 +296,30 @@ async function attachStill(tab, pngPath) {
   throw new Error('첨부 확인 실패 (주입 후 썸네일·Remove image 미검출)');
 }
 
+async function requireVideoOptions() {
+  const set = JSON.parse(chromeJS(`(function(){
+    var buttons=Array.from(document.querySelectorAll('button'));
+    var selected=function(b){return b.getAttribute('aria-checked')==='true'||b.getAttribute('aria-pressed')==='true';};
+    var options=['720p','10s'].map(function(label){
+      var b=buttons.find(function(x){return (x.textContent||'').trim()===label;});
+      if(b&&!selected(b)) b.click();
+      return {label:label,found:!!b};
+    });
+    return JSON.stringify(options);
+  })()`));
+  if (set.some(option => !option.found)) throw new Error('Grok 720p/10s 옵션을 확인할 수 없습니다');
+  await sleep(1200);
+  const optionsReady = JSON.parse(chromeJS(`JSON.stringify(['720p','10s'].every(function(label){
+    var b=Array.from(document.querySelectorAll('button')).find(function(x){return (x.textContent||'').trim()===label;});
+    return b&&(b.getAttribute('aria-checked')==='true'||b.getAttribute('aria-pressed')==='true');
+  }))`));
+  if (!optionsReady) {
+    const e = new Error('Grok 720p/10s 사용 불가 — 계정 요금제·한도 확인 필요 (낮은 품질로 생성하지 않음)');
+    e.code = 'GROK_PLAN';
+    throw e;
+  }
+}
+
 /** 프롬프트 입력 + 옵션 확정 + 제출 */
 async function submitPrompt(tab, prompt) {
   const js = `(function(){
@@ -323,17 +338,7 @@ async function submitPrompt(tab, prompt) {
   // 누르면 꺼지고, 그 리렌더 도중에 들어간 제출 클릭은 조용히 흘러간다
   // (2026-09-02 EP-0131 씬 002·005: 프롬프트·첨부·활성 제출 버튼이 다 갖춰졌는데도
   //  "제출이 반영되지 않았습니다" 로 죽었다. 사람이 같은 버튼을 누르면 3초 만에 넘어갔다.)
-  chromeJS(`(function(){
-    var B=[].slice.call(document.querySelectorAll('button'));
-    ['720p','10s'].forEach(function(t){
-      var b=B.filter(function(x){return (x.textContent||'').trim()===t;})[0];
-      if(b && b.getAttribute('aria-pressed')!=='true') b.click();
-    });
-    var rj=B.filter(function(b){return (b.textContent||'').trim()==='모두 거부';})[0];
-    if(rj) rj.click();
-    return 'ok';
-  })()`);
-  await sleep(1200);
+  await requireVideoOptions();
 
   // 제출 — 누르고 끝내지 않고, 이동을 확인하며 다시 누른다.
   const clickSubmit = () => JSON.parse(chromeJS(`(function(){
@@ -348,6 +353,8 @@ async function submitPrompt(tab, prompt) {
   })()`));
 
   let why = '';
+  // 첨부만으로 생긴 스틸 게시물과, 제출 후 열릴 영상 게시물을 구분한다.
+  const beforePath = chromeJS('location.pathname');
   for (let attempt = 1; attempt <= 4; attempt++) {
     const r = clickSubmit();
     if (!r.ok) {
@@ -359,7 +366,7 @@ async function submitPrompt(tab, prompt) {
     for (let i = 0; i < 8; i++) {
       await sleep(2000);
       const p = chromeJS('location.pathname');
-      if (p.includes('/imagine/post/')) return p;
+      if (p.includes('/imagine/post/') && p !== beforePath) return p;
     }
     console.warn(`     제출이 안 먹었다 — 다시 누른다 ${attempt}/4`);
   }
@@ -575,35 +582,6 @@ function motionFor(scene) {
   return `${base}; keep the character design and composition exactly as the attached image.`;
 }
 
-/**
- * AppleScript 의 `tell application "Google Chrome"` 은 같은 번들이 여러 인스턴스로
- * 떠 있으면 어느 쪽을 잡을지 보장하지 않는다. auto-pipeline 은 Phase 6 에서 codex
- * imagegen 이 Playwright 로 Chrome 을 하나 더 띄우는데, 그 프로필에는 "Apple Events 의
- * 자바스크립트 허용" 이 없다. 그 인스턴스가 남아 있으면 Phase 7 의 모든 execute javascript 가
- * 실패하고, 에러 메시지는 엉뚱하게 "자바스크립트 실행 기능이 꺼져 있습니다" 로 나온다
- * — 사용자 Chrome 은 멀쩡히 켜져 있는데도. (2026-08-30 EP-0124 실측, 원인 규명에 30분)
- *
- * 우리가 띄운 자동화 프로필만 정리한다. 사용자 기본 프로필은 절대 건드리지 않는다.
- */
-function killShadowChromes() {
-  const AUTOMATION_PROFILE = /--user-data-dir=(\/Users\/[^/]+\/\.(codex|barrotube|npm)\/|\/tmp\/|\/var\/folders\/)/;
-  let out = '';
-  try {
-    out = execFileSync('ps', ['-eo', 'pid,command'], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
-  } catch { return 0; }
-  let killed = 0;
-  for (const line of out.split('\n')) {
-    if (!line.includes('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')) continue;
-    if (line.includes('Helper')) continue;
-    if (!AUTOMATION_PROFILE.test(line)) continue;
-    const pid = Number(line.trim().split(/\s+/)[0]);
-    if (!Number.isInteger(pid) || pid <= 1) continue;
-    try { process.kill(pid, 'SIGTERM'); killed++; } catch { /* 이미 죽었으면 무시 */ }
-  }
-  if (killed) console.log(`  🧹 자동화용 Chrome 인스턴스 ${killed}개 정리 (AppleScript 대상 모호성 제거)`);
-  return killed;
-}
-
 async function main() {
   const { values } = parseArgs({ options: {
     episode: { type: 'string', short: 'e' },
@@ -613,8 +591,7 @@ async function main() {
     check: { type: 'boolean', default: false },
   } });
 
-  killShadowChromes();
-
+  // 다른 자동화가 소유한 Chrome은 종료하지 않는다. 자기 창은 만든 쪽이 닫는다.
   const tab = findGrokTab();
 
   if (values.check) {
@@ -626,6 +603,7 @@ async function main() {
       navigate(tab, GROK_URL);
       try {
         await waitReady(tab, 60000);
+        await requireVideoOptions();
         // 접근 가능 여부만 보면 **남의 계정으로 로그인돼 있어도 통과한다.**
         // 2026-08-27 EP-2026-0118: Chrome 의 Grok 이 hameedkhan17653@gmail.com 세션이었고
         // --check 는 ✅ 를 줬다. 생성은 시작되는데 다운로드 버튼이 안 잡혀 5컷 전부
@@ -640,6 +618,7 @@ async function main() {
         process.exit(0);
       } catch (e) {
         lastErr = e;
+        if (['BROWSER_PERMISSION', 'GROK_LOGIN', 'GROK_PLAN'].includes(e.code)) break;
         if (attempt < 2) await sleep(5000);
       }
     }
@@ -670,7 +649,7 @@ async function main() {
       .filter(Boolean),
   );
 
-  console.log(`🖥  실제 Chrome (AppleScript) — w${tab.windowIdx}t${tab.tabIdx}`);
+  console.log(`🖥  실제 Chrome (Apple Events) — PID ${CHROME_PID}, window ${GROK_WINDOW_ID}, tab ${GROK_TAB_ID} (w${tab.windowIdx}t${tab.tabIdx})`);
   let made = 0, failed = 0, stalls = 0;
 
   for (const [i, scene] of wanted.entries()) {
@@ -682,6 +661,7 @@ async function main() {
     try {
       navigate(tab, GROK_URL);
       await waitReady(tab, 60000);
+      await requireVideoOptions();
       await attachStill(tab, still);
       const postPath = await submitPrompt(tab, motionFor(scene));
       const videoUrl = await waitForOwnVideo(tab, postPath);
@@ -700,16 +680,13 @@ async function main() {
         try { unlinkSync(outPath); } catch { /* 이미 없으면 그만 */ }
         throw new Error('직전 컷과 같은 파일 (중복) — 자리를 비워 둔다');
       }
-      knownHashes.add(hash);
-
-      const probe = execFileSync('ffprobe', ['-v', 'error', '-select_streams', 'a:0',
-        '-show_entries', 'stream=codec_name', '-of', 'csv=p=0', outPath], { encoding: 'utf8' }).trim();
-      if (probe !== 'aac') {
-        // 오디오가 없으면 쓸 수 없는 파일이다. 자리에 남겨 두면 다음 실행이
-        // "이미 있음" 으로 건너뛴다.
+      const verified = verifyGrokClip(outPath);
+      if (!verified.ok) {
+        // 부적합한 원본을 남겨 두면 다음 실행이 "이미 있음" 으로 건너뛴다.
         try { unlinkSync(outPath); } catch { /* 이미 없으면 그만 */ }
-        throw new Error(`오디오 없음 (codec=${probe || 'none'}) — Video audio 를 켜야 합니다`);
+        throw new Error(verified.why);
       }
+      knownHashes.add(hash);
 
       made += 1;
       console.log(`  ✅ 씬 ${scene.id} → ${outPath}`);
@@ -717,6 +694,7 @@ async function main() {
     } catch (e) {
       failed += 1;
       console.warn(`  ❌ 씬 ${scene.id}: ${e.message}`);
+      if (['BROWSER_PERMISSION', 'GROK_LOGIN', 'GROK_PLAN'].includes(e.code)) break;
       if (STALL_PATTERN.test(e.message)) stalls += 1; else stalls = 0;
       if (made === 0 && stalls >= STALL_ABORT_AFTER) {
         const left = wanted.length - i - 1;
