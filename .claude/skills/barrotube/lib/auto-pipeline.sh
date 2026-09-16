@@ -36,6 +36,24 @@ cd "$BARROTUBE_HOME"
 
 DRY_RUN="${DRY_RUN:-0}"
 FORCE_TOPIC="${FORCE_TOPIC:-}"
+# ── 슬립 방지 ────────────────────────────────────────────────────────────
+# 이 기계는 서버가 아니라 노트북이다. 파이프라인이 도는 도중 유휴 슬립에 들어가면
+# 작업이 통째로 정지하고, 깨어날 때쯤엔 예약 공개 시각이 이미 지나 있다.
+# 2026-09-16 EP-2026-0156 실측: 07:18 시작 → 08:05 수면 → 13:09 업로드.
+# 실제 작업은 1시간 안쪽이었는데 10:00 예약이 3시간 전이 돼 즉시 공개돼 버렸다.
+#
+# install-schedule.js 가 만드는 래퍼에 caffeinate 가 있었지만(FR-S-002),
+# 설치된 launchd 는 이 스크립트를 **직접** 부르고 있어서 한 번도 적용되지 않았다.
+# 래퍼가 아니라 여기에 두면 launchd 로 돌든 손으로 돌든 항상 걸린다.
+#
+# ⚠️ -i 는 '유휴 슬립'만 막는다. 뚜껑을 닫으면(클램셸) 이걸로도 잠든다 —
+#    일과 중 회차는 pmset 기상 예약과 함께 써야 한다 (lib/install-cron.sh wake).
+if [ -z "${BT_NO_CAFFEINATE:-}" ] && command -v caffeinate >/dev/null 2>&1; then
+  caffeinate -i -w $$ &
+  BT_CAFFEINATE_PID=$!
+  trap 'kill "$BT_CAFFEINATE_PID" 2>/dev/null || true' EXIT
+fi
+
 RESUME_EP="${RESUME_EP:-}"
 SLOT="${SLOT:-}"
 BT_SKIP_MEDIA_RENDER="${BT_SKIP_MEDIA_RENDER:-0}"
@@ -50,6 +68,11 @@ while [ $# -gt 0 ]; do
     *) echo "알 수 없는 인자: $1" >&2; exit 2 ;;
   esac
 done
+
+case "$SLOT" in ''|us-close|kr-close|realestate) ;; *) echo "Invalid slot" >&2; exit 2 ;; esac
+if [ -n "$RESUME_EP" ] && [[ ! "$RESUME_EP" =~ ^EP-[0-9]{4}-[0-9]{4}$ ]]; then
+  echo "Invalid RESUME_EP" >&2; exit 2
+fi
 
 source "${SCRIPT_DIR}/guards.sh"
 
@@ -93,7 +116,7 @@ log_stage() {
 }
 
 json_get() {  # json_get <file> <python-expr on d>
-  python3 -c "import json,sys;d=json.load(open('$1'));print($2)" 2>/dev/null
+  python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print($2)" "$1" 2>/dev/null
 }
 
 # macOS 에는 GNU coreutils 의 timeout 이 없다 (이 머신에 timeout·gtimeout 둘 다 부재 — 실측).
@@ -185,6 +208,37 @@ if [ -n "$SLOT" ]; then
   SLOT_LABEL=$(json_get "$ROUTINES" "d['slots']['$SLOT']['label']")
   NEWS_SOURCES=$(json_get "$ROUTINES" "','.join(d['slots']['$SLOT']['news_sources'])")
   PUBLISH_AT=$(json_get "$ROUTINES" "d['slots']['$SLOT']['publish_at']")
+
+  # ── 다음 회차까지 깨워 두기 (기상 예약 없이) ─────────────────────────────
+  # pmset 기상 예약은 root 가 필요해 무인으로 걸 수 없다. 대신 **이미 깨어 있는 회차**가
+  # 다음 회차 시작 시각까지 슬립을 붙잡아 두면 같은 효과가 난다.
+  #
+  # 운영자 환경(2026-09-16): 08~18시 일과 중 손을 못 댄다. 06:00 회차는 기상 시간에 도니
+  # 그 실행이 10:00 회차 시작까지 다리를 놓아 주면 점심 회차가 성립한다.
+  # 16:00 회차는 다리를 놓지 않는다 — 11시부터 5시간을 더 깨워 두면 가방 속에서
+  # 배터리와 발열을 태운다. 그 회차는 퇴근 후 노트북을 여는 순간 launchd 가 만회 실행하고,
+  # 18:00 목표를 6시간 이내로 놓쳤으면 늦은-게시 유예가 즉시 공개한다.
+  #
+  # config/routines.json 의 slots.<slot>.keep_awake_until ("HH:MM") 이 정본이다. 없으면 안 건다.
+  if [ -z "${BT_NO_CAFFEINATE:-}" ] && [ -n "${SLOT:-}" ] && command -v caffeinate >/dev/null 2>&1; then
+    KEEP_UNTIL=$(json_get "$ROUTINES" "d['slots'].get('$SLOT',{}).get('keep_awake_until','')" 2>/dev/null || echo "")
+    if [ -n "$KEEP_UNTIL" ]; then
+      KEEP_SECS=$(BT_KU="$KEEP_UNTIL" python3 -c "
+  import datetime, os
+  kst = datetime.timezone(datetime.timedelta(hours=9))
+  now = datetime.datetime.now(kst)
+  h, m = os.environ['BT_KU'].split(':')
+  t = now.replace(hour=int(h), minute=int(m), second=0, microsecond=0)
+  if t <= now: t += datetime.timedelta(days=1)
+  print(int((t - now).total_seconds()))
+  " 2>/dev/null || echo 0)
+      if [ "${KEEP_SECS:-0}" -gt 0 ] && [ "${KEEP_SECS:-0}" -lt 43200 ]; then
+        nohup caffeinate -i -t "$KEEP_SECS" >/dev/null 2>&1 &
+        disown 2>/dev/null || true
+        echo "  ☕ ${KEEP_UNTIL} 까지 슬립을 막습니다 ($((KEEP_SECS/60))분) — 다음 회차가 잠든 채로 넘어가지 않게"
+      fi
+    fi
+  fi
   # 슬롯이 포맷·페르소나를 지정할 수 있다. 예전엔 create-episode 에 안 넘겨서
   # 부동산 슬롯(shorts-3min·barro-analyst)도 기본값(shorts 60초·barro-alert)으로 만들어졌다.
   SLOT_FORMAT=$(json_get "$ROUTINES" "d['slots']['$SLOT'].get('format','')")
@@ -359,6 +413,34 @@ fi
 if [ -z "$RESUME_EP" ]; then
   log_stage "📝 Phase 3 — S0 Brief 생성 (무비용)"
   echo "Topic: $TOPIC"
+
+  # 토픽에 실린 인용을 **여기서** 검증한다. 토픽은 00_brief.md 에 통째로 들어가고,
+  # 팩트체커는 나레이션뿐 아니라 그 배경 문서까지 채점한다.
+  # 2026-09-16 실측 두 건:
+  #   EP-2026-0157 — 데스크 브리핑이 197일 전 기사(확전)를 오늘 것(휴전)으로 인용 →
+  #                  재작성 3회가 내용을 통째로 지워 「배경은 확인이 필요합니다」만 남았다.
+  #   EP-2026-0158 — 운영자가 넘긴 FORCE_TOPIC 의 수치가 틀려 HIGH 가 안 내려갔다.
+  #                  나레이션을 아무리 고쳐도 배경 문서가 계속 채점돼 게이트가 안 풀렸다.
+  # 대본에 토큰을 쓰기 전에 잡으면 두 사고 모두 여기서 끝난다.
+  if [ "$DRY_RUN" = "0" ] && [ -n "${BT_SKIP_TOPIC_CITATION_CHECK:-}" ]; then
+    echo "  ⏭  토픽 인용 검증 건너뜀 (BT_SKIP_TOPIC_CITATION_CHECK)"
+  elif [ "$DRY_RUN" = "0" ]; then
+    TOPIC_CITE=$(BT_TOPIC="$TOPIC" BT_DATE="$(date '+%Y-%m-%d')" node -e '
+      const t = process.env.BT_TOPIC || "";
+      import("./scripts/automation/lib/evidence-verify.js").then(async (m) => {
+        const urls = m.extractEvidenceUrls(t);
+        if (!urls.length) { console.log("SKIP no-url"); return; }
+        const stale = await m.findStaleCitations(urls, process.env.BT_DATE, { maxAgeDays: 3 });
+        if (!stale.length) { console.log(`OK ${urls.length}건`); return; }
+        for (const c of stale) console.log(`STALE ${c.date} (${c.staleDays}일 전) ${c.url}`);
+      }).catch((e) => console.log("SKIP " + e.message));
+    ' 2>/dev/null || echo "SKIP error")
+    echo "$TOPIC_CITE" | sed 's/^/  🔗 /'
+    if echo "$TOPIC_CITE" | grep -q '^STALE'; then
+      halt_for_human "Phase 3 brief" \
+        "토픽이 오늘 사건의 근거로 **오래된 기사**를 인용했습니다. 같은 사건의 오늘 기사로 바꾸거나 그 사건을 빼세요. 이대로 진행하면 팩트체크가 뒤늦게 잡고 재작성이 내용을 지웁니다."
+    fi
+  fi
   if [ "$DRY_RUN" = "1" ]; then
     EP_ID="EP-2026-DRYRUN"
     EP_DIR="${BARROTUBE_HOME}/workspace/episodes/${EP_ID}"
@@ -453,6 +535,93 @@ fi
 # 게이트가 걸리면 곧장 사람을 부르지 않는다 — 리포트가 claim 마다 `수정 제안` 을 써 주므로
 # 그걸 적용하고 다시 검증한다. guards.factcheck_max_rewrites 만큼 시도하고 그래도 남으면 halt.
 # (2026-08-17: 이 루프가 없어서 8/16·8/17 이틀 연속 EP 가 여기서 멈추고 게시가 0건이 됐다.)
+# 리포트가 **지금 대본**을 심사한 게 맞는지 본다.
+# 2026-09-14 EP-2026-0154: run-factcheck 가 모델의 \u 이스케이프 오타로 죽으면서
+# 35_factcheck.md 가 직전 판(script_revision 4)으로 남았다. 대본은 revision 5 인데
+# 게이트는 옛 리포트를 읽는다 — 고친 지적이 그대로 살아 있고, 새 문장은 아무도 안 봤다.
+factcheck_report_stale() {
+  [ -s "$FACTCHECK_PATH" ] || return 1
+  local sr er
+  sr=$(sed -n 's/^script_revision:[[:space:]]*//p' "$FACTCHECK_PATH" | head -1)
+  er=$(sed -n 's/^revision:[[:space:]]*//p' "$SCRIPT_PATH" 2>/dev/null | head -1)
+  [ -n "$sr" ] && [ -n "$er" ] && [ "$sr" != "$er" ]
+}
+
+# 대본이 "왜"를 말하는 씬이 몇 개인가. 팩트체크 재작성이 설명을 지웠는지 재는 자다.
+#
+# 2026-09-16 EP-2026-0157: 재작성이 insight 씬의 「휴전 뒤 재건·무기 현대화 수요 기대
+# 때문에 매수세가 몰렸다」를 「정확한 상승 배경은 후속 보도로 다시 확인이 필요합니다」로
+# 바꿔 버렸다. 팩트체크 지적은 줄었지만(그래서 옛 점수로는 '더 좋은 판본') 시청자가
+# 60초를 쓴 이유가 사라졌다 — 제목은 '급등한 이유'를 약속했는데 본문이 안 갚았다.
+# 지적 수만 재면 이 손실이 안 보인다. 그래서 인과 밀도를 점수에 넣는다.
+causal_scene_count() {
+  node -e '
+    const { readFileSync } = require("node:fs");
+    import("./scripts/automation/lib/script-quality-contract.js").then((m) => {
+      const t = readFileSync(process.argv[1], "utf8");
+      const nar = [...t.matchAll(/narration:\s*([\s\S]*?)(?=\n    \w+:)/g)].map((x) => x[1]);
+      const has = (s) => m.MECHANISM_MARKERS.some((k) => s.includes(k))
+        || m.MECHANISM_VERB_JA.test(s) || m.MECHANISM_CONDITIONAL.test(s);
+      // 책임 회피 문장은 인과로 치지 않는다 — 시청자를 다른 데로 보내는 말이다.
+      const dodge = /확인이 필요|다시 확인|후속 보도|지켜봐야 알|알 수 없/;
+      console.log(nar.filter((s) => has(s) && !dodge.test(s)).length);
+    }).catch(() => console.log(-1));
+  ' "$1" 2>/dev/null || echo -1
+}
+
+# 게이트 위반의 무게. 낮을수록 좋은 판본이다.
+# 두 번째 인자로 대본을 주면 인과 손실도 함께 잰다.
+factcheck_score() {
+  local f="$1" script="${2:-}" high med bad causal=0
+  high=$(sed -n 's/^high_risk_count:[[:space:]]*//p' "$f" | head -1)
+  med=$(sed -n 's/^med_risk_count:[[:space:]]*//p' "$f" | head -1)
+  case "${high:-0}" in ''|*[!0-9]*) high=0 ;; esac
+  case "${med:-0}" in ''|*[!0-9]*) med=0 ;; esac
+  # grep -c 는 0건이면 exit 1 이라, `|| echo 0` 를 붙이면 "0\n0" 이 나와 산술이 깨진다.
+  # (2026-09-16 실측: `bad math expression: operator expected at '0'`)
+  bad=$(grep -c '\*\*검증 결과\*\*: 부정확' "$f" 2>/dev/null | head -1)
+  case "${bad:-0}" in ''|*[!0-9]*) bad=0 ;; esac
+  if [ -n "$script" ] && [ -s "$script" ]; then
+    causal=$(causal_scene_count "$script")
+    case "${causal:-0}" in ''|*[!0-9-]*) causal=0 ;; esac
+    [ "$causal" -lt 0 ] && causal=0
+  fi
+  # 인과 씬 하나는 MED 지적 15개어치다 — HIGH(100)보다는 가볍게 두어
+  # 진짜 사실 오류를 인과로 덮지는 못하게 한다.
+  echo $(( high * 100 + bad * 10 + med - causal * 15 ))
+}
+
+# 재작성은 대본을 나아지게 할 수도, 나빠지게 할 수도 있다. 2026-09-14 EP-2026-0154 는
+# HIGH 1 → 2 → 3 → 4 로 **매 판 나빠지며** 예산을 다 쓰고, 사람에게 가장 나쁜 판본을
+# 넘겼다 (재작성기가 미확인 지적을 고치랬더니 없는 최상급을 지어냈다). EP-2026-0153 은
+# 2·4판이 pass:true 였는데도 마지막 판만 남아 halt 했다.
+# 그래서 매 판을 떠 두고, 멈출 때는 **가장 점수가 낮은 판본으로 되돌린 뒤** 사람을 부른다.
+fc_snapshot() {
+  local tag="$1" dir="${EP_DIR}/platforms/${PLATFORM}/.factcheck-revs"
+  mkdir -p "$dir"
+  cp -f "$SCRIPT_PATH" "${dir}/${tag}.script.md" 2>/dev/null || true
+  cp -f "$FACTCHECK_PATH" "${dir}/${tag}.report.md" 2>/dev/null || true
+}
+
+fc_restore_best() {
+  local dir="${EP_DIR}/platforms/${PLATFORM}/.factcheck-revs"
+  [ -d "$dir" ] || return 0
+  local best="" bestscore=999999 s
+  for r in "$dir"/*.report.md; do
+    [ -s "$r" ] || continue
+    s=$(factcheck_score "$r" "${r%.report.md}.script.md")
+    if [ "$s" -lt "$bestscore" ]; then bestscore="$s"; best="${r%.report.md}"; fi
+  done
+  [ -n "$best" ] || return 0
+  local cur; cur=$(factcheck_score "$FACTCHECK_PATH" "$SCRIPT_PATH")
+  if [ "$bestscore" -lt "$cur" ]; then
+    cp -f "${best}.script.md" "$SCRIPT_PATH"
+    cp -f "${best}.report.md" "$FACTCHECK_PATH"
+    echo "   ↩ 재작성이 대본을 악화시켰다 — 가장 나은 판본($(basename "$best"), 점수 ${bestscore} < 현재 ${cur})으로 되돌렸다"
+    audit "auto_pipeline_factcheck_rollback" "WARN" "slot=$SLOT ep=$EP_ID to=$(basename "$best") score=${bestscore} from=${cur}"
+  fi
+}
+
 factcheck_gate_blocks() {
   [ -s "$FACTCHECK_PATH" ] || return 1
   local high med grounded
@@ -463,6 +632,11 @@ factcheck_gate_blocks() {
   case "${med:-0}" in ''|*[!0-9]*) med=0 ;; esac
   # HIGH 는 근거가 없는 주장이다 — 이 줄이 없어서 run-factcheck 의 pass:false 가
   # 파이프라인 어디에서도 막히지 않았다 (파일 머리의 "5. Fact-check HIGH 자동 회귀" 는 문서만 있었다).
+  # 옛 대본을 심사한 리포트로는 통과도 차단도 판단할 수 없다 — 무조건 막는다.
+  if factcheck_report_stale; then
+    echo "   ⚠ 팩트체크 리포트가 대본 판본과 어긋난다 (리포트 script_revision != 대본 revision)" >&2
+    return 0
+  fi
   if [ "$high" -gt 0 ]; then return 0; fi
   { [ "$med" -gt 0 ] && [ "$grounded" != "true" ]; } || \
     { grep -q '^### \[MED\]' "$FACTCHECK_PATH" && grep -q '\*\*검증 결과\*\*: 부정확' "$FACTCHECK_PATH"; }
@@ -474,6 +648,7 @@ if [ "$DRY_RUN" = "0" ] && [ -s "$FACTCHECK_PATH" ]; then
   FC_REWRITES=0
   FC_REGROUNDS=0
   FC_MAX_REGROUNDS=2
+  fc_snapshot "rev0"
 
   while factcheck_gate_blocks; do
     # grounded=false 는 대본의 잘못이 아니다 — 팩트체크 백엔드가 실시간 검색을 못 붙인 것이다
@@ -492,13 +667,15 @@ if [ "$DRY_RUN" = "0" ] && [ -s "$FACTCHECK_PATH" ]; then
     fi
 
     if [ "$FC_REWRITES" -ge "$FC_MAX_REWRITES" ]; then
+      fc_restore_best
       halt_for_human "Phase 6 factcheck" \
-        "MED 부정확 또는 미접지(grounded=false) 주장이 ${FC_MAX_REWRITES}회 재작성·${FC_REGROUNDS}회 접지 재시도 후에도 남았습니다. 수치·최상급 표현을 중립 문구로 고치고 팩트체크를 다시 실행하세요."
+        "MED 부정확 또는 미접지(grounded=false) 주장이 ${FC_MAX_REWRITES}회 재작성·${FC_REGROUNDS}회 접지 재시도 후에도 남았습니다. 수치·최상급 표현을 중립 문구로 고치고 팩트체크를 다시 실행하세요. (남아 있는 대본은 시도한 판본 중 지적이 가장 적은 것입니다.)"
     fi
     # 게이트는 걸리는데 고칠 주장이 없으면(모든 판정이 '사실') 재작성은 헛돈다.
     # --check 는 파일만 읽으므로 비용이 없다. exit 10 = 고칠 게 있다.
     if node scripts/automation/revise-script-factcheck.js \
          --episode "$EP_DIR" --platform "$PLATFORM" --check; then
+      fc_restore_best
       if [ "$FC_GROUNDED" != "true" ]; then
         halt_for_human "Phase 6 factcheck" \
           "팩트체크가 ${FC_MAX_REGROUNDS}회 재실행 후에도 접지되지 않았습니다(grounded=false, 실시간 검색 0건). 대본 문제가 아니라 검색 백엔드 문제입니다 — 네트워크·검색 도구 상태를 확인하고 재개하세요."
@@ -513,12 +690,13 @@ if [ "$DRY_RUN" = "0" ] && [ -s "$FACTCHECK_PATH" ]; then
 
     node scripts/automation/revise-script-factcheck.js \
       --episode "$EP_DIR" --platform "$PLATFORM" \
-      || halt_for_human "Phase 6 재작성" \
-           "MED 부정확 또는 미접지(grounded=false) 주장을 대본에 반영하지 못했습니다. 대본을 손보고 재개하세요."
+      || { fc_restore_best; halt_for_human "Phase 6 재작성" \
+           "MED 부정확 또는 미접지(grounded=false) 주장을 대본에 반영하지 못했습니다. 대본을 손보고 재개하세요."; }
 
     node scripts/automation/run-factcheck.js \
       --episode "$EP_ID" --platform "$PLATFORM" --force \
       || fail_with_alert "Phase 6 factcheck" "재작성 후 run-factcheck.js 실패"
+    fc_snapshot "rev${FC_REWRITES}"
   done
 
   if [ "$FC_REWRITES" -gt 0 ]; then
@@ -1084,7 +1262,7 @@ fi
 log_stage "🔍 Phase 9 — QA Gate (score ≥ 60, blocker = 0)"
 
 if [ "$DRY_RUN" = "0" ]; then
-  guard_qa_pass "$EP_DIR" || {
+  guard_qa_pass "$MEDIA_BASE" || {
     notify_telegram "🛑 <b>${EP_ID}</b> QA FAIL — publish 차단\n수동 검토 후 <code>/approve ${EP_ID}</code> 또는 <code>/cancel ${EP_ID}</code>"
     exit 0
   }
@@ -1114,6 +1292,8 @@ elif [ ! -s "$APPROVAL_PATH" ]; then
   AUTO_APPROVE=$(json_get "$AUTONOMY_FILE" "d.get('guards',{}).get('auto_approve_on_qa_pass',False)")
   if [ "$AUTO_APPROVE" = "True" ]; then
     echo "🤖 auto_approve_on_qa_pass=true — QA PASS 근거로 S10 토큰 자동 발급"
+    mkdir -p "${BARROTUBE_HOME}/workspace/.reject-window"
+    printf '%s\n' 'awaiting_notification' > "${BARROTUBE_HOME}/workspace/.reject-window/${EP_ID}.open"
     if node scripts/automation/approve-episode.js --episode "$EP_ID" --platform "$PLATFORM" \
          --by "auto-pipeline (QA PASS, slot=$SLOT)" >/dev/null 2>&1 && [ -s "$APPROVAL_PATH" ]; then
       audit "auto_pipeline_auto_approved" "INFO" "slot=$SLOT ep=$EP_ID"

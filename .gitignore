@@ -1,5 +1,6 @@
 # Secrets (데이터 영역 ~/BarroTubeData/.env로 symlink)
 .env
+.env.*
 .env.local
 .env.*.local
 *.key
@@ -22,6 +23,7 @@ secrets/
 # Backup
 *.bak
 *.bak.*
+*.bak[0-9]*
 .claude/skills/barrotube/config/*.bak.*
 .backup/
 
