@@ -185,5 +185,34 @@ test('avgViewPct — 조회 가중 평균, Analytics 없으면 null', () => {
   // 창 밖의 날은 빠진다
   assert.equal(avgViewPct([{ day: '2026-08-01', views: 999, averageViewPercentage: 90 }], now), null);
   // 조회 0 인 날은 분모를 오염시키지 않는다
-  assert.equal(avgViewPct([...rows, { day: '2026-08-31', views: 0, averageViewPercentage: 5 }], now), got);
+  assert.equal(avgViewPct([...rows, { day: '2026-08-29', views: 0, averageViewPercentage: 5 }], now), got);
+});
+
+test('missing observations are not misses, zero views, or future performance', async () => {
+  const base = [vidAt48(10, 1000), vidAt48(20, 1000), vidAt48(30, 1000)];
+  const hit = vidAt48(3, 1600);
+  const missing = vid(4, 0, 0, { stats_history: [{ at: daysAgo(5), views: 9000 }] });
+  assert.equal(viewsAtAge(missing), null, 'pre-publication stats must be excluded');
+  assert.equal(hitRate([...base, hit, missing], NOW), 1, 'unobserved video is not a miss');
+  const shuffled = { ...hit, stats_history: [...hit.stats_history].reverse() };
+  assert.equal(indexViewsAt([shuffled], NOW), 1600);
+  const index = { videos: { a: { ...hit, stats_history: [...hit.stats_history, { at: daysAgo(-1), views: 999999 }] } } };
+  assert.equal(normalizeIndex(index, NOW)[0].views, 1600);
+  assert.equal(avgViewPct([{ day: '2026-09-01', views: 100, averageViewPercentage: 99 }], NOW), null);
+  assert.equal(avgViewPct([{ day: '2026-08-31', views: 100, averageViewPercentage: null }], NOW), null);
+
+  const { readFileSync } = await import('node:fs');
+  const config = JSON.parse(readFileSync(new URL('../config/growth.json', import.meta.url)));
+  const observations = [14, 7, 0].map((d, i) => ({ at: daysAgo(d), views: [1000, 2000, 3500][i] }));
+  const tracked = vid(20, 3500, 20, { stats_history: observations });
+  let card = computeScorecard({ videos: [tracked], history: [], config, now: NOW });
+  let wow = card.kpis.find((k) => k.id === 'weekly_views_growth');
+  assert.deepEqual([wow.value, wow.method, wow.grade], [1.5, 'index', 'GREEN']);
+  card = computeScorecard({ videos: [{ ...tracked, stats_history: observations.slice(1) }], history: observations, config, now: NOW });
+  wow = card.kpis.find((k) => k.id === 'weekly_views_growth');
+  assert.equal(wow.grade, 'NA', 'incomplete index must not switch to a different population');
+  const analytics = Array.from({ length: 14 }, (_, i) => ({ day: daysAgo(13 - i).slice(0, 10), views: i < 7 ? 1000 : 500 }));
+  card = computeScorecard({ videos: [tracked], history: observations, config, now: NOW, analytics });
+  wow = card.kpis.find((k) => k.id === 'weekly_views_growth');
+  assert.deepEqual([wow.value, wow.method, wow.grade], [0.5, 'analytics', 'RED']);
 });

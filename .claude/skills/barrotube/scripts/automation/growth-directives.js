@@ -25,6 +25,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
+import { competitorAgenda, formatAgenda } from './lib/competitor-agenda.js';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const INTEL_DIR = join(ROOT, 'workspace', 'intel', 'competitors');
@@ -32,6 +33,13 @@ const GROWTH_DIR = join(ROOT, 'workspace', 'growth');
 const OUT_DIR = join(GROWTH_DIR, 'directives');
 const SLOTS = ['us-close', 'kr-close', 'realestate'];
 const MAX_CHARS = 3000; // 소비처(generate-script)의 slice(0,3000) 안에 통째로 들어가게
+
+/** date 이전 7일치 날짜 문자열 — 경쟁 스냅샷 폴백용. */
+function recentSnapshotDates(date, back = 7) {
+  const base = Date.parse(`${date}T12:00:00Z`);
+  return Array.from({ length: back }, (_, i) =>
+    new Date(base - (i + 1) * 86400_000).toISOString().slice(0, 10));
+}
 
 function loadJSON(path, fallback = null) {
   if (!existsSync(path)) return fallback;
@@ -58,7 +66,12 @@ export function titleDirectives(features) {
   };
   // '쓰기' 처방은 채널 정책과 충돌하지 않는 피처만. has_superlative 가 positive 로 잡혀도
   // 클릭베이트 금지 규칙(메타데이터 시스템 프롬프트)과 정면 충돌하므로 권하지 않는다.
-  const SAFE_POSITIVE = new Set(['has_bracket', 'has_number', 'has_percent', 'has_question', 'title_short']);
+  // has_bracket 을 뺐다. 경쟁 채널 **조회** lift 는 3.46× 로 높지만, 우리 채널의
+  // **북극성(구독)** 실측은 반대다 — 2026-08-25~09-16 26편에서 대괄호가 붙은 19편은
+  // 구독/1k뷰 0.77, 안 붙은 7편은 2.41 이었다. 태그가 제목 앞 8자를 먹으면서
+  // '왜' 를 말할 자리가 사라졌고(story 동반율 86%→16%), 주간 순증 구독이 11→2 가 됐다.
+  // 조회를 사는 처방과 구독을 사는 처방이 다르면 북극성을 따른다.
+  const SAFE_POSITIVE = new Set(['has_number', 'has_percent', 'has_question', 'title_short']);
   const rows = (features ?? []).filter((f) => NAME[f.feature] && f.n_with >= 10);
   const pos = rows.filter((f) => f.direction === 'positive' && SAFE_POSITIVE.has(f.feature))
     .sort((a, b) => b.lift - a.lift).slice(0, 2);
@@ -82,7 +95,7 @@ export function exhaustedTopics(outliers, limit = 3) {
     .map((o) => `- ${cut(o.title, 45)}… (${o.channel}, ${o.multiple ?? o.vpd_multiple ?? ''}× 소진)`);
 }
 
-export function buildDirective({ date, slot, analysis, kpi, experiment }) {
+export function buildDirective({ date, slot, analysis, kpi, experiment, policy, agenda }) {
   const lines = [`# 성장 지시 — ${date} · ${slot}`, ''];
 
   // 1) 실험 — 최우선. 주 1개 실험이 로테이션의 핵심이라 맨 위.
@@ -91,10 +104,38 @@ export function buildDirective({ date, slot, analysis, kpi, experiment }) {
     lines.push(`## 이번 주 실험 (${experiment.id} · 적용 대상: ${target})`, `- ${experiment.directive}`, '');
   }
 
+  // 1.5) 오늘 경쟁사 의제 — **주제 선정의 1순위 입력**.
+  // 기존 경쟁 분석은 토큰 빈도 갭이라 「이렇게·겁니다·1부」 같은 조각을 내놨다(2026-09-15 실측).
+  // 여기서는 서로 다른 채널 몇 개가 같은 것을 말하는지(합의)를 센다.
+  if (agenda?.agenda?.length) {
+    lines.push(...formatAgenda(agenda));
+    lines.push('> 위 1순위 의제가 우리 슬롯의 사건이면 **그것을 메인으로 잡아라.** 경쟁사가 이미 다 다루고 있다는 뜻이다.');
+    lines.push('> 우리의 차별점은 "무엇을 다루느냐"가 아니라 "왜 그런지를 어떻게 말하느냐"다.');
+    lines.push('');
+  }
+
   // 2) 제목 패키징 (S9 메타데이터가 소비)
+  // 채널 정책이 경쟁 처방보다 위다 — 경쟁 lift 는 남의 채널 '조회'로 잰 값이고,
+  // 아래는 우리 채널 '구독'으로 잰 값이다. 북극성이 다르면 우리 값을 따른다.
+  if (policy?.title_requires_causal_clause) {
+    const th = policy.index_move_thresholds ?? {};
+    lines.push('## 제목 규칙 (채널 정책 · 경쟁 처방보다 우선)');
+    lines.push('- **제목은 "왜"를 말해야 한다.** 통념과 어긋난 것, 반대로 움직인 것, 숨은 원인 중 하나를');
+    lines.push('  제목 안에서 주장하라 (예: "…인데도 …", "진짜 이유는 …", "금리 아니라 …").');
+    lines.push('  실측: 이 구조가 있으면 구독/1k뷰 2.12, 없으면 0.63 (26편, 3.4배).');
+    lines.push(`- **일상 등락률을 제목의 주어로 쓰지 마라.** "오늘 X% 올랐다/내렸다"는 지수 ${th.index_pct}% ·`);
+    lines.push(`  환율 ${th.fx_pct}% · 원자재 ${th.commodity_pct}% · 금리 ${th.rate_bp}bp · 개별종목 ${th.single_name_pct}% 미만이면 뉴스가 아니다.`);
+    lines.push('  수치 나열 제목은 조회는 받아도 구독으로 이어지지 않는다 (최근 8편 중 7편이 수치 나열, 구독 0).');
+    lines.push('- **단, 아래는 등락폭과 무관하게 반드시 메인이다** (작은 움직임이어도):');
+    lines.push('  ① 레벨 돌파·붕괴 — 라운드 넘버를 뚫는 순간 (미 10년물 5%, 유가 100달러, 원/달러 1,400원, 코스피 7000선)');
+    lines.push('  ② N년래 최고·최저 경신   ③ 주·월·분기 누적 급등 (유가, 9월에만 20%)   ④ 연속기록 시작·중단');
+    lines.push('  여럿이 겹치면 ① > ② > ③ > ④ 순으로 고른다. 그때도 제목은 "무엇이 그렇게 만들었나"를 함께 말한다.');
+    lines.push('- 시황 라벨([美마감]·[속보] 등)로 제목을 시작하면 "왜"를 말할 자리가 사라진다. 쓰지 않는 쪽을 기본으로 한다.');
+    lines.push('');
+  }
   const tf = analysis?.patterns?.title_features;
   const td = titleDirectives(tf);
-  if (td.length) lines.push('## 제목 패키징', ...td, '');
+  if (td.length) lines.push('## 제목 패키징 (경쟁 채널 조회 기준 · 위 정책과 충돌하면 위를 따른다)', ...td, '');
 
   // 3) 소재 신호 (S4 대본이 소비)
   const gaps = (analysis?.content_gaps ?? []).slice(0, 3)
@@ -116,7 +157,17 @@ export function buildDirective({ date, slot, analysis, kpi, experiment }) {
     const tops = (kpi.top_videos ?? []).slice(0, 2).map((v) => `- 잘된 것: "${cut(v.title, 40)}" (${v.vpd}/일)`);
     if (reds.length || tops.length) {
       lines.push('## 우리 채널 신호');
-      lines.push(...reds, ...tops, '');
+      lines.push(...reds, ...tops);
+      // 이 목록은 **구조를 보라고** 주는 것이지 베끼라고 주는 게 아니다.
+      // 2026-09-14 EP-2026-0154: 지시문이 「[美마감] 국채금리 4.97%, 2023년 이후 최고치」(372/일)를
+      // '잘된 것'으로 올렸고, 메타 작성기가 「[美금리비상] 10년물 4.97%, 2023년來 최고치」를 냈다 —
+      // 이틀 전 채널 1위 영상의 제목을 수치까지 그대로 복제한 것이다. 같은 수치를 반복한 영상의
+      // 48h 조회 실측이 -68% · -64% · -32% 라, 이 되먹임은 자기 최고작을 깎아먹는다.
+      if (tops.length) {
+        lines.push('> 위 제목은 **짜임새만** 참고한다. 수치·최상급·핵심어를 그대로 가져오지 마라 —');
+        lines.push('> 같은 수치를 반복한 편은 48h 조회가 최대 68% 낮았다. 오늘 새로운 것으로 제목을 열어라.');
+      }
+      lines.push('');
     }
   }
 
@@ -131,17 +182,36 @@ function main() {
     date: { type: 'string' },
     slot: { type: 'string' },
   } });
-  const date = values.date || new Date().toISOString().slice(0, 10);
+  const date = values.date || new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date) throw new Error('Invalid --date');
   const slots = values.slot ? [values.slot] : SLOTS;
+  if (slots.some((slot) => !SLOTS.includes(slot))) throw new Error('Invalid --slot');
 
   const kpi = loadJSON(join(GROWTH_DIR, 'kpi', `${date}.json`));
   const expState = loadJSON(join(GROWTH_DIR, 'experiments.json'), {});
+  // 채널 콘텐츠 정책 — 제목·훅이 무엇을 말해야 하는지의 정본.
+  const policy = (loadJSON(join(ROOT, 'config', 'growth.json'), {}) || {}).content_policy || null;
   mkdirSync(OUT_DIR, { recursive: true });
 
   for (const slot of slots) {
     const analysis = loadJSON(join(INTEL_DIR, `analysis-${date}-${slot}.json`))
       ?? loadJSON(join(INTEL_DIR, `analysis-${date}.json`));
-    const md = buildDirective({ date, slot, analysis, kpi, experiment: expState.current });
+    // 경쟁 스냅샷은 날짜별 파일이다. 오늘 것이 아직 없으면(경쟁 크론은 15:20) 가장 최근 것을 쓴다 —
+    // 하루 묵은 의제라도 없는 것보다 낫고, 30시간 창이라 대개 같은 사건을 담는다.
+    const snapPath = [date, ...recentSnapshotDates(date)]
+      .map((d) => join(INTEL_DIR, '..', 'competitors', `${d}.json`))
+      .find((f) => existsSync(f));
+    const snap = snapPath ? loadJSON(snapPath) : null;
+    // 기준 시각은 **스냅샷이 수집된 때**다. 오늘 날짜로 물으면, 어제 수집분을 쓸 때
+    // 30시간 창이 스냅샷보다 뒤에 놓여 한 편도 안 잡힌다 (2026-09-16 실측: 0편).
+    const fetchedAt = Date.parse(snap?.fetched_at ?? '');
+    const asOf = Number.isFinite(fetchedAt)
+      ? new Date(Math.min(fetchedAt, Date.parse(`${date}T23:59:59+09:00`)))
+      : new Date(`${date}T23:59:59+09:00`);
+    const agenda = snap
+      ? competitorAgenda(snap, asOf, { slot, minChannels: 2, limit: 6 })
+      : null;
+    const md = buildDirective({ date, slot, analysis, kpi, experiment: expState.current, policy, agenda });
     const outPath = join(OUT_DIR, `${date}-${slot}.md`);
     writeFileSync(outPath, md);
     console.log(`✓ ${outPath.replace(ROOT + '/', '')} (${md.length}자${analysis ? '' : ' · 경쟁 분석 없음'})`);

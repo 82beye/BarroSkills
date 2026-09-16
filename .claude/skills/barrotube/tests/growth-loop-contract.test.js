@@ -9,11 +9,11 @@ import test from 'node:test';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (p) => readFileSync(join(ROOT, p), 'utf8');
 
-test('growth-pipeline.sh — bash 문법 유효, 항상 exit 0, 텔레그램 정책 존재', () => {
+test('growth-pipeline.sh — bash 문법 유효, 실패 전달, 텔레그램 정책 존재', () => {
   const syntax = spawnSync('bash', ['-n', join(ROOT, 'lib/growth-pipeline.sh')], { encoding: 'utf8' });
   assert.equal(syntax.status, 0, syntax.stderr);
   const src = read('lib/growth-pipeline.sh');
-  assert.ok(src.trimEnd().endsWith('exit 0'), '마지막은 exit 0 고정');
+  assert.ok(src.includes('|| exit 1'), '실패를 launchd에 전달');
   assert.ok(src.includes('notify_telegram'));
   // 주간 회고는 directives *앞* — 뒤면 월요일에 방금 종료된 실험이 그날 EP 에 주입된다
   const weekly = src.indexOf('growth-weekly.js');
@@ -79,7 +79,7 @@ test('OAuth SCOPE — 크론은 넓히지 않고, 운영자가 붙인 권한을 
   // 수집기는 스코프 없음(401/403)을 조용히 강등해야 한다
   const fetcher = read('scripts/automation/fetch-channel-stats.js');
   assert.ok(fetcher.includes('403'));
-  assert.ok(fetcher.includes("process.exit(0)"), '관측 실패는 exit 0');
+  assert.ok(fetcher.includes('process.exitCode = 1'), '관측 실패가 성공으로 위장되지 않는다');
 });
 
 test('config/growth.json — KPI 정의와 실험 백로그가 유효하다', () => {

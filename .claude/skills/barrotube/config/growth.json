@@ -9,11 +9,33 @@
     "name": "seed",
     "_comment": "구독 1,000 미만 단계. 절대 수치보다 히트율·전환·일관성이 선행지표다. 1,000 돌파 시 growth 단계 임계로 재조정할 것."
   },
+  "content_policy": {
+    "_comment": "제목·훅이 무엇을 말해야 하는지. 2026-09-16 영상별 구독 실측에서 나온 규칙이다 — 조회가 아니라 북극성(weekly_net_subs)으로 잰 값이다.",
+    "_evidence": "2026-08-25~09-16, 26편. 제목에 '왜·역설·숨은 원인' 구조가 있으면 구독/1k뷰 2.12, 없으면 0.63 (3.4배). 시기를 갈라도 유지된다 — 9/05 이전 2.61 vs 1.35, 9/06 이후 0.91 vs 0.17. 같은 기간 대괄호 태그가 0%→100% 로 늘면서 story 동반율이 100%→13% 로 무너졌고 주간 순증 구독이 11→2 가 됐다.",
+    "title_requires_causal_clause": true,
+    "index_as_headline": "conditional",
+    "index_move_thresholds": {
+      "_comment": "**일상 등락률**에만 적용한다. 이 폭을 넘지 못한 '오늘 몇 % 올랐다/내렸다'는 제목·훅의 주어가 될 수 없다. 아래 always_newsworthy 에 해당하면 등락률과 무관하게 주어가 될 수 있다.",
+      "index_pct": 2.0,
+      "fx_pct": 1.0,
+      "commodity_pct": 3.0,
+      "rate_bp": 10,
+      "single_name_pct": 5.0
+    },
+    "always_newsworthy": {
+      "_comment": "등락률이 작아도 그 자체로 헤드라인이 되는 사건들. 일상 등락 임계를 적용하지 않는다. 2026-09-16 운영자 지시: '미 10년물 5% 돌파'는 5bp 움직임이어도 무조건 메인이다 — 5% 는 심리적 선이기 때문이다.",
+      "level_breach": "라운드 넘버 돌파·붕괴 (예: 미 10년물 5%, 유가 100달러, 원/달러 1,400원, 코스피 7000선, 금 4,000달러). 그 선을 넘는 순간이 사건이다.",
+      "period_cumulative": "주·월·분기 누적 이동이 평소를 크게 넘을 때 (예: 유가, 9월에만 20% 급등).",
+      "multi_year_extreme": "N년래 최고·최저 경신 (예: 3년래 최고, 2023년 10월 이후 최고).",
+      "streak_break": "연속 기록의 시작·중단 (예: 7일 연속 하락, 3일째 하락)."
+    },
+    "_headline_priority": "같은 날 여러 소재가 있으면 always_newsworthy 에 해당하는 것을 메인으로 올린다. 그 안에서도 level_breach > multi_year_extreme > period_cumulative > streak_break 순."
+  },
   "kpis": {
     "publish_consistency_7d": {
       "label": "발행 일관성(7d)",
       "planned_per_week": 13,
-      "_comment": "us-close 7 + kr-close 5 + realestate 1 = 주 13편",
+      "_comment": "us-close 7 + kr-close 5 + realestate 1 = 주 13편. 2026-09-14 실측 주의 — 총량 13편은 포화점(2편/일) 근처라 타당하지만 **배치가 요철이었다**: 금요일만 3편이고 토·일은 1편씩이었다 (2026-09-14 realestate 를 토요일 공개로 떼어 해소). 3편일은 2편일 대비 채널 총 조회가 1239 vs 1249 로 같아서 셋째 편이 낭비된다. 이 지표를 올리려고 발행을 더 늘리면 video_hit_rate_7d·views_48h_index_7d 가 내려간다 — 두 지표가 반대를 가리키므로 views_per_publish_7d 로 어느 쪽이 옳은지 판정하라. 자세한 근거는 routines.json 의 _schedule_note_2026_09_14.",
       "green": 1.0,
       "yellow": 0.85,
       "direction": "gte",
@@ -41,6 +63,22 @@
       "yellow": 0.1,
       "direction": "gte",
       "format": "ratio"
+    },
+    "views_48h_index_7d": {
+      "label": "48h 조회 지수",
+      "_comment": "최근 7d 영상의 48h 조회 중앙값 ÷ 2~37d 기준선 중앙값. 히트율(임계 통과 비율)이 표본 11편에서 100%↔0% 로 튀어 크기 변화를 못 읽어 주므로 같은 재료의 연속값을 함께 낸다.",
+      "green": 1.0,
+      "yellow": 0.8,
+      "direction": "gte",
+      "format": "multiple"
+    },
+    "views_per_publish_7d": {
+      "label": "발행당 조회(7d)",
+      "_comment": "주간 채널 조회 증분 ÷ 주간 발행 편수. 발행을 늘리는 게 도달을 넓히는지 파이를 나누는지 가른다 — 발행 일관성 RED 와 히트율 RED 가 충돌할 때 어느 쪽이 옳은지 판정하는 계측기. 임계는 2026-09 실측(2편일 625 · 3편일 413) 기준 잠정값이다.",
+      "green": 600,
+      "yellow": 400,
+      "direction": "gte",
+      "format": "int"
     },
     "like_rate_7d": {
       "label": "좋아요율(7d)",

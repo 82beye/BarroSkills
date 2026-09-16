@@ -22,6 +22,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
+import { metricsVersionOf } from './lib/growth-kpi.js';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const GROWTH_DIR = join(ROOT, 'workspace', 'growth');
@@ -61,9 +62,25 @@ function kpiValue(kpiDoc, id) {
  * 실험 판정 — 시작 시점 스코어카드 대비 (히트율, 좋아요율).
  *   success:      둘 중 하나 ≥20% 개선이고 나머지가 10% 이상 악화하지 않음
  *   fail:         둘 중 하나 ≥20% 악화
- *   inconclusive: 그 외 (표본 부족 NA 포함)
+ *   inconclusive: 그 외 (표본 부족 NA, 계산식 판본 불일치 포함)
+ *
+ * 판본 불일치를 왜 fail 로 세지 않는가 — 2026-09-14 EXP-01-title-bracket 이
+ * 히트율 1.0 → 0.09 (-91%) 로 fail 판정을 받았는데, 그 사이 2026-09-10 에
+ * 히트율 계산식 자체가 바뀌었다(커밋 1ae7391, "조회가 무너지는 주에 초록불이
+ * 켜지던 KPI를 고친다"). 즉 -91% 의 대부분은 제목이 아니라 **옛 계산식이
+ * 틀렸던 것**이다. 그 주에 대괄호 없는 제목이 사실상 0편이라 대조군도 없었다.
+ * 잘못된 fail 은 멀쩡한 처방을 버리고 다음 실험까지 오염시킨다.
  */
 export function judgeExperiment(startKpi, endKpi) {
+  const vStart = metricsVersionOf(startKpi);
+  const vEnd = metricsVersionOf(endKpi);
+  if (vStart !== null && vEnd !== null && vStart !== vEnd) {
+    return {
+      verdict: 'inconclusive',
+      reason: `KPI 계산식 판본이 실험 도중 바뀌었다 (v${vStart} → v${vEnd}). 같은 자로 잰 값이 아니라 판정하지 않는다.`,
+      deltas: [],
+    };
+  }
   const pairs = ['video_hit_rate_7d', 'like_rate_7d'].map((id) => ({
     id, before: kpiValue(startKpi, id), after: kpiValue(endKpi, id),
   }));
@@ -90,7 +107,8 @@ function main() {
     'if-due': { type: 'boolean', default: false },
   } });
   const now = new Date();
-  const today = values.date || now.toISOString().slice(0, 10);
+  const today = values.date || new Date(now.getTime() + 9 * 3600_000).toISOString().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(today) || new Date(`${today}T00:00:00Z`).toISOString().slice(0, 10) !== today) throw new Error('Invalid --date');
   const week = isoWeek(new Date(`${today}T12:00:00Z`));
 
   if (values['if-due'] && existsSync(join(GROWTH_DIR, 'weekly', `${week}.md`))) {
@@ -103,7 +121,7 @@ function main() {
 
   const todayKpiDate = nearestKpi(KPI_DIR, today);
   const todayKpi = todayKpiDate ? loadJSON(join(KPI_DIR, `${todayKpiDate}.json`)) : null;
-  const weekAgo = new Date(now.getTime() - 7 * 86400_000).toISOString().slice(0, 10);
+  const weekAgo = new Date(Date.parse(`${today}T00:00:00Z`) - 7 * 86400_000).toISOString().slice(0, 10);
   const prevKpiDate = nearestKpi(KPI_DIR, weekAgo);
   const prevKpi = prevKpiDate && prevKpiDate !== todayKpiDate ? loadJSON(join(KPI_DIR, `${prevKpiDate}.json`)) : null;
 
@@ -130,9 +148,10 @@ function main() {
       lines.push(`## 실험 판정 — ${state.current.id}`, '',
         `- 지시: ${state.current.directive}`,
         `- 판정: **${j.verdict}**`,
+        ...(j.reason ? [`- 근거: ${j.reason}`] : []),
         ...j.deltas.map((d) => `- ${d.id}: ${d.before ?? '—'} → ${d.after ?? '—'}${Number.isFinite(d.rel) ? ` (${(d.rel * 100).toFixed(0)}%)` : ''}`),
         '');
-      state.history.push({ ...state.current, ended: today, verdict: j.verdict });
+      state.history.push({ ...state.current, ended: today, verdict: j.verdict, ...(j.reason ? { reason: j.reason } : {}) });
       rotated = 'ended';
       state.current = null;
     } else {

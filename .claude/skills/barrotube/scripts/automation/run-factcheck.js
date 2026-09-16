@@ -254,6 +254,22 @@ async function callGeminiWithGroundingEnforced(userPrompt, model) {
   return { ...second, attempts: 2, retried: true, retried_grounded: second.grounded };
 }
 
+/**
+ * 모델이 한글을 \u 이스케이프로 뱉다가 흘리는 오타를 고친다.
+ *
+ * 2026-09-14 EP-2026-0154: "6억\uub2ec\ub7ec" — 달러(\ub2ec\ub7ec)를 쓰면서 u 가 하나
+ * 더 붙었다. JSON.parse 는 여기서 죽고, run-factcheck 는 그대로 종료했다. 그 결과
+ * 35_factcheck.md 가 **직전 판(script_revision 4)으로 남았고**, 손으로 고친 대본
+ * (revision 5)이 옛 리포트로 심사받을 뻔했다. 한 글자 오타로 회차 하나가 멈춘다.
+ */
+function repairJSONEscapes(raw) {
+  return raw
+    // \uu ub2ec → \ub2ec (u 중복)
+    .replace(/\\u{2,}(?=[0-9a-fA-F]{4})/g, '\\u')
+    // 그래도 4자리 hex 가 아니면 이스케이프가 아니다 — 리터럴로 낮춰 파싱은 살린다
+    .replace(/\\u(?![0-9a-fA-F]{4})/g, '\\\\u');
+}
+
 function extractJSON(text) {
   const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   const candidate = (fence ? fence[1] : text).trim();
@@ -262,7 +278,15 @@ function extractJSON(text) {
   if (first === -1 || last === -1 || last <= first) {
     throw new Error(`Unable to locate JSON object in model output:\n${text.slice(0, 500)}`);
   }
-  return JSON.parse(candidate.slice(first, last + 1));
+  const body = candidate.slice(first, last + 1);
+  try { return JSON.parse(body); }
+  catch (e) {
+    const repaired = repairJSONEscapes(body);
+    if (repaired === body) throw e;
+    const out = JSON.parse(repaired);   // 여기서도 죽으면 원래대로 던진다
+    console.error('   ⚠ JSON 이스케이프 오타를 고쳐서 파싱했다 (\\u 중복)');
+    return out;
+  }
 }
 
 function classify(claims) {
