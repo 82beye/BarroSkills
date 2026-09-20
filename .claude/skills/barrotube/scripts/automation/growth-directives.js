@@ -31,7 +31,16 @@ const ROOT = resolve(import.meta.dirname, '../..');
 const INTEL_DIR = join(ROOT, 'workspace', 'intel', 'competitors');
 const GROWTH_DIR = join(ROOT, 'workspace', 'growth');
 const OUT_DIR = join(GROWTH_DIR, 'directives');
-const SLOTS = ['us-close', 'kr-close', 'realestate'];
+/**
+ * 슬롯 목록의 정본은 config/routines.json 이다.
+ * 고정 배열로 두면 새 슬롯이 들어와도 그 회차만 조용히 처방 없이 돈다 — 2026-09-16 에
+ * 추가된 omnibus 가 그랬다(auto-pipeline.sh 의 옛 화이트리스트와 같은 고장).
+ * 슬롯 전용 경쟁 분석(analysis-<date>-<slot>.json)이 없으면 아래에서 슬롯 없는
+ * analysis-<date>.json 으로 떨어지므로, 새 슬롯도 처방 자체는 만들어진다.
+ */
+const SLOTS = Object.keys(
+  JSON.parse(readFileSync(join(ROOT, 'config', 'routines.json'), 'utf-8')).slots || {},
+);
 const MAX_CHARS = 3000; // 소비처(generate-script)의 slice(0,3000) 안에 통째로 들어가게
 
 /** date 이전 7일치 날짜 문자열 — 경쟁 스냅샷 폴백용. */

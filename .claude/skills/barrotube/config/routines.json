@@ -260,10 +260,11 @@
     }
   ],
   "publishing_cadence": {
-    "weekday": 2,
-    "weekend": 1,
-    "note": "평일은 us-close(08:00 발행) + kr-close(18:00 발행) 2편, 주말은 us-close 1편. 발행 시각은 각 슬롯의 publish_at 을 따른다. 부동산은 주 1회(목 19:00) 별도.",
-    "weekly_realestate": 1
+    "weekday": 3,
+    "weekend": 3,
+    "note": "매일 3편 — us-close(08:00 공개) + 점심 회차(12:00 공개: 월~목·토·일 omnibus, 금 realestate) + kr-close(18:00 공개). 공개 시각은 각 슬롯의 publish_at 이 정본이다.",
+    "weekly_realestate": 1,
+    "_note_2026_09_21": "2026-09-16 하루 3편 개편을 뒤늦게 반영. 그 전 값(평일 2·주말 1, '부동산 목 19:00')은 개편 전 구조였고, 이 필드를 읽는 코드는 없어 드리프트가 드러나지 않았다."
   },
   "guards": {
     "publish_late_grace_hours": 6,

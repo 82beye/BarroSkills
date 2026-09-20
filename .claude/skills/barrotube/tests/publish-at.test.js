@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 const ROOT = join(import.meta.dirname, '..');
 
-import { resolvePublishAt } from '../scripts/automation/generate-metadata.js';
+import { resolvePublishAt, resolvePublishPlan } from '../scripts/automation/generate-metadata.js';
 
 // 이 로직이 틀리면 영상이 조용히 사라진다: publishAt 이 과거면 YouTube 가 거부하고,
 // privacyStatus 는 publish-approval.js 가 이미 private 로 강제한 뒤라 영영 안 열린다.
@@ -169,6 +169,57 @@ test('늦은-게시 분기가 metadata 작성기에 구현돼 있다', () => {
   assert.match(src, /publish_now/, '유예 이내면 즉시 공개');
   assert.match(src, /hold_private/, '유예 초과면 private 유지');
   assert.match(src, /publish_late/, '어느 쪽이든 메타에 기록을 남긴다');
+});
+
+/**
+ * "즉시 공개" 는 **privacyStatus 까지** 바꿔야 말이 된다.
+ *
+ * 2026-09-16~20 실측: 이 분기가 publishAt 만 null 로 지우고 privacyStatus 는 위에서 잡아 둔
+ * 'private' 를 그대로 뒀다. 그래서 로그에는 "즉시 공개합니다" 가 찍히는데 업로드는 비공개로
+ * 나갔고, EP-0157·0161·0165·0166·0167 다섯 편이 조회 0 으로 묻혔다. 파이프라인이
+ * publish_left_private RED 를 남겼지만 doctor 가 그 이벤트를 읽지 않아 5일이 지났다.
+ * 문구가 아니라 산출 값으로 고정한다.
+ */
+test('유예 이내 지각은 실제로 public 으로 올라간다', () => {
+  // 08:00 목표를 09:30 에 만들었다 — 1.5시간 지각, 유예 6h 이내.
+  const at0930KST = new Date('2026-09-20T00:30:00Z');
+  const plan = resolvePublishPlan('08:00', at0930KST, 6);
+  assert.equal(plan.action, 'publish_now');
+  assert.equal(plan.publishAt, null, '과거 시각을 예약하면 유튜브가 거부한다');
+  assert.equal(plan.privacyStatus, 'public', '예약을 지우기만 하면 비공개로 묻힌다');
+  assert.equal(plan.publish_late.action, 'publish_now');
+  assert.ok(Math.abs(plan.publish_late.hours_late - 1.5) < 0.01);
+});
+
+test('유예를 넘긴 지각은 private 로 잡아 둔다', () => {
+  // 08:00 목표를 같은 날 15:00 KST 에 — 7시간 지각(유예 6h 초과).
+  // HH:MM 은 늘 KST 당일로 풀리므로, 지각을 표현하려면 같은 날 더 늦은 시각을 써야 한다.
+  const at1500KST = new Date('2026-09-20T06:00:00Z');
+  const plan = resolvePublishPlan('08:00', at1500KST, 6);
+  assert.equal(plan.action, 'hold_private');
+  assert.equal(plan.privacyStatus, 'private', '반나절 넘은 뉴스는 사람이 판단한다');
+  assert.equal(plan.publishAt, null);
+});
+
+test('예약이 가능하면 예약 공개 규약 그대로 private + publishAt', () => {
+  const at0600KST = new Date('2026-09-20T21:00:00Z'); // 09-21 06:00 KST
+  const plan = resolvePublishPlan('08:00', at0600KST, 6);
+  assert.equal(plan.action, 'scheduled');
+  assert.equal(plan.publishAt, '2026-09-21T08:00:00+09:00');
+  assert.equal(plan.privacyStatus, 'private', 'YouTube 예약 공개는 private + publishAt 이다');
+  assert.equal(plan.publish_late, null);
+});
+
+test('해석 못 한 형식은 privacy 를 건드리지 않는다', () => {
+  const plan = resolvePublishPlan('tomorrow', new Date('2026-09-20T00:30:00Z'), 6);
+  assert.equal(plan.action, 'unparsed');
+  assert.equal(plan.privacyStatus, null, '모르는 값 때문에 공개 상태를 바꾸면 안 된다');
+});
+
+test('유예 경계는 config 값을 그대로 쓴다', () => {
+  const now = new Date('2026-09-20T05:00:00Z'); // 14:00 KST, 08:00 목표 → 6.0h 지각
+  assert.equal(resolvePublishPlan('08:00', now, 6).action, 'publish_now', '정확히 유예선이면 내보낸다');
+  assert.equal(resolvePublishPlan('08:00', now, 5).action, 'hold_private');
 });
 
 test('세 슬롯이 하루 3편 구조로 정렬돼 있다', () => {

@@ -451,6 +451,79 @@ async function submitPrompt(tab, prompt) {
  * 다운로드 버튼은 여전히 쓰지 않는다 — 2026-08-30 Grok UI 에서 최상위 "다운로드" 가
  * 「게시물 작업」 메뉴 안으로 들어갔고, 버튼 라벨을 쫓으면 UI 가 바뀔 때마다 깨진다.
  */
+const STALLED_FILE = '_stalled.json';
+
+/** 본 영상의 poster URL. 스트립 썸네일은 전부 <button> 안이라 이걸로 갈린다. */
+function readPoster() {
+  try {
+    return chromeJS(`(function(){
+      var v=[].slice.call(document.querySelectorAll('video')).filter(function(x){return !x.closest('button');})[0];
+      return (v && v.poster) ? v.poster : '';
+    })()`) || '';
+  } catch { return ''; }
+}
+
+/**
+ * 정체로 포기한 게시물을 적어 둔다.
+ *
+ * Grok 은 우리 타임아웃(기본 6분) **뒤에** 렌더를 끝내는 일이 잦다. 그 결과물은 계정에
+ * 그대로 남아 있는데, 지금까지는 다음 실행이 그걸 모르고 처음부터 다시 만들어 쿼터를
+ * 두 번 썼다 — 2026-09-20 kr-close 는 5컷이 전부 이 사유로 폴백했다.
+ */
+function recordStalled(videosDir, sceneId, postPath) {
+  const f = join(videosDir, STALLED_FILE);
+  let list = [];
+  try { list = JSON.parse(readFileSync(f, 'utf-8')); } catch { list = []; }
+  if (!Array.isArray(list)) list = [];
+  list = list.filter((e) => e && e.scene !== sceneId);
+  list.push({ scene: sceneId, post: postPath, at: new Date().toISOString() });
+  try { writeFileSync(f, JSON.stringify(list, null, 2)); } catch { /* 기록 실패가 생성을 막지는 않는다 */ }
+}
+
+/**
+ * 지난 회차가 포기한 게시물 중 그 사이 완성된 것을 주워 온다.
+ * 새로 만드는 것보다 훨씬 싸다(생성 0회). 어떤 실패도 본 경로를 막지 않는다.
+ */
+async function reapStalled(tab, videosDir) {
+  const f = join(videosDir, STALLED_FILE);
+  let list;
+  try { list = JSON.parse(readFileSync(f, 'utf-8')); } catch { return 0; }
+  if (!Array.isArray(list) || !list.length) return 0;
+
+  const keep = [];
+  let got = 0;
+  for (const e of list) {
+    const sceneId = e && e.scene;
+    const postPath = e && e.post;
+    const ageH = (Date.now() - Date.parse((e && e.at) || '')) / 3600_000;
+    // 48시간 넘게 안 나온 건 영영 안 나온다 — 목록에서 버린다.
+    if (!sceneId || !postPath || !(ageH >= 0 && ageH < 48)) continue;
+    const out = join(videosDir, `scene_${sceneId}.mp4`);
+    if (existsSync(out)) continue;   // 이미 다른 경로로 채워졌다
+    const postId = String(postPath).split('/imagine/post/')[1];
+    if (!postId) continue;
+    try {
+      navigate(tab, `https://grok.com${postPath}`);
+      await sleep(8000);
+      const poster = readPoster();
+      if (!poster.includes(`/generated/${postId.split('?')[0]}/`)) { keep.push(e); continue; }
+      await fetchVideoToFile(tab, poster.replace('preview_image.jpg', 'generated_video.mp4'), out);
+      const verified = verifyGrokClip(out);
+      if (!verified.ok) {
+        try { unlinkSync(out); } catch { /* 이미 없으면 그만 */ }
+        keep.push(e);
+        continue;
+      }
+      got += 1;
+      console.log(`  ♻️  씬 ${sceneId}: 지난 회차가 포기한 게시물이 완성돼 있어 주워 왔다 (생성 0회)`);
+    } catch {
+      keep.push(e);   // 다음 실행에서 다시 본다
+    }
+  }
+  try { writeFileSync(f, JSON.stringify(keep, null, 2)); } catch { /* 기록 실패는 무해하다 */ }
+  return got;
+}
+
 async function waitForOwnVideo(tab, postPath) {
   const postId = (postPath.split('/imagine/post/')[1] || '').split('?')[0];
   if (!postId) throw new Error(`게시물 id 를 읽지 못했습니다: ${postPath}`);
@@ -464,13 +537,7 @@ async function waitForOwnVideo(tab, postPath) {
     // currentSrc·readyState 는 쓰지 않는다 — 백그라운드 탭에서는 Chrome 이 <video>
     // 리소스를 아예 안 물어서 둘 다 영영 비어 있다(2026-09-01: 6분 타임아웃).
     // poster 는 렌더만으로 채워지므로 백그라운드에서도 읽힌다.
-    let poster = '';
-    try {
-      poster = chromeJS(`(function(){
-        var v=[].slice.call(document.querySelectorAll('video')).filter(function(x){return !x.closest('button');})[0];
-        return (v && v.poster) ? v.poster : '';
-      })()`);
-    } catch { continue; }
+    const poster = readPoster();
     if (poster.includes(`/generated/${postId}/`)) {
       return poster.replace('preview_image.jpg', 'generated_video.mp4');
     }
@@ -669,6 +736,16 @@ async function main() {
         // --check 는 ✅ 를 줬다. 생성은 시작되는데 다운로드 버튼이 안 잡혀 5컷 전부
         // "다운로드 버튼을 찾지 못했습니다" 로 11분을 헛돌았다. 계정을 같이 본다.
         const who = signedInAs();
+        // 계정을 **못 읽는 것**과 계정이 **맞는 것**은 다르다. 지금까지는 who 가 null 이면
+        // 비교를 통째로 건너뛰고 ✅ 를 줬다 — 남의 계정으로 로그인돼 있어도 통과한다는
+        // 뜻이고, 그걸 막으려고 넣은 검사가 바로 그 상황에서만 안 도는 셈이었다.
+        // (2026-08-27 EP-0118: 다른 계정 세션으로 5컷이 11분을 헛돌았다.)
+        // 지금 UI 는 본문에 이메일을 안 띄우는 일이 있어 exit 은 막지 않되, 검사가
+        // 돌지 않았다는 사실은 반드시 보이게 한다.
+        if (BT_GROK_ACCOUNT && !who) {
+          console.error(`⚠️  Grok 계정을 화면에서 읽지 못했습니다 — 계정 일치 검사를 건너뜁니다 (기대 ${BT_GROK_ACCOUNT}).`);
+          console.error('   다른 계정으로 로그인돼 있어도 이 검사는 못 잡습니다. 의심되면 Chrome 에서 직접 확인하세요.');
+        }
         if (BT_GROK_ACCOUNT && who && who.toLowerCase() !== BT_GROK_ACCOUNT.toLowerCase()) {
           console.error(`❌ Grok 이 다른 계정입니다: ${who} (기대 ${BT_GROK_ACCOUNT})`);
           console.error('   Chrome 에서 운영자 계정으로 다시 로그인하세요. 코드로는 풀 수 없습니다.');
@@ -703,6 +780,14 @@ async function main() {
     ? scenes.filter((s) => s.id === String(values.scene).padStart(3, '0'))
     : scenes;
 
+  // 새로 만들기 전에 지난 회차가 포기한 게시물부터 확인한다 — 완성돼 있으면 공짜다.
+  try {
+    const reaped = await reapStalled(tab, videosDir);
+    if (reaped) console.log(`♻️  지난 회차 정체분 ${reaped}컷 회수`);
+  } catch (e) {
+    console.warn(`  ⚠ 정체분 회수 건너뜀: ${e.message}`);
+  }
+
   const knownHashes = new Set(
     readdirSync(videosDir).filter((f) => f.endsWith('.mp4'))
       .map((f) => { try { return md5(join(videosDir, f)); } catch { return null; } })
@@ -718,12 +803,13 @@ async function main() {
     if (!existsSync(still)) { console.warn(`  ⏭  씬 ${scene.id}: 스틸 없음`); continue; }
     if (existsSync(outPath) && !values.force) { console.log(`  ⏭  씬 ${scene.id}: 이미 있음`); continue; }
 
+    let postPath = null;
     try {
       navigate(tab, GROK_URL);
       await waitReady(tab, 60000);
       await requireVideoOptions();
       await attachStill(tab, still);
-      const postPath = await submitPrompt(tab, motionFor(scene));
+      postPath = await submitPrompt(tab, motionFor(scene));
       const videoUrl = await waitForOwnVideo(tab, postPath);
       // poster 는 인코딩이 끝나기 전에도 뜬다 — 실제로 받아질 때까지가 완료 신호다.
       let fetched = false, lastErr = null;
@@ -755,7 +841,11 @@ async function main() {
       failed += 1;
       console.warn(`  ❌ 씬 ${scene.id}: ${e.message}`);
       if (['BROWSER_PERMISSION', 'GROK_LOGIN', 'GROK_PLAN', 'GROK_AGE'].includes(e.code)) break;
-      if (STALL_PATTERN.test(e.message)) stalls += 1; else stalls = 0;
+      if (STALL_PATTERN.test(e.message)) {
+        stalls += 1;
+        // 게시물은 만들어졌고 렌더만 안 끝났다. 다음 실행이 주워 가도록 적어 둔다.
+        if (postPath) recordStalled(videosDir, scene.id, postPath);
+      } else { stalls = 0; }
       if (made === 0 && stalls >= STALL_ABORT_AFTER) {
         const left = wanted.length - i - 1;
         console.error(`  ⛔ 연속 ${stalls}컷이 생성 정체로 실패했고 성공이 없습니다 — Grok 서비스측 문제로 봅니다.`);

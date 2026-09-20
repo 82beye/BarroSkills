@@ -1,19 +1,29 @@
-# 정기 증시 브리핑 루틴 (일 2회)
+# 정기 증시 브리핑 루틴 (하루 3편)
 
 바로경제 채널의 정기 발행 슬롯. 슬롯 정의는 `config/routines.json` 하나가 정본이다.
+**슬롯 이름을 다른 곳에 고정 목록으로 또 적지 마라** — 2026-09-16 에 추가된 omnibus 가
+`auto-pipeline.sh` 의 옛 화이트리스트에만 빠져서 세 번의 점심 회차가 통째로 죽었다.
 
-| 슬롯 | 시작 | 공개 | 내용 |
-|---|---|---|---|
-| `us-close` | 06:00 KST | 08:00 KST | 전날 미국 증시 마감 + 경쟁 채널 신규 콘텐츠 |
-| `kr-close` | 16:00 KST | 18:00 KST | 국내 증시 마감 + 오늘 밤 미장 관전 포인트 |
+| 슬롯 | 시작 | 공개 | 요일 | 내용 |
+|---|---|---|---|---|
+| `us-close` | 06:00 KST | 08:00 KST | 매일 | 전날 미국 증시 마감 + 경쟁 채널 신규 콘텐츠 |
+| `omnibus` | 10:00 KST | 12:00 KST | 월~목·토·일 | 오전에 움직인 것을 하나의 흐름으로 |
+| `realestate` | 10:00 KST | 12:00 KST | 금 | 주간 부동산 브리핑 (7씬·172초) |
+| `kr-close` | 16:00 KST | 18:00 KST | 매일 | 국내 증시 마감 + 오늘 밤 미장 관전 포인트 |
+
+금요일 10:00 은 `realestate` 가 쓰므로 `omnibus` 는 그날을 뺀다 — 같은 시각에 둘이 돌면
+in-flight 락에서 뒤쪽이 죽는다.
 
 ## 설치
 
 ```bash
 cd $BARROTUBE_HOME
 bash lib/install-cron.sh install us-close "06:00"
+bash lib/install-cron.sh install omnibus "Mon-Thu,Sat,Sun 10:00"
+bash lib/install-cron.sh install realestate "Fri 10:00"
 bash lib/install-cron.sh install kr-close "16:00"
 bash lib/install-cron.sh list
+bash lib/install-cron.sh wake      # 기상 예약 점검 (잠든 기계는 launchd 가 못 깨운다)
 ```
 
 `DRY_RUN=1` 을 붙이면 plist 만 만들고 `launchctl load` 는 하지 않는다 (켜기 전 확인용).

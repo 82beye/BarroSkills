@@ -7,14 +7,19 @@
 #   bash install-cron.sh uninstall <routine>
 #   bash install-cron.sh list
 #
-# Routines:
-#   us-close              — 매일 06:00 KST 미국 증시 마감 브리핑 전체 파이프라인
-#   kr-close              — 평일 16:00 KST 국내 증시 마감 브리핑 (주말 미실행)
-#   realestate            — 금요일 10:00 KST 제작, 토요일 10:00 공개 (config/routines.json)
+# Routines (시각·요일의 정본은 config/routines.json 이다 — 여기는 안내용 요약):
+#   us-close              — 매일 06:00 KST 미국 증시 마감 브리핑 (08:00 공개)
+#   omnibus               — 월~목·토·일 10:00 점심 옴니버스 (12:00 공개)
+#   realestate            — 금요일 10:00 주간 부동산 브리핑 (12:00 공개)
+#   kr-close              — 매일 16:00 KST 국내 증시 마감 브리핑 (18:00 공개)
+#   market-map            — 매일 08:00,20:00 마켓맵 카드뉴스 (무과금)
 #   competitor-scan       — 매일 05:20,15:20 경쟁 인텔 수집→분석→핸드오프
 #   growth                — 매일 05:40,15:40 채널 성장 루프 (자체 수집→KPI→처방, 월 회고)
+#   publish-resume        — 매일 07:30,17:30 승인됐는데 미게시인 EP 회수
+#   oauth-renew           — 매일 06:40 YouTube refresh token 만료 점검
 #   weekly-marketing      — 매주 월요일 09:00 마케팅 인텔리전스 fetch
 #   doctor-daily          — 매일 07:10 자동 진단 (silent failure 탐지)
+#   telegram-bot          — 상시 데몬 (거부창·/pause 수신)
 #
 # Examples:
 #   bash install-cron.sh install us-close "06:00"
@@ -24,7 +29,9 @@
 #   bash install-cron.sh install growth "05:40,15:40"
 #   bash install-cron.sh install weekly-marketing "Mon 09:00"
 #   bash install-cron.sh install doctor-daily "07:10"
+#   bash install-cron.sh install omnibus "Mon-Thu,Sat,Sun 10:00"
 #   bash install-cron.sh list
+#   bash install-cron.sh wake
 #   bash install-cron.sh uninstall us-close
 
 set -euo pipefail
@@ -413,6 +420,63 @@ cmd_uninstall() {
   echo "✅ Uninstalled: $label"
 }
 
+# ─────────────────────────────────────────────────
+# wake — 기상 예약 상태 점검 + 설정 명령 안내
+#
+# 이 기계는 서버가 아니라 노트북이다. launchd 는 **잠든 기계를 깨우지 않는다** —
+# 예약 시각이 수면 중이면 그 회차는 깨어난 뒤에야 만회 실행된다. auto-pipeline 의
+# caffeinate 는 이미 깨어 있을 때 잠드는 것만 막지, 잠든 기계를 깨우지는 못한다.
+#
+# pmset 예약은 root 가 필요해 무인으로 걸 수 없다. 그래서 여기서는 상태를 보여 주고
+# 운영자가 한 번 실행할 명령을 그대로 찍는다 — 코드가 sudo 를 시도하면 크론에서
+# 암호 프롬프트에 걸려 멈춘다.
+# ─────────────────────────────────────────────────
+cmd_wake() {
+  echo "=== 현재 기상 예약 (pmset -g sched) ==="
+  local sched
+  sched="$(pmset -g sched 2>/dev/null)"
+  if printf '%s' "$sched" | grep -qiE 'wake|poweron'; then
+    printf '%s\n' "$sched"
+    echo ""
+    echo "✅ 기상 예약이 걸려 있습니다."
+  else
+    echo "(없음)"
+    echo ""
+    echo "⚠️  기상 예약이 없습니다 — 잠든 시각의 회차는 깨어난 뒤에야 만회됩니다."
+  fi
+
+  echo ""
+  echo "=== 설정하려면 (운영자가 1회, root 필요) ==="
+  local first
+  first="$(python3 - "$BARROTUBE_HOME/config/routines.json" <<'PY_WAKE'
+import json, re, sys
+try:
+    slots = json.load(open(sys.argv[1]))['slots']
+except Exception:
+    print('')
+    sys.exit(0)
+times = set()
+for slot in slots.values():
+    m = re.search(r'(\d{1,2}):(\d{2})', str(slot.get('cron', '')))
+    if m:
+        times.add('%02d:%s' % (int(m.group(1)), m.group(2)))
+print(sorted(times)[0] if times else '')
+PY_WAKE
+)"
+  [ -n "$first" ] || first="06:00"
+  # 슬롯 시각보다 5분 먼저 깨운다 — 디스크·네트워크가 올라올 여유.
+  local wake_at
+  wake_at="$(python3 -c "
+import datetime, sys
+h, m = sys.argv[1].split(':')
+t = (datetime.datetime(2000, 1, 1, int(h), int(m)) - datetime.timedelta(minutes=5)).time()
+print(t.strftime('%H:%M:00'))" "$first")"
+  echo "  sudo pmset repeat wakeorpoweron MTWRFSU ${wake_at}"
+  echo ""
+  echo "  (가장 이른 슬롯 ${first} 의 5분 전. 해제는 sudo pmset repeat cancel)"
+  echo "  ⚠️ 뚜껑을 닫으면(클램셸) 외장 전원·디스플레이 없이는 깨어나지 않습니다."
+}
+
 cmd_list() {
   echo "=== BarroSkills cron 데몬 목록 ==="
   local found=0
@@ -452,6 +516,9 @@ case "${1:-}" in
   list)
     cmd_list
     ;;
+  wake)
+    cmd_wake
+    ;;
   *)
     cat <<EOF
 BarroSkills cron·daemon 관리 스크립트
@@ -461,6 +528,7 @@ Usage:
   bash install-cron.sh install telegram-bot          # daemon 모드 (시간 불필요)
   bash install-cron.sh uninstall <routine>
   bash install-cron.sh list
+  bash install-cron.sh wake                          # 기상 예약 점검 + 설정 명령 안내
 
 Routines (cron — 정기 실행):
   us-close              미국 증시 마감 브리핑 전체 파이프라인 (예: "06:00")

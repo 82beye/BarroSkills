@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -737,4 +737,101 @@ test('깨움 다리는 SLOT·ROUTINES 가 정해진 뒤에 걸린다', () => {
     'ROUTINES 정의보다 앞서면 빈 문자열을 읽어 다리가 안 걸린다');
   // 12시간 상한 — 역전된 시각을 만나면 하루치를 통째로 깨워 두게 된다.
   assert.match(src, /43200/, '12시간 상한이 있어야 한다');
+});
+
+/**
+ * 슬롯 이름의 정본은 routines.json 하나여야 한다.
+ *
+ * 2026-09-16 에 omnibus 를 추가할 때 routines.json·install-cron.sh·generate-script.js 는
+ * 고쳤는데 auto-pipeline.sh 의 `case "$SLOT" in ''|us-close|kr-close|realestate)` 만 남아서,
+ * 09-17·19·20 세 번의 점심 회차가 Phase 0 에 닿지도 못하고 "Invalid slot" exit 2 로 죽었다
+ * (logs/cron/omnibus.log 0바이트, doctor 는 그동안 all GREEN). 설정에 있는 슬롯은
+ * 반드시 파이프라인 입구를 통과해야 한다 — 그것을 **실행해서** 확인한다.
+ */
+test('routines.json 의 모든 슬롯이 파이프라인 입구를 통과한다', () => {
+  const slots = Object.keys(JSON.parse(readFileSync(ROUTINES, 'utf8')).slots);
+  assert.ok(slots.length >= 3, '슬롯이 최소 3개는 있어야 이 계약이 의미가 있다');
+
+  const home = mkdtempSync(join(tmpdir(), 'bt-slot-'));
+  try {
+    mkdirSync(join(home, 'config'), { recursive: true });
+    mkdirSync(join(home, 'logs', 'audit'), { recursive: true });
+    // 입구만 보려고 마스터 스위치를 꺼 둔다 — Phase 0 에서 즉시 멈춘다(비용 0).
+    writeFileSync(join(home, 'config', 'autonomy-pause.json'),
+      JSON.stringify({ status: 'paused', guards: { auto_pipeline_enabled: true } }));
+    writeFileSync(join(home, 'config', 'routines.json'), JSON.stringify({
+      slots: Object.fromEntries(slots.map((k) => [k, { label: k, news_sources: [], publish_at: '08:00' }])),
+    }));
+    const run = (slot) => spawnSync('bash', [AUTO, '--slot', slot], {
+      cwd: ROOT, encoding: 'utf8', timeout: 60_000,
+      // BT_NO_CAFFEINATE: keep_awake_until 이 있는 슬롯은 몇 시간짜리 caffeinate 를 띄운다.
+      env: { ...process.env, BARROTUBE_HOME: home, BT_NO_CAFFEINATE: '1', BT_NO_NOTIFY: '1', DRY_RUN: '1' },
+    });
+
+    for (const slot of slots) {
+      const r = run(slot);
+      const out = (r.stdout || '') + (r.stderr || '');
+      assert.doesNotMatch(out, /Invalid slot/,
+        `${slot} 이 입구에서 거부됐다 — routines.json 에 있는 슬롯은 통과해야 한다`);
+      assert.doesNotMatch(out, /알 수 없는 슬롯/, `${slot} 을 routines.json 조회가 못 찾았다`);
+      assert.match(out, /Autonomy paused/, `${slot} 이 Phase 0 까지 도달하지 못했다`);
+    }
+
+    // 반대 방향도 지킨다 — 아무 이름이나 통과시키면 오타가 조용히 돈다.
+    const unknown = run('definitely-not-a-slot');
+    assert.equal(unknown.status, 2);
+    assert.match((unknown.stdout || '') + (unknown.stderr || ''), /알 수 없는 슬롯/,
+      '모르는 슬롯은 이름을 찍어 거부해야 한다');
+    const malformed = spawnSync('bash', [AUTO, '--slot', 'bad slot'], {
+      cwd: ROOT, encoding: 'utf8', timeout: 60_000,
+      env: { ...process.env, BARROTUBE_HOME: home, BT_NO_CAFFEINATE: '1', BT_NO_NOTIFY: '1', DRY_RUN: '1' },
+    });
+    assert.equal(malformed.status, 2);
+    assert.match(malformed.stderr, /Invalid slot/, '형식이 틀린 값은 형식 오류로 거부한다');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('슬롯 목록을 손으로 적은 곳이 남아 있지 않다', () => {
+  // 같은 고장이 다른 파일에서 반복됐다: growth-directives.js 의 SLOTS 배열에도 omnibus 가
+  // 없어서 그 회차만 성장 처방 없이 돌 뻔했다. 정본은 routines.json 이다.
+  const auto = readFileSync(AUTO, 'utf8');
+  assert.doesNotMatch(auto, /case "\$SLOT" in\s*''\|us-close/,
+    'auto-pipeline 은 고정 슬롯 목록을 두지 않는다');
+  assert.match(auto, /routines\.json/, '슬롯 유효성은 routines.json 으로 판정한다');
+
+  const directives = readFileSync(join(ROOT, 'scripts', 'automation', 'growth-directives.js'), 'utf8');
+  assert.doesNotMatch(directives, /const SLOTS = \['us-close'/,
+    'growth-directives 도 routines.json 에서 슬롯을 읽어야 한다');
+  assert.match(directives, /routines\.json/);
+});
+
+/**
+ * doctor 는 이 시스템의 유일한 감시자다. 감시 목록을 손으로 적으면 새 루틴이 늘 때마다
+ * 사각지대가 생기고, 그 사각지대에서 난 고장은 아무도 모른다 — omnibus 가 3일간,
+ * 비공개 방치가 5일간 그랬다. 목록은 설치된 plist 에서 스스로 나와야 한다.
+ */
+test('doctor 는 설치된 plist 를 열거하고, 파이프라인이 남긴 RED 를 읽는다', () => {
+  const src = readFileSync(join(ROOT, 'lib', 'doctor-cli.sh'), 'utf8');
+  assert.doesNotMatch(src, /for routine in \('us-close', 'kr-close'/,
+    '감시 목록을 손으로 적으면 새 루틴이 조용히 빠진다');
+  assert.match(src, /LaunchAgents/, '설치된 plist 에서 목록을 만든다');
+  assert.match(src, /com\.barroskills\.barrotube\.\*\.plist/);
+
+  // 파이프라인이 이미 적어 둔 실패를 doctor 가 읽지 않으면 감시가 성립하지 않는다.
+  for (const signal of ['publish_left_private', 'publish_private_backlog',
+    'motion_fallback', 'telegram_delivery', 'stale_episodes', 'power_wake_schedule']) {
+    assert.match(src, new RegExp(signal), `doctor 가 ${signal} 를 보지 않는다`);
+  }
+  // 자기 종료코드를 자기가 감시하면 한 번 RED 가 난 뒤 영원히 RED 가 된다.
+  assert.match(src, /SELF = 'doctor-daily'/, 'doctor 는 자신을 감시 대상에서 뺀다');
+});
+
+test('install-cron 이 문서·코드가 가리키는 wake 하위명령을 실제로 갖는다', () => {
+  // auto-pipeline.sh 주석과 doctor 메시지가 `lib/install-cron.sh wake` 를 안내하는데
+  // 그런 하위명령이 없었다 — 없는 명령을 알려 주면 운영자가 두 번 헤맨다.
+  const r = spawnSync('bash', [INSTALL, 'wake'], { cwd: ROOT, encoding: 'utf8', timeout: 30_000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /pmset repeat wakeorpoweron/, '설정 명령을 그대로 찍어 줘야 한다');
 });

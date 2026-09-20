@@ -200,6 +200,41 @@ function loadLateGraceHours() {
   } catch { return 6; }
 }
 
+/**
+ * 목표 공개 시각 하나로부터 **업로드 상태 전체**를 정한다 — publishAt 과 privacyStatus 를
+ * 한 자리에서 같이 내놓는 것이 핵심이다.
+ *
+ * 예전에는 이 둘이 떨어져 있었다: 예약이 불가능하면 publishAt 만 null 로 지우고,
+ * privacyStatus 는 위쪽에서 잡아 둔 'private' 가 그대로 남았다. 그래서 "유예 이내 →
+ * 즉시 공개" 분기가 로그로는 공개한다고 말하면서 실제로는 비공개 업로드를 했다.
+ * 2026-09-16~20 에 EP-0157·0161·0165·0166·0167 다섯 편이 그렇게 조회 0 으로 묻혔다.
+ *
+ *   예약 가능      → publishAt 설정, private (유튜브가 예약 공개를 그렇게 요구한다)
+ *   유예 이내 지각 → publishAt 없음, **public** (늦었지만 내보낸다)
+ *   유예 초과 지각 → publishAt 없음, private (내용이 죽었다 — 사람이 판단)
+ *   형식 불명      → 아무것도 바꾸지 않는다
+ */
+export function resolvePublishPlan(publishAtArg, now = new Date(), graceHours = null) {
+  const grace = graceHours ?? loadLateGraceHours();
+  const publishAt = resolvePublishAt(publishAtArg, now);
+  if (publishAt) {
+    return { publishAt, privacyStatus: 'private', publish_late: null, action: 'scheduled' };
+  }
+  const late = hoursLate(publishAtArg, now);
+  if (late === null) {
+    return { publishAt: null, privacyStatus: null, publish_late: null, action: 'unparsed' };
+  }
+  const action = late <= grace ? 'publish_now' : 'hold_private';
+  return {
+    publishAt: null,
+    privacyStatus: action === 'publish_now' ? 'public' : 'private',
+    publish_late: { target: String(publishAtArg), hours_late: Number(late.toFixed(2)), action },
+    action,
+    hours_late: late,
+    grace,
+  };
+}
+
 function parseFrontmatter(md) {
   const m = md.match(/^---\n([\s\S]*?)\n---/);
   return m ? parseYAML(m[1]) : null;
@@ -433,22 +468,18 @@ async function main() {
   // 예약 공개 — publish-approval.js 가 publishAt 이 있으면 privacyStatus 를 private 로 강제하고
   // publish-youtube.js 가 status.publishAt 으로 실어 보낸다. 여기서는 값만 정확히 만든다.
   if (publishAtArg) {
-    const publishAt = resolvePublishAt(publishAtArg);
-    if (publishAt) {
-      meta.publishAt = publishAt;
-      console.log(`  ⏰ 예약 공개: ${publishAt}`);
-    } else if (hoursLate(publishAtArg, new Date()) !== null) {
-      // 목표를 놓쳤다. 얼마나 놓쳤는지로 갈린다.
-      const late = hoursLate(publishAtArg, new Date());
-      const grace = loadLateGraceHours();
-      if (late <= grace) {
-        meta.publishAt = null;
-        meta.publish_late = { target: String(publishAtArg), hours_late: Number(late.toFixed(2)), action: 'publish_now' };
-        console.warn(`  ⏱  목표 ${publishAtArg} 를 ${late.toFixed(1)}시간 놓쳤습니다 (유예 ${grace}h 이내) — 예약 없이 **즉시 공개**합니다.`);
-      } else {
-        meta.publish_late = { target: String(publishAtArg), hours_late: Number(late.toFixed(2)), action: 'hold_private' };
-        console.warn(`  ⚠ 목표 ${publishAtArg} 를 ${late.toFixed(1)}시간 놓쳤습니다 (유예 ${grace}h 초과) — 내용이 낡았을 수 있어 private 로 둡니다. 운영자 확인 필요.`);
-      }
+    const plan = resolvePublishPlan(publishAtArg, new Date());
+    if (plan.privacyStatus) meta.privacyStatus = plan.privacyStatus;
+    if (plan.publish_late) meta.publish_late = plan.publish_late;
+    if (plan.action === 'scheduled') {
+      meta.publishAt = plan.publishAt;
+      console.log(`  ⏰ 예약 공개: ${plan.publishAt}`);
+    } else if (plan.action === 'publish_now') {
+      meta.publishAt = null;
+      console.warn(`  ⏱  목표 ${publishAtArg} 를 ${plan.hours_late.toFixed(1)}시간 놓쳤습니다 (유예 ${plan.grace}h 이내) — 예약 없이 **즉시 공개**합니다 (privacy=public).`);
+    } else if (plan.action === 'hold_private') {
+      meta.publishAt = null;
+      console.warn(`  ⚠ 목표 ${publishAtArg} 를 ${plan.hours_late.toFixed(1)}시간 놓쳤습니다 (유예 ${plan.grace}h 초과) — 내용이 낡았을 수 있어 private 로 둡니다. 운영자 확인 필요.`);
     } else {
       console.warn(`  ⚠ --publish-at 형식을 해석하지 못해 무시합니다: ${publishAtArg}`);
     }

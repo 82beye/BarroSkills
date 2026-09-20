@@ -69,7 +69,15 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-case "$SLOT" in ''|us-close|kr-close|realestate) ;; *) echo "Invalid slot" >&2; exit 2 ;; esac
+# 슬롯 이름의 정본은 config/routines.json 하나다 — 여기서는 **형식만** 본다.
+# 고정 목록을 하나 더 두면 새 슬롯이 늘 때 이쪽만 조용히 낡는다: 2026-09-16 에 추가된
+# omnibus 가 routines.json·install-cron.sh·generate-script.js 에는 들어갔는데 이 줄에만
+# 빠져서, 09-17·19·20 세 번의 점심 회차가 전부 Phase 0 에 닿지도 못하고 "Invalid slot"
+# exit 2 로 죽었다 (logs/cron/omnibus.log 0바이트). 모르는 슬롯은 아래 routines.json
+# 조회(≈200행)가 이름까지 찍어 거른다.
+if [ -n "$SLOT" ] && [[ ! "$SLOT" =~ ^[a-z][a-z0-9-]*$ ]]; then
+  echo "Invalid slot" >&2; exit 2
+fi
 if [ -n "$RESUME_EP" ] && [[ ! "$RESUME_EP" =~ ^EP-[0-9]{4}-[0-9]{4}$ ]]; then
   echo "Invalid RESUME_EP" >&2; exit 2
 fi

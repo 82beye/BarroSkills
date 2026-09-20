@@ -113,14 +113,16 @@ cat /Users/beye/workspace/BarroSkills/.claude/skills/barrotube/config/autonomy-p
 # 3. 시스템 진단 (모든 GREEN 확인)
 bash /Users/beye/workspace/BarroSkills/.claude/skills/barrotube/lib/doctor-cli.sh
 
-# 4. DRY_RUN 검증 (실제 비용 0)
-DRY_RUN=1 bash /Users/beye/workspace/BarroSkills/.claude/skills/barrotube/lib/auto-pipeline.sh
+# 4. DRY_RUN 검증 (실제 비용 0) — 슬롯은 config/routines.json 이 정본
+DRY_RUN=1 bash /Users/beye/workspace/BarroSkills/.claude/skills/barrotube/lib/auto-pipeline.sh --slot us-close
 
 # 5. 수동 1회 실제 실행 (💰 비용)
-bash /Users/beye/workspace/BarroSkills/.claude/skills/barrotube/lib/auto-pipeline.sh
+bash /Users/beye/workspace/BarroSkills/.claude/skills/barrotube/lib/auto-pipeline.sh --slot us-close
 
-# 6. 안정성 확인 후 cron 설치 (매일 06:30 자동)
-bash /Users/beye/workspace/BarroSkills/.claude/skills/barrotube/lib/install-cron.sh install auto-pipeline "06:30"
+# 6. 안정성 확인 후 cron 설치 — 슬롯마다 라벨이 따로다 (--slot 인자가 달라 합칠 수 없다)
+bash /Users/beye/workspace/BarroSkills/.claude/skills/barrotube/lib/install-cron.sh install us-close "06:00"
+bash /Users/beye/workspace/BarroSkills/.claude/skills/barrotube/lib/install-cron.sh install omnibus "Mon-Thu,Sat,Sun 10:00"
+bash /Users/beye/workspace/BarroSkills/.claude/skills/barrotube/lib/install-cron.sh install kr-close "16:00"
 
 # 7. Telegram bot도 함께 (reject window, /pause 등)
 bash /Users/beye/workspace/BarroSkills/.claude/skills/barrotube/lib/install-cron.sh install telegram-bot
@@ -162,7 +164,7 @@ bash lib/auto-pipeline.sh             # 매일 수동, 모든 stage·QA·비용 
 bash lib/install-cron.sh install auto-pipeline "06:30"
 ```
 
-매일 06:30 자동 실행. 운영자는 Telegram으로 `/reject`만 신경 쓰면 됨.
+06·10·16시 생성 → 08·12·18시 공개. 운영자는 Telegram으로 `/reject`만 신경 쓰면 됨.
 
 ## 5/22 silent failure 회귀 방지
 

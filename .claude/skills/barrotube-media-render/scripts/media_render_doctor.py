@@ -47,7 +47,11 @@ BINARIES = {
 }
 CAPCUT_APPS = ["/Applications/CapCut 2.app", "/Applications/CapCut.app"]
 CAPCUT_DRAFTS = Path.home() / "Movies/CapCut/User Data/Projects/com.lveditor.draft"
-DEFAULT_ENV_FILE = Path.home() / "youtube-co/.env"
+# .env 위치는 모드마다 다르다 — 단독(릴/Instagram) 모드는 ~/youtube-co, BarroTube EP
+# 모드는 ~/BarroTubeData. 하나만 박아 두면 다른 모드에서 "토큰 없음" 으로 잘못 보고한다.
+# 값은 어차피 process env·Keychain 으로도 찾으므로(find_secret), 여기서는 실제로 있는
+# 파일 중 Instagram 키를 가진 것을 고른다.
+ENV_CANDIDATES = [Path.home() / "youtube-co/.env", Path.home() / "BarroTubeData/.env"]
 TOKEN_KEYS = ["INSTAGRAM_ACCESS_TOKEN", "INSTAGRAM_GRAPH_API_TOKEN"]
 USER_ID_KEYS = ["INSTAGRAM_IG_USER_ID", "INSTAGRAM_USER_ID"]
 AUDIO_EXTS = (".mp3", ".m4a", ".wav", ".aac", ".flac")
@@ -86,6 +90,17 @@ class Doctor:
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         data["report"] = str(path)
         return data
+
+
+def default_env_file() -> Path:
+    """Instagram 키를 실제로 가진 후보를 고른다. 없으면 존재하는 첫 후보."""
+    for p in ENV_CANDIDATES:
+        try:
+            if p.is_file() and any(f"{k}=" in p.read_text(encoding="utf-8") for k in TOKEN_KEYS):
+                return p
+        except OSError:
+            continue
+    return next((p for p in ENV_CANDIDATES if p.is_file()), ENV_CANDIDATES[0])
 
 
 def load_env_file(path: Path) -> dict[str, str]:
@@ -285,8 +300,9 @@ def main() -> int:
     parser.add_argument("--online", action="store_true",
                         help="validate the Instagram token against the Graph API")
     parser.add_argument("--template", help="required CapCut draft template project name")
-    parser.add_argument("--env-file", default=str(DEFAULT_ENV_FILE),
-                        help=f"dotenv file with Instagram keys (default {DEFAULT_ENV_FILE})")
+    env_default = default_env_file()
+    parser.add_argument("--env-file", default=str(env_default),
+                        help=f"dotenv file with Instagram keys (default {env_default})")
     args = parser.parse_args()
 
     reel = Path(args.reel).expanduser().resolve()

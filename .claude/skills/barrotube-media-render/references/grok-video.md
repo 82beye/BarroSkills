@@ -12,18 +12,26 @@ an isolated Chrome does not inherit the user's login or Apple Events setting.
    prompt bar is visible and an account is logged in. Note which account; it may
    differ from ChatGPT.
 
-2. **Set the option bar — then VERIFY.** Along the bottom of the prompt bar:
-   `이미지 | 비디오 | 에이전트` · `480p | 720p` · `6s | 10s` · `Video audio` · `9:16 ▾`.
-   - Select **비디오**, **720p**, **10s**, and aspect **9:16**.
-   - Read radio options' `aria-checked="true"` after selecting. If 720p/10s opens an
-     upgrade dialog or does not stay selected, stop before attaching or generating.
-     The attachment itself can start a post. Do not start a trial or purchase.
-   - Set **Video audio ON**. Do not infer state from the icon: inspect the button and
-     require `aria-pressed="true"`. Click it only when false, then read the attribute again.
-   - **Zoom into the option bar and confirm** the chosen pills are filled white
-     (selected). The bar frequently already defaults to the right values — verify
-     instead of blindly toggling, so you don't accidentally turn a correct option off.
-   - To change aspect, click the `9:16 ▾` dropdown and pick 9:16.
+2. **Set the option bar — then VERIFY.** Two different kinds of control live here, and
+   mixing them up is what broke this step for four days.
+   - **Toggles** (still buttons): mode `비디오` carries `aria-checked`, `Video audio`
+     (`aria-label="비디오 오디오"`) carries `aria-pressed`. Click each **only when it is
+     false** — clicking an already-on toggle turns it off, and a submit click that lands
+     during that re-render is swallowed silently (2026-09-02 EP-0131, two cuts).
+   - **Dropdowns** (since the 2026-09-17 UI change): resolution, duration and aspect are
+     no longer pills. They are `button[aria-haspopup="menu"]` whose label shows the
+     **current value** (`720p`, `10s`, `9:16`), and the menu items are `role="menuitemradio"`.
+     Find the trigger by the shape of its text, not by the value you want — the trigger
+     reads `480p` when 480p is selected, so looking for a control labelled "720p" finds
+     nothing. **New accounts default to 480p.**
+   - They are Radix menus: a plain `click()` does not open them. Dispatch **`pointerdown`**,
+     then click the `menuitemradio` whose text equals the target value.
+   - Confirm the trigger's text afterwards. If it will not move to 720p/10s, or an upgrade
+     dialog appears, stop before attaching or generating — the attachment alone can start
+     a post. Never start a trial or purchase.
+   - Why this matters: the old pill-hunting code silently failed `--check` (exit 3) every
+     run, so the pipeline skipped Grok entirely and shipped EP-2026-0156~0159 as
+     HyperFrames pans. The failure looked like "logged out", which it never was.
 
 3. **Provide the input.**
    - **Image→video is required for BarroTube reel continuity.** Attach the ChatGPT
@@ -77,16 +85,23 @@ an isolated Chrome does not inherit the user's login or Apple Events setting.
 await page.goto('https://grok.com/imagine');
 await page.waitForTimeout(1500);
 
-for (const name of ['비디오', '720p', '10s']) {
-  const option = page.getByRole('radio', { name });
-  if (!(await option.isChecked())) await option.click();
-  if (!(await option.isChecked())) throw new Error(`${name} unavailable; check plan/quota`);
-}
-const audio = page.locator('button[aria-label="Video audio"]');
+// Toggles: press only when off (pressing an on-toggle turns it off).
+const mode = page.locator('button[aria-label="비디오"], button[aria-label="Video"]').first();
+if (await mode.getAttribute('aria-checked') !== 'true') await mode.click();
+const audio = page.locator('button[aria-label="비디오 오디오"], button[aria-label="Video audio"]').first();
 if (await audio.getAttribute('aria-pressed') !== 'true') await audio.click();
 if (await audio.getAttribute('aria-pressed') !== 'true') throw new Error('Video audio is off');
 
-// If aspect shows 2:3, click the dropdown and choose "9:16 수직".
+// Dropdowns (Radix, since 2026-09-17): the trigger shows the CURRENT value, so match it
+// by shape. It opens on pointerdown, not click.
+for (const [shape, want] of [[/^\d{3,4}p$/, '720p'], [/^\d+s$/, '10s'], [/^\d+:\d+$/, '9:16']]) {
+  const trigger = page.locator('button[aria-haspopup="menu"]')
+    .filter({ hasText: shape }).first();
+  if ((await trigger.innerText()).trim() === want) continue;
+  await trigger.dispatchEvent('pointerdown');
+  await page.getByRole('menuitemradio', { name: want, exact: true }).click();
+  if ((await trigger.innerText()).trim() !== want) throw new Error(`${want} unavailable; check plan/quota`);
+}
 await page.locator('input[type="file"]').first().setInputFiles(imagePath);
 await page.getByRole('button', { name: 'Remove image' })
   .waitFor({ state: 'visible', timeout: 15000 });

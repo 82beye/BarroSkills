@@ -56,13 +56,30 @@ export async function telegramRequest(method, body, botToken) {
   // 난다(2026-08-14 실측: node fetch 실패 / curl 200 / curl -4 302). lib/guards.sh 의
   // notify_telegram 도 같은 이유로 curl 이다 — 두 경로를 같은 방식으로 맞춘다.
   // URL contains the bot credential: pass configuration on stdin, never argv/ps.
+  // 전송 실패는 대개 네트워크 순단이다. 한 번에 포기하면 그 경보는 영영 사라지는데,
+  // 하필 그 경보가 "파이프라인이 멈췄다" 인 경우가 있다 — 2026-09-18 08:14·08:37 에
+  // Grok 폴백 경보와 Phase 8 실패 경보가 연달아 그렇게 유실됐고, 운영자는 그날 회차가
+  // 죽은 걸 몰랐다. 경보 하나가 안 가면 나머지 감시가 전부 무의미해진다.
+  //
+  // 재시도는 sendMessage 에만 건다. getUpdates 는 봇 루프가 어차피 곧 다시 돈다.
+  // API 가 거절한 경우(4xx)는 재시도하지 않는다 — 같은 요청은 같은 답을 받는다.
+  const attempts = method === 'sendMessage' ? 3 : 1;
   let out;
-  try {
-    out = execFileSync('curl', ['-sS', '-4', '-m', String(waitSec), '--config', '-'], {
-      input: `url = ${JSON.stringify(`https://api.telegram.org/bot${botToken}/${method}`)}\nrequest = "POST"\nheader = "Content-Type: application/json"\ndata = ${JSON.stringify(JSON.stringify(body))}\n`,
-      encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: (waitSec + 5) * 1000,
-    });
-  } catch { throw new Error('Telegram transport failed'); }
+  let transportError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (attempt > 1) await new Promise((r) => setTimeout(r, 2000 * (attempt - 1)));
+    try {
+      out = execFileSync('curl', ['-sS', '-4', '-m', String(waitSec), '--config', '-'], {
+        input: `url = ${JSON.stringify(`https://api.telegram.org/bot${botToken}/${method}`)}\nrequest = "POST"\nheader = "Content-Type: application/json"\ndata = ${JSON.stringify(JSON.stringify(body))}\n`,
+        encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: (waitSec + 5) * 1000,
+      });
+      transportError = null;
+      break;
+    } catch {
+      transportError = new Error(`Telegram transport failed (${attempt}/${attempts})`);
+    }
+  }
+  if (transportError) throw transportError;
 
   let result;
   try {

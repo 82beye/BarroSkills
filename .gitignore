@@ -24,6 +24,7 @@ secrets/
 *.bak
 *.bak.*
 *.bak[0-9]*
+*.bak-*
 .claude/skills/barrotube/config/*.bak.*
 .backup/
 

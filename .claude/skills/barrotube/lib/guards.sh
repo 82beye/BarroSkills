@@ -258,7 +258,19 @@ catch (e) { console.error(e.message); process.exitCode = 1; }
 ' barrotube-notify-helper "${BARROTUBE_HOME}/scripts/automation/notify.js"; then
     return 0
   fi
-  audit "telegram_delivery" "ERROR" "message delivery failed"
+  # 일부러 끈 것과 못 보낸 것을 구분해 **기록**한다.
+  # notify.js 는 BT_NO_NOTIFY=1 이면 false 를 돌려주는데, 그것까지 전송 실패로 적는 바람에
+  # 문서가 권하는 수동 점검(BT_NO_NOTIFY=1 bash lib/doctor-cli.sh)을 돌릴 때마다 가짜
+  # 실패가 쌓였고, 진짜 경보 유실(2026-09-18 08:14·08:37)과 구분되지 않았다.
+  #
+  # 단, 반환값은 그대로 실패다 — required=1 인 호출(거부창 시작 알림)은 알림이 실제로
+  # 가지 않았으면 발행을 멈춰야 한다. 여기서 성공으로 돌리면 BT_NO_NOTIFY=1 로 돌린
+  # 파이프라인이 사람 게이트를 통째로 건너뛰고 게시한다.
+  if [ "${BT_NO_NOTIFY:-0}" = "1" ]; then
+    audit "telegram_suppressed" "INFO" "BT_NO_NOTIFY=1 — 전송하지 않음(실패 아님)"
+  else
+    audit "telegram_delivery" "ERROR" "message delivery failed"
+  fi
   [ "$required" != "1" ]
 }
 

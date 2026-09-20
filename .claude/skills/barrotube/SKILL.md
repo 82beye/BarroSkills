@@ -265,14 +265,24 @@ export PAPERCLIP_DISABLED=1
 bash $BARROTUBE_HOME/lib/install-cron.sh install us-close "06:00"
 bash $BARROTUBE_HOME/lib/install-cron.sh install kr-close "16:00"
 
-# 주간 부동산 브리핑 (목 17:00 — 한국부동산원 주간지수 발표 후)
-bash $BARROTUBE_HOME/lib/install-cron.sh install realestate "Thu 17:00"
+# 점심 옴니버스 (금요일은 realestate 가 그 자리를 쓴다)
+bash $BARROTUBE_HOME/lib/install-cron.sh install omnibus "Mon-Thu,Sat,Sun 10:00"
+
+# 주간 부동산 브리핑 (금 10:00 — 목요일 한국부동산원 주간지수 발표 다음날)
+bash $BARROTUBE_HOME/lib/install-cron.sh install realestate "Fri 10:00"
+
+# 마켓맵 카드뉴스 (조간·석간)
+bash $BARROTUBE_HOME/lib/install-cron.sh install market-map "08:00,20:00"
+
+# 승인 후 미게시 EP 회수
+bash $BARROTUBE_HOME/lib/install-cron.sh install publish-resume "07:30,17:30"
 
 # 주간 마케팅 분석 (월요일 09:00)
 bash $BARROTUBE_HOME/lib/install-cron.sh install weekly-marketing "Mon 09:00"
 
-# 현재 설치된 cron 목록
+# 현재 설치된 cron 목록 / 기상 예약 점검
 bash $BARROTUBE_HOME/lib/install-cron.sh list
+bash $BARROTUBE_HOME/lib/install-cron.sh wake
 
 # 제거
 bash $BARROTUBE_HOME/lib/install-cron.sh uninstall us-close
