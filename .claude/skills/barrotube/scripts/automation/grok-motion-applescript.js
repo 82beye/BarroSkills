@@ -296,49 +296,100 @@ async function attachStill(tab, pngPath) {
   throw new Error('첨부 확인 실패 (주입 후 썸네일·Remove image 미검출)');
 }
 
+/**
+ * 영상 옵션 드롭다운. 트리거는 현재 값을 텍스트로 보여 준다 — 그 값의 모양으로 찾는다.
+ *
+ * 2026-09-17 Grok UI 개편: 720p·10s 가 토글 버튼에서 **드롭다운**으로 바뀌었다
+ * (`button[aria-haspopup=menu]` · 항목은 role=menuitemradio · 새 계정 기본값 480p).
+ * 텍스트가 '720p' 인 토글을 찾던 예전 코드는 매번 못 찾아 --check 가 exit 3 이었고,
+ * auto-pipeline 은 Grok 을 건너뛰어 EP-2026-0156~0159 를 전부 HyperFrames 로 발행했다.
+ */
+const VIDEO_MENUS = [
+  { pattern: '/^\\d{3,4}p$/', value: '720p' },
+  { pattern: '/^\\d+s$/', value: '10s' },
+  { pattern: '/^\\d+:\\d+$/', value: '9:16' },
+];
+
+/** 드롭다운에서 value 를 고른다. 트리거가 없으면 null, 있으면 최종 선택값. */
+async function pickMenuValue({ pattern, value }) {
+  const trigger = `[].slice.call(document.querySelectorAll('button[aria-haspopup="menu"]')).filter(function(b){return ${pattern}.test((b.textContent||'').trim());})[0]`;
+  const current = () => chromeJS(`(function(){var t=${trigger};return t?(t.textContent||'').trim():'';})()`) || null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const now = current();
+    if (!now || now === value) return now;
+    // Radix 트리거는 click 으로 안 열린다 — pointerdown 이어야 한다 (2026-09-17 실측).
+    chromeJS(`(function(){var t=${trigger};t.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,button:0,pointerType:'mouse',isPrimary:true}));return 'ok';})()`);
+    await sleep(700);
+    chromeJS(`(function(){
+      var it=[].slice.call(document.querySelectorAll('[role="menuitemradio"]')).filter(function(m){return (m.textContent||'').trim()===${JSON.stringify(value)};})[0];
+      if(it){it.click();return 'ok';}
+      document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+      return 'missing';
+    })()`);
+    await sleep(900);
+  }
+  return current();
+}
+
 async function requireVideoOptions() {
-  const set = JSON.parse(chromeJS(`(function(){
-    var buttons=Array.from(document.querySelectorAll('button'));
-    var selected=function(b){return b.getAttribute('aria-checked')==='true'||b.getAttribute('aria-pressed')==='true';};
-    var options=['720p','10s'].map(function(label){
-      var b=buttons.find(function(x){return (x.textContent||'').trim()===label;});
-      if(b&&!selected(b)) b.click();
-      return {label:label,found:!!b};
-    });
-    return JSON.stringify(options);
-  })()`));
-  if (set.some(option => !option.found)) throw new Error('Grok 720p/10s 옵션을 확인할 수 없습니다');
-  await sleep(1200);
-  const optionsReady = JSON.parse(chromeJS(`JSON.stringify(['720p','10s'].every(function(label){
-    var b=Array.from(document.querySelectorAll('button')).find(function(x){return (x.textContent||'').trim()===label;});
-    return b&&(b.getAttribute('aria-checked')==='true'||b.getAttribute('aria-pressed')==='true');
-  }))`));
-  if (!optionsReady) {
-    const e = new Error('Grok 720p/10s 사용 불가 — 계정 요금제·한도 확인 필요 (낮은 품질로 생성하지 않음)');
+  // 비디오 모드·오디오는 켜져 있지 않을 때만 누른다 — 켜진 토글을 다시 누르면 꺼진다.
+  chromeJS(`(function(){
+    var B=[].slice.call(document.querySelectorAll('button'));
+    var by=function(labels){return B.filter(function(b){return labels.indexOf(b.getAttribute('aria-label'))>=0;})[0];};
+    var mode=by(['비디오','Video']);
+    if(mode&&mode.getAttribute('aria-checked')!=='true') mode.click();
+    return 'ok';
+  })()`);
+  await sleep(800);
+  chromeJS(`(function(){
+    var a=[].slice.call(document.querySelectorAll('button')).filter(function(b){return ['비디오 오디오','Video audio'].indexOf(b.getAttribute('aria-label'))>=0;})[0];
+    if(a&&a.getAttribute('aria-pressed')!=='true') a.click();
+    return 'ok';
+  })()`);
+  await sleep(600);
+
+  const picked = [];
+  for (const menu of VIDEO_MENUS) picked.push(await pickMenuValue(menu));
+  if (!picked[0] || !picked[1]) throw new Error('Grok 720p/10s 옵션을 확인할 수 없습니다');
+  const audioOff = chromeJS(`(function(){
+    var a=[].slice.call(document.querySelectorAll('button')).filter(function(b){return ['비디오 오디오','Video audio'].indexOf(b.getAttribute('aria-label'))>=0;})[0];
+    return String(!!a&&a.getAttribute('aria-pressed')!=='true');
+  })()`) === 'true';
+  if (VIDEO_MENUS.some((menu, i) => picked[i] && picked[i] !== menu.value) || audioOff) {
+    const e = new Error(`Grok 720p/10s 사용 불가 (선택: ${picked.filter(Boolean).join('·')}${audioOff ? '·오디오 꺼짐' : ''}) — 계정 요금제·한도 확인 필요 (낮은 품질로 생성하지 않음)`);
     e.code = 'GROK_PLAN';
     throw e;
   }
 }
 
-/** 프롬프트 입력 + 옵션 확정 + 제출 */
+/** 옵션 확정 + 프롬프트 입력 + 제출 */
 async function submitPrompt(tab, prompt) {
-  const js = `(function(){
-    var el=document.querySelector('[contenteditable="true"]');
-    if(!el) return JSON.stringify({ok:false,why:"no composer"});
-    el.focus();
-    document.execCommand("insertText",false,${JSON.stringify(prompt)});
-    return JSON.stringify({ok:true,len:el.innerText.length});
-  })()`;
-  const ins = JSON.parse(chromeJS(js));
-  if (!ins.ok) throw new Error('컴포저를 찾지 못했습니다');
-  await sleep(900);
-
   // 옵션 확정 — **이미 켜진 것은 다시 누르지 않는다.**
   // 예전에는 720p·10s 를 무조건 클릭하고 곧바로 제출을 눌렀다. 켜져 있는 토글을 다시
   // 누르면 꺼지고, 그 리렌더 도중에 들어간 제출 클릭은 조용히 흘러간다
   // (2026-09-02 EP-0131 씬 002·005: 프롬프트·첨부·활성 제출 버튼이 다 갖춰졌는데도
   //  "제출이 반영되지 않았습니다" 로 죽었다. 사람이 같은 버튼을 누르면 3초 만에 넘어갔다.)
   await requireVideoOptions();
+
+  // 프롬프트는 넣은 뒤 **다시 읽어서** 확인한다. 첨부 직후 Tiptap 편집기가 다시 그려지면
+  // execCommand 가 성공을 돌려주고도 글이 사라지고, 빈 컴포저에는 제출 버튼이 아예 없다
+  // (2026-09-17 실측: "제출 버튼을 찾지 못했습니다"). 비어 있을 때만 넣으므로 두 번 들어가지 않는다.
+  const typePrompt = async () => {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const typed = chromeJS(`(function(){
+        var el=document.querySelector('[contenteditable="true"]');
+        if(!el) return 'no composer';
+        if(!(el.innerText||'').trim()){ el.focus(); document.execCommand("insertText",false,${JSON.stringify(prompt)}); }
+        return 'ok';
+      })()`);
+      if (typed === 'no composer') throw new Error('컴포저를 찾지 못했습니다');
+      await sleep(900);
+      const len = Number(chromeJS(`(function(){var el=document.querySelector('[contenteditable="true"]');return String(el?(el.innerText||'').trim().length:0);})()`));
+      if (len > 0) return;
+    }
+    throw new Error('프롬프트 입력이 반영되지 않았습니다');
+  };
+  await typePrompt();
 
   // 제출 — 누르고 끝내지 않고, 이동을 확인하며 다시 누른다.
   const clickSubmit = () => JSON.parse(chromeJS(`(function(){
@@ -359,7 +410,8 @@ async function submitPrompt(tab, prompt) {
     const r = clickSubmit();
     if (!r.ok) {
       why = r.why;
-      if (why === 'no submit' && attempt === 1) throw new Error('제출 버튼을 찾지 못했습니다');
+      // 제출 버튼은 컴포저에 글이 있어야 생긴다 — 입력이 날아갔는지부터 다시 본다.
+      if (why === 'no submit') await typePrompt();
       await sleep(2500);
       continue;
     }
@@ -367,6 +419,14 @@ async function submitPrompt(tab, prompt) {
       await sleep(2000);
       const p = chromeJS('location.pathname');
       if (p.includes('/imagine/post/') && p !== beforePath) return p;
+    }
+    // 첫 영상 생성 때 계정 단위 연령 확인 창(출생 연도 입력)이 제출을 가로챈다.
+    // 다시 눌러 봐야 같은 창이다 — 연령 증명은 계정 주인이 할 일이라 코드로 채우지 않는다.
+    // (2026-09-17 실측: 새 계정에서 "제출이 반영되지 않았습니다" 로만 보였다.)
+    if (chromeJS(`String([].slice.call(document.querySelectorAll('[role="dialog"],[role="alertdialog"]')).some(function(d){return /나이를 확인/.test(d.innerText||'')||!!d.querySelector('input[placeholder="YYYY"]');}))`) === 'true') {
+      const e = new Error('Grok 연령 확인 창이 제출을 막고 있습니다 — Chrome 의 grok.com/imagine 에서 계정 주인이 출생 연도를 한 번 확인하세요');
+      e.code = 'GROK_AGE';
+      throw e;
     }
     console.warn(`     제출이 안 먹었다 — 다시 누른다 ${attempt}/4`);
   }
@@ -694,7 +754,7 @@ async function main() {
     } catch (e) {
       failed += 1;
       console.warn(`  ❌ 씬 ${scene.id}: ${e.message}`);
-      if (['BROWSER_PERMISSION', 'GROK_LOGIN', 'GROK_PLAN'].includes(e.code)) break;
+      if (['BROWSER_PERMISSION', 'GROK_LOGIN', 'GROK_PLAN', 'GROK_AGE'].includes(e.code)) break;
       if (STALL_PATTERN.test(e.message)) stalls += 1; else stalls = 0;
       if (made === 0 && stalls >= STALL_ABORT_AFTER) {
         const left = wanted.length - i - 1;

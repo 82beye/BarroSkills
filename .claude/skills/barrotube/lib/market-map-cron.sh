@@ -14,9 +14,9 @@
 # "오늘 15:30 마감"을 찍으면 오지 않은 마감을 적게 된다.
 #
 # 링크: https://82beye.github.io/BarroSkills/ 가 매 판마다 갱신된다 (lib/market-map-pages.sh).
-# 게시(커뮤니티 업로드)는 사람 몫이다: 텔레그램으로 받은 10장을 올린다.
-# 커뮤니티 게시는 공식 API 가 없어서(2026-09 기준) 무인 업로드는 브라우저 자동화뿐인데,
-# 그 경로는 로그인·UI 변경에 취약해 상시 크론에 넣지 않는다.
+# 커뮤니티 게시까지 무인으로 간다 (운영자 지시 2026-09-18). 공식 API 는 없어서 로그인된
+# Chrome 을 Apple Events 로 몬다 — scripts/automation/community-post.js. 로그인·UI 변경에
+# 취약한 경로라 실패해도 판 전체를 죽이지 않는다: 카드는 이미 텔레그램으로 나가 있다.
 set -euo pipefail
 BARROTUBE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$BARROTUBE_HOME"
@@ -26,7 +26,14 @@ ED="${1:-$(node -e "import('./scripts/automation/lib/market-map.js').then(m=>con
 echo "🗞  마켓맵 ${ED}판 시작 $(date '+%F %H:%M')"
 
 # 1) 수집 (+ 보관용 포스터 3장). 텔레그램으로는 안 보낸다 — 발송물은 카드뉴스다.
+#    종료코드 10 = 「직전 판과 같은 마감」이라 거른 판. 주말·휴장일·월요일 조간이 여기 걸린다.
+#    카드도 텔레그램도 게시도 하지 않는다 — 같은 숫자를 다시 내보내지 않는 게 요점이다.
+set +e
 node scripts/automation/market-map.js --edition "$ED"
+RC=$?
+set -e
+if [ "$RC" -eq 10 ]; then exit 0; fi
+if [ "$RC" -ne 0 ]; then exit "$RC"; fi
 
 # 2) 카드뉴스 10장 조판 → PNG → 공개 페이지 → 텔레그램
 node scripts/automation/market-magazine.js --edition "$ED" --render --site --telegram
@@ -35,4 +42,11 @@ node scripts/automation/market-magazine.js --edition "$ED" --render --site --tel
 #    실패로 만들지 않는다 — 링크만 직전 판에 머문다.
 DATE="$(TZ=Asia/Seoul date +%F)"
 CARDS="workspace/growth/market-map/$DATE/$ED/cards"
-bash lib/market-map-pages.sh "$CARDS" || echo "⚠ Pages 갱신 실패 — 링크는 직전 판 상태로 남는다" >&2
+if bash lib/market-map-pages.sh "$CARDS"; then
+  # 4) 유튜브 커뮤니티 게시. 카드를 공개 링크에서 fetch 해 붙이므로 **Pages 다음이라야 한다**.
+  #    공개본이 이번 판과 다르면 community-post.js 가 스스로 멈춘다 — 직전 판을 올리는 사고 방지.
+  node scripts/automation/community-post.js --edition "$ED" \
+    || echo "⚠ 커뮤니티 게시 실패 — 카드는 텔레그램에 있다" >&2
+else
+  echo "⚠ Pages 갱신 실패 — 링크는 직전 판에 머문다. 공개본이 낡았으니 커뮤니티 게시도 건너뛴다" >&2
+fi

@@ -140,23 +140,42 @@ test('Chrome JavaScript permission denial fails immediately without a second nav
 
 test('Grok rejects unavailable quality and waits past the attached-image post', async () => {
   const source = readFileSync(join(ROOT, 'scripts/automation/grok-motion-applescript.js'), 'utf8');
-  const functions = source.slice(source.indexOf('async function requireVideoOptions()'), source.indexOf('async function waitForOwnVideo('));
-  let selectable = false, clicks = 0;
-  const buttons = ['720p', '10s'].map(textContent => ({
-    textContent, checked: false,
-    getAttribute(name) { return name === 'aria-checked' ? String(this.checked) : null; },
-    click() { clicks++; if (selectable) this.checked = true; },
+  const functions = source.slice(source.indexOf('const VIDEO_MENUS'), source.indexOf('async function waitForOwnVideo('));
+  // 2026-09-17 UI: 해상도·길이·종횡비는 현재 값을 보여 주는 드롭다운 트리거이고
+  // pointerdown 으로 열리며, 항목은 role=menuitemradio 다.
+  let selectable = false, actions = 0;
+  const state = { res: '480p', dur: '6s', ratio: '9:16', menu: null };
+  const choices = { res: ['480p', '720p'], dur: ['6s', '10s'], ratio: ['9:16', '16:9'] };
+  const triggers = Object.keys(choices).map(key => ({
+    get textContent() { return state[key]; },
+    dispatchEvent(e) { if (e.type === 'pointerdown') { actions++; state.menu = key; } },
   }));
+  const items = () => {
+    const key = state.menu;
+    return (key ? choices[key] : []).map(textContent => ({
+      textContent, click() { actions++; if (selectable) state[key] = textContent; state.menu = null; },
+    }));
+  };
+  const toggles = [['비디오', 'aria-checked'], ['비디오 오디오', 'aria-pressed']].map(([label, attr]) => ({
+    getAttribute: name => (name === 'aria-label' ? label : name === attr ? 'true' : null),
+    click() { actions++; },
+  }));
+  class FakeEvent { constructor(type, init) { Object.assign(this, init, { type }); } }
+  const document = {
+    querySelectorAll: sel => (sel.includes('aria-haspopup') ? triggers : sel.includes('menuitemradio') ? items() : toggles),
+    dispatchEvent(e) { if (e.key === 'Escape') state.menu = null; },
+  };
   const context = { sleep: async () => {}, chromeJS: js => runInNewContext(js, {
-    document: { querySelectorAll: () => buttons },
+    document, PointerEvent: FakeEvent, KeyboardEvent: FakeEvent,
   }) };
   const api = runInNewContext(functions + '\n({ requireVideoOptions, submitPrompt })', context);
   await assert.rejects(api.requireVideoOptions(), e => e.code === 'GROK_PLAN');
   selectable = true;
   await api.requireVideoOptions();
-  const selectedClicks = clicks;
+  assert.deepEqual([state.res, state.dur, state.ratio], ['720p', '10s', '9:16']);
+  const selectedActions = actions;
   await api.requireVideoOptions();
-  assert.equal(clicks, selectedClicks, 'selected radio options must not be toggled');
+  assert.equal(actions, selectedActions, 'selected options and toggles must not be touched again');
 
   const paths = ['/imagine/post/still', '/imagine/post/still', '/imagine/post/video'];
   let submits = 0;
@@ -164,11 +183,41 @@ test('Grok rejects unavailable quality and waits past the attached-image post', 
   context.chromeJS = js => {
     if (js === 'location.pathname') return paths.shift();
     if (js.includes('sb.click()')) submits++;
+    if (js.includes('.trim().length:0')) return '26';
     return '{"ok":true}';
   };
   assert.equal(await api.submitPrompt({}, 'animate the attached still'), '/imagine/post/video');
   assert.equal(submits, 1, 'an existing attachment post is not a new video or a reason to resubmit');
   assert.equal(paths.length, 0);
+
+  // 연령 확인 창은 다시 눌러도 같은 창이다 — 네 번 재제출하지 말고 사유를 달고 멈춘다.
+  submits = 0;
+  context.chromeJS = js => {
+    if (js === 'location.pathname') return '/imagine';
+    if (js.includes('sb.click()')) { submits++; return '{"ok":true}'; }
+    if (js.includes('placeholder="YYYY"')) return 'true';
+    if (js.includes('.trim().length:0')) return '26';
+    return '{"ok":true}';
+  };
+  await assert.rejects(api.submitPrompt({}, 'animate the attached still'), e => e.code === 'GROK_AGE');
+  assert.equal(submits, 1);
+
+  // 첨부 직후 편집기가 다시 그려지면 프롬프트가 날아가고, 빈 컴포저에는 제출 버튼이 없다.
+  // 첫 입력은 삼켜지고(되읽기 0자), 확인 뒤에도 한 번 더 지워진다 — 둘 다 다시 넣고 제출한다.
+  let text = '', typings = 0, wiped = false;
+  const flow = ['/imagine', '/imagine/post/video'];
+  context.chromeJS = js => {
+    if (js === 'location.pathname') return flow.length > 1 ? flow.shift() : flow[0];
+    if (js.includes('execCommand')) { if (!text && ++typings > 1) text = 'typed'; return 'ok'; }
+    if (js.includes('.trim().length:0')) return String(text.length);
+    if (js.includes('sb.click()')) {
+      if (!wiped) { wiped = true; text = ''; return '{"ok":false,"why":"no submit"}'; }
+      return '{"ok":true}';
+    }
+    return '{"ok":true}';
+  };
+  assert.equal(await api.submitPrompt({}, 'animate the attached still'), '/imagine/post/video');
+  assert.equal(typings, 3, 'a swallowed prompt is typed again instead of failing the cut');
 });
 
 test('growth fetch failure is visible and cannot stamp stale KPI files as fresh', (t) => {

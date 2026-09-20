@@ -28,11 +28,9 @@ import {
   computeTreatment,
 } from './lib/public-figures.js';
 import { recordCost } from './lib/cost-tracker.js';
-import { generateImageOpenAI } from './lib/image-engines/openai-gpt-image.js';
-import { resolveImageEngine } from './lib/image-engine-config.js';
 
-const DEFAULT_MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image-preview';
-const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
+// 로그 표기용. 실제 생성은 codex imagegen 이 맡는다 (2026-09-18 이후 Gemini 호출 없음).
+const ENGINE_LABEL = 'codex-imagegen';
 
 /**
  * 캐릭터 시트를 레퍼런스 이미지로 함께 보낸다.
@@ -45,60 +43,6 @@ function sheetPart(channel) {
   const p = resolve('workspace', 'docs', `${channel === 'econ-daily' ? '바로경제' : channel}_캐릭터시트.png`);
   if (!existsSync(p)) return null;
   return { inlineData: { mimeType: 'image/png', data: readFileSync(p).toString('base64') } };
-}
-
-export async function generateImageGemini({ prompt, outPath, aspectRatio = '9:16', resolution = '2K', model = DEFAULT_MODEL, channel = null, costContext = {} }) {
-  const apiKey = getSecret('GOOGLE_AI_API_KEY');
-  if (!apiKey) throw new Error('GOOGLE_AI_API_KEY not set in .env');
-
-  const url = `${API_BASE}/models/${model}:generateContent?key=${apiKey}`;
-  const sheet = channel ? sheetPart(channel) : null;
-  const requestParts = sheet
-    ? [sheet, { text: `Use the attached official character sheet as the exact reference for the mascot — identical body proportions, limb thickness, face, eyes, cheeks and colours. Do not re-invent the character.\n\n${prompt}` }]
-    : [{ text: prompt }];
-  const body = {
-    contents: [{ parts: requestParts }],
-    generationConfig: {
-      responseModalities: ['IMAGE'],
-      imageConfig: { aspectRatio, imageSize: resolution },
-    },
-  };
-
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Gemini image gen failed: ${res.status} ${err.slice(0, 400)}`);
-  }
-
-  const data = await res.json();
-  const parts = data.candidates?.[0]?.content?.parts || [];
-  const imgPart = parts.find(p => p.inlineData || p.inline_data);
-  if (!imgPart) {
-    throw new Error(`No image in response: ${JSON.stringify(data).slice(0, 400)}`);
-  }
-
-  const base64 = (imgPart.inlineData || imgPart.inline_data).data;
-  const mime = (imgPart.inlineData || imgPart.inline_data).mimeType || 'image/png';
-  const buffer = Buffer.from(base64, 'base64');
-
-  mkdirSync(dirname(outPath), { recursive: true });
-  writeFileSync(outPath, buffer);
-
-  // Cost tracking — best-effort, never blocks (2026-04-27)
-  recordCost('image-generator', {
-    model,
-    images: 1,
-    episode: costContext.episode || null,
-    stage: costContext.stage || null,
-    note: costContext.note || null,
-  });
-
-  return { path: outPath, bytes: buffer.length, mime };
 }
 
 export function parseFrontmatter(mdPath) {
@@ -298,9 +242,16 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
   try {
     if (opts.prompt && opts.out) {
-      const aspectRatio = opts.aspect || '9:16';
-      const r = await generateImageGemini({ prompt: opts.prompt, outPath: resolve(opts.out), aspectRatio });
-      console.log(`✅ Image saved: ${opts.out} (${(r.bytes / 1024).toFixed(1)} KB, ${r.mime})`);
+      // 수동 단발 경로도 codex 하나만 쓴다 (운영자 지시 2026-09-18) — 파이프라인과
+      // 다른 엔진으로 한 컷만 구우면 그 컷만 화풍이 달라진다.
+      const { generateImageCodex } = await import('./lib/image-engines/codex-imagegen.js');
+      const outAbs = resolve(opts.out);
+      // --channel 을 주면 캐릭터시트가 붙는다. 안 주면 시트 없이 구워져 마시가
+      // 드리프트하므로, 채널 그림이면 반드시 넘길 것.
+      const manualChannel = opts.channel || null;
+      if (!manualChannel) console.warn('⚠  --channel 없음 — 캐릭터시트 없이 굽습니다 (채널 그림이면 --channel econ-daily)');
+      generateImageCodex({ prompt: opts.prompt, outPath: outAbs, channel: manualChannel });
+      console.log(`✅ Image saved (codex imagegen${manualChannel ? ' + 캐릭터시트' : ''}): ${opts.out}`);
     } else if (opts.script && opts['out-dir']) {
       const meta = parseFrontmatter(opts.script);
       const outDir = resolve(opts['out-dir']);
@@ -336,7 +287,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       mkdirSync(outDir, { recursive: true });
 
       const resolution = opts.resolution || '2K';  // 2026-06-08: 1K→2K 상향 (표현력/디테일 개선, 비용 대비 품질)
-      console.log(`📐 Format=${format} → aspect=${aspectRatio}, resolution=${resolution}, model=${DEFAULT_MODEL}`);
+      console.log(`📐 Format=${format} → aspect=${aspectRatio}, resolution=${resolution}, engine=${ENGINE_LABEL}`);
       if (stylePath) {
         console.log(`📋 Framing: ${stylePath.replace(process.cwd() + '/', '')}`);
         if (hasDna) console.log(`🧬 Character DNA: workspace/channels/${meta.channel_id}/character-dna.md`);
@@ -452,86 +403,35 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         // 프롬프트 산출물 저장 (품질 진단·디버깅용, 2026-06-08) — API에 보낸 최종 프롬프트를 파일로 남긴다.
         try {
           writeFileSync(outPath.replace(/\.png$/, '.prompt.txt'),
-            `# scene_${scene.scene_id} (${scene.role || ''})\n# model=${DEFAULT_MODEL} aspect=${aspectRatio} resolution=${resolution}\n\n${fullPrompt}\n`, 'utf-8');
+            `# scene_${scene.scene_id} (${scene.role || ''})\n# engine=${ENGINE_LABEL} aspect=${aspectRatio} resolution=${resolution}\n\n${fullPrompt}\n`, 'utf-8');
         } catch {}
 
-        // 엔진 분기 (2026-06-08): config/image-engines.json S6c_scene 으로 결정.
-        //   openai=gpt-image-1(고품질), 그 외=gemini. OPENAI 키는 resolve 전에 hydrate.
-        if (!process.env.OPENAI_API_KEY) {
-          const _k = getSecret('OPENAI_API_KEY');
-          if (_k) process.env.OPENAI_API_KEY = _k;
-        }
-        const sceneEng = resolveImageEngine('S6c_scene', { env: process.env });
-        if (sceneEng.engine === 'codex') {
-          // Codex 내장 imagegen. ChatGPT 계정 인증이라 OPENAI_API_KEY 가 없어도 되고
-          // 브라우저가 필요 없다 — 무인 실행에서 S6c 가 죽지 않는다.
-          // 캐릭터/노출 고정 블록은 어댑터가 붙인다 (codex-imagegen.js).
-          const { generateImageCodex } = await import('./lib/image-engines/codex-imagegen.js');
-          try {
-            generateImageCodex({
-              prompt: fullPrompt,
-              outPath,
-              channel: meta.channel_id || null,
-            });
-          } catch (codexErr) {
-            // 조용히 Gemini 로 떨어지면 운영자가 어느 엔진으로 구워졌는지 모른다.
-            // Gemini 는 텍스트 DNA 만 써서 캐릭터 드리프트 위험이 codex 보다 크다 —
-            // 그래서 config 가 codex 를 기본으로 잡아 뒀는데 폴백이 그걸 무력화한다.
-            // (2026-08-25 EP-0114: 5컷 전부 Gemini 로 나갔고 로그에 사유가 없었다.)
-            console.error(`  ⚠️  codex imagegen 실패 → Gemini 폴백 (scene_${scene.scene_id})`);
-            console.error(`     사유: ${String(codexErr.message).split('\n')[0].slice(0, 300)}`);
-            await generateImageGemini({
-              prompt: fullPrompt,
-              outPath,
-              aspectRatio,
-              resolution,
-              channel: meta.channel_id || null,
-              costContext: {
-                episode: meta.episode_id || null,
-                stage: 'S6c',
-                note: `scene_${scene.scene_id} (codex fallback)`,
-              },
-            });
-          }
-        } else if (sceneEng.engine === 'openai') {
-          await generateImageOpenAI({
-            prompt: fullPrompt,
-            outPath,
-            size: aspectRatio === '16:9' ? '1536x1024' : '1024x1536',
-            quality: 'high',
-            channel: meta.channel_id || null,   // 캐릭터 시트를 레퍼런스로 첨부 (gemini 분기와 동일)
-            costContext: {
-              episode: meta.episode_id || null,
-              stage: 'S6c',
-              note: `scene_${scene.scene_id}`,
-            },
-          });
-        } else {
-          await generateImageGemini({
-            prompt: fullPrompt,
-            outPath,
-            aspectRatio,
-            resolution,
-            channel: meta.channel_id || null,   // 캐릭터 시트를 레퍼런스로 첨부
-            costContext: {
-              episode: meta.episode_id || null,
-              stage: 'S6c',
-              note: `scene_${scene.scene_id}`,
-            },
-          });
-        }
+        // S6c 씬 이미지는 codex imagegen **하나만** 쓴다 (운영자 지시 2026-09-18).
+        //
+        // 예전에는 codex 실패 시 Gemini → OpenAI 로 두 단계 폴백했다. 그게 문제를 키웠다:
+        //   ① Gemini 는 텍스트 DNA 만 써서 캐릭터가 드리프트한다
+        //      (2026-08-25 EP-0114: 5컷 전부 Gemini 로 나갔고 로그에 사유가 없었다)
+        //   ② OpenAI 는 유료 크레딧을 태운다 — 2026-09-18 EP-0162 가 그렇게 429 로 죽었다
+        //   ③ 어느 엔진이 죽어도 라벨이 «Gemini image gen failed» 라 오진을 부른다
+        // 이제 codex 가 죽으면 그냥 멈춘다. 조용히 다른 그림이 나가는 것보다 낫다.
+        const { generateImageCodex } = await import('./lib/image-engines/codex-imagegen.js');
+        generateImageCodex({
+          prompt: fullPrompt,
+          outPath,
+          channel: meta.channel_id || null,
+        });
         const paletteTag = palettePick ? ` [palette:${palettePick}${tokenPalette ? '' : ' auto'}]` : '';
         const dnaTag = scene.character_override && !dnaUsed ? ' [dna:bypassed]' : '';
         console.log(`  ✅ Scene ${scene.scene_id}${paletteTag}${overrideTag}${dnaTag}`);
       }
       console.log(`\n🎨 All images saved in ${outDir}`);
     } else {
-      console.error('Usage: generate-image-gemini.js --prompt "..." --out path.png [--aspect 9:16|16:9]');
+      console.error('Usage: generate-image-gemini.js --prompt "..." --out path.png [--channel econ-daily]');
       console.error('   or: generate-image-gemini.js --script 30_script.md --out-dir assets/images/ [--force] [--scene 001,002]');
       process.exit(1);
     }
   } catch (e) {
-    console.error(`❌ Gemini image gen failed: ${e.message}`);
+    console.error(`❌ 씬 이미지 생성 실패 (codex imagegen): ${e.message}`);
     process.exit(1);
   }
 }

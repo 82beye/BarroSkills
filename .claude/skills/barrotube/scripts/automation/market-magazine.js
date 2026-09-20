@@ -21,6 +21,7 @@
 
 import { readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { getSecret } from './config-loader.js';
 import {
@@ -46,7 +47,7 @@ const FB = "'IBM Plex Sans KR','Apple SD Gothic Neo',-apple-system,sans-serif";
 
 const W = 1080; const H = 1350; const M = 72;
 const EPOCH = '2026-09-16';
-const TOTAL = 10;
+let TOTAL = 10;  // 테마 카드가 빠지면 8 이 된다 (main 에서 확정)
 
 /** 업종명 → 개념. 미국 어휘와 코스피 어휘가 달라서, 양끝이 같은 산업인지 판정하려면
  *  사람이 관리하는 표가 필요하다. 정본은 config/market-map.json 의 cross_market_concepts. */
@@ -95,7 +96,7 @@ function usSessionLabel(sessionDate, collectedAt) {
 }
 
 /* ── 사실 추출 ─────────────────────────────────────────────────────────── */
-function facts(d, collectedAt, edition) {
+export function facts(d, collectedAt, edition) {
   const krGroupOf = {};
   for (const [g, m] of Object.entries(CFG.kr.groups ?? {})) {
     if (g.startsWith('_')) continue;
@@ -139,6 +140,7 @@ function facts(d, collectedAt, edition) {
 
   return {
     date: d.date, idx: d.idx, themes: d.themes, MIN_N, krLabel,
+    themesSession: d.themesSession ?? { date: d.krSession?.date ?? d.date, carried: false },
     sameOrder, conceptLead: cLeadUs, conceptTail: cTailUs,
     usTop: us.slice(0, 4), usBot: us.slice(-4).reverse(),
     krTop: kr.slice(0, 4), krBot: kr.slice(-4).reverse(),
@@ -176,7 +178,7 @@ function bottombar(n) {
   return `<div style="padding:0 ${M}px 52px">
     <div style="display:flex;gap:5px;margin-bottom:16px">${segs}</div>
     <div style="display:flex;align-items:baseline;justify-content:space-between">
-      <span style="color:${T.faint};font-size:19px">@바로경제 · 매일 08 · 12 · 18시</span>
+      <span style="color:${T.faint};font-size:19px">@바로경제 · 매일 08 · 20시</span>
       <span style="color:${T.muted};font-size:20px;font-weight:600;font-variant-numeric:tabular-nums">${String(n).padStart(2, '0')} / ${TOTAL}</span>
     </div>
   </div>`;
@@ -334,12 +336,27 @@ function cardIndices(f, n) {
   const sessionNote = usLive ? '미국은 아직 거래 중이라 마감치가 아닙니다.'
     : krLive ? '코스피는 아직 거래 중이라 마감치가 아닙니다.'
       : '둘 다 마감 수치입니다.';
+  // 제목을 「넷 다 올랐습니다」로 박아두면 반이 내린 날 거짓이 된다 —
+  // 2026-09-17 조간에서 실제로 그랬다(나스닥 -0.01%, S&P500 -0.45%). 수치에서 만든다.
+  const kr2 = [f.idx.kospi, f.idx.kosdaq].filter(Boolean);
+  const us2 = [f.idx.nasdaq, f.idx.sp500].filter(Boolean);
+  const all = [...kr2, ...us2];
+  const ups = all.filter((q) => q.pct >= 0).length;
+  const krUp = kr2.length > 0 && kr2.every((q) => q.pct >= 0);
+  const krDn = kr2.length > 0 && kr2.every((q) => q.pct < 0);
+  const usUp = us2.length > 0 && us2.every((q) => q.pct >= 0);
+  const usDn = us2.length > 0 && us2.every((q) => q.pct < 0);
+  const headline = ups === all.length ? `지수는 넷 다 올랐습니다`
+    : ups === 0 ? `지수는 넷 다 내렸습니다`
+      : krUp && usDn ? '한국은 오르고,<br>미국은 내렸습니다'
+        : krDn && usUp ? '미국은 오르고,<br>한국은 내렸습니다'
+          : '지수는 엇갈렸습니다';
   return doc(`
   ${topbar(f)}
   ${mid(`
   <div style="padding:34px ${M}px 0">
     ${kicker('오늘의 숫자')}
-    ${h1('지수는 넷 다 올랐습니다', 62)}
+    ${h1(headline, 62)}
   </div>
   <div style="padding:34px ${M}px 0">
     ${bigRow('코스피', fnum(f.idx.kospi?.price), f.idx.kospi?.pct)}
@@ -371,7 +388,8 @@ function cardUsMovers(f, n) {
   </div>
   ${twoLists({ list: f.usTop, key: 't' }, { list: f.usBot, key: 't' })}
   <div style="padding:34px ${M}px 0">
-    ${lede(`나스닥은 ${strong(fpct(f.idx.nasdaq?.pct))}. 지수만 보면 조용한 날이지만, 그 안의 위아래 폭은 ${strong(`${f.usSpread.toFixed(1)}%p`)}였습니다.`)}
+    ${/* 지수가 실제로 조용할 때만 조용하다고 쓴다 — 2026-09-18 조간은 나스닥 +1.69% 인데 「조용한 날」로 나갔다. */ ''}
+    ${lede(`나스닥은 ${strong(fpct(f.idx.nasdaq?.pct))}. ${Math.abs(f.idx.nasdaq?.pct ?? 0) < 0.5 ? '지수만 보면 조용한 날이지만, 그 안의' : '지수 하나로는 안 보이지만, 그 안의'} 위아래 폭은 ${strong(`${f.usSpread.toFixed(1)}%p`)}였습니다.`)}
   </div>
   `)}
   ${bottombar(n)}`);
@@ -440,14 +458,14 @@ function cardThemes(f, n) {
   ${topbar(f)}
   ${mid(`
   <div style="padding:34px ${M}px 0">
-    ${kicker('오늘의 테마')}
+    ${kicker(f.themesSession.carried ? `테마 · ${esc(f.themesSession.date)} 마감 기준` : '오늘의 테마')}
     <div style="display:flex;align-items:baseline;gap:22px;margin-top:18px;flex-wrap:wrap">
       <h1 style="font-family:${FD};color:${T.ink};font-size:66px;font-weight:800;line-height:1.1;letter-spacing:-.035em">${esc(short(top.name))}</h1>
       <span style="color:${T.up};font-size:66px;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:-.02em">${fpct(top.pct)}</span>
     </div>
   </div>
   <div style="padding:30px ${M}px 0">
-    <div style="color:${T.muted};font-size:20px;font-weight:600;letter-spacing:.14em;padding-bottom:6px">상승률 상위 6개 테마</div>
+    <div style="color:${T.muted};font-size:20px;font-weight:600;letter-spacing:.14em;padding-bottom:6px">상승률 상위 ${f.themes.length}개 테마${f.themesSession.carried ? ` · ${esc(f.themesSession.date)} 마감` : ''}</div>
     ${rows}
     <div style="border-top:1px solid ${T.hair}"></div>
   </div>
@@ -469,7 +487,7 @@ function cardShared(f, n) {
   ${topbar(f)}
   ${mid(`
   <div style="padding:34px ${M}px 0">
-    ${kicker('이게 오늘의 핵심')}
+    ${kicker(f.themesSession.carried ? `핵심 · ${esc(f.themesSession.date)} 마감 기준` : '이게 오늘의 핵심')}
     ${h1(`${f.shared.length}종목이<br>상위 테마를 함께 올렸습니다`, 62)}
   </div>
   <div style="padding:30px ${M}px 0">${rows}<div style="border-top:1px solid ${T.hair}"></div></div>
@@ -509,6 +527,11 @@ function cardSameOrder(f, n) {
 }
 
 function cardOutro(f, n) {
+  const qs = [f.idx.kospi, f.idx.kosdaq, f.idx.nasdaq, f.idx.sp500].filter(Boolean);
+  const up = qs.filter((q) => q.pct >= 0).length;
+  const indexLine = up === qs.length ? '주요 지수는 모두 올랐고,'
+    : up === 0 ? '주요 지수는 모두 내렸고,'
+      : `주요 지수 ${qs.length}개 중 ${up}개가 올랐고,`;
   const hm = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Seoul', hour12: false, hour: '2-digit', minute: '2-digit' }).format(f.collectedAt);
   const stamp = `${new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(f.collectedAt)} ${hm} KST`;
   const line = (n, s) => `<div style="display:flex;align-items:baseline;gap:18px;padding:26px 0;border-top:1px solid ${T.hair}">
@@ -522,11 +545,13 @@ function cardOutro(f, n) {
     ${h1('오늘 장, 이렇게 읽으면 됩니다', 58)}
   </div>
   <div style="padding:26px ${M}px 0">
-    ${line(1, `지수는 넷 다 올랐지만, 오른 곳과 내린 곳의 차이가 ${strong(`${f.usSpread.toFixed(1)}%p`)}로 컸습니다.`)}
+    ${line(1, `${strong(indexLine)} 그 안에서 오른 곳과 내린 곳의 차이는 ${strong(`${f.usSpread.toFixed(1)}%p`)}였습니다.`)}
     ${line(2, f.sameOrder
       ? `${strong(`${f.conceptLead}가 위, ${f.conceptTail}가 아래`)} — 뉴욕과 서울이 같은 순서였습니다.`
       : `미국은 ${strong(`${f.usLead.name} 위 · ${f.usTail.name} 아래`)}, 코스피는 ${strong(`${f.krLead.name} 위 · ${f.krTail.name} 아래`)}였습니다.`)}
-    ${line(3, `상위 테마 6개 중 여럿이 ${strong(`같은 ${f.shared.length}종목`)}으로 올랐습니다.`)}
+    ${f.themes.length && f.shared.length
+      ? line(3, `상위 테마 ${f.themes.length}개 중 여럿이 ${strong(`같은 ${f.shared.length}종목`)}으로 올랐습니다${f.themesSession.carried ? ` (${esc(f.themesSession.date)} 마감 기준)` : ''}.`)
+      : line(3, `코스피는 ${strong(`${esc(f.krLabel.date)} ${esc(f.krLabel.text)}`)} 수치입니다 — 장이 열리면 다시 정리합니다.`)}
     <div style="border-top:1px solid ${T.hair}"></div>
   </div>
   ${spacer}
@@ -705,14 +730,17 @@ async function main() {
   // 카드 순서는 판을 따른다 — 막 마감한 시장이 앞에 온다.
   // 테마는 코스피 테마라 코스피 카드 옆에 붙인다.
   const US = [['UsMovers.dc.html', cardUsMovers], ['UsMap.dc.html', (x, n) => cardUsMap(x, d, n)]];
+  const hasThemes = Array.isArray(f.themes) && f.themes.length > 0;
   const KR = [['KrMovers.dc.html', cardKrMovers], ['KrMap.dc.html', (x, n) => cardKrMap(x, d, n)],
-    ['Themes.dc.html', cardThemes], ['SharedNames.dc.html', cardShared]];
+    ...(hasThemes ? [['Themes.dc.html', cardThemes], ['SharedNames.dc.html', cardShared]] : [])];
   const order = [
     ['Main.dc.html', cardCover], ['Indices.dc.html', cardIndices],
     ...(f.ed.leads === 'us' ? [...US, ...KR] : [...KR, ...US]),
     ['SameOrder.dc.html', cardSameOrder], ['Outro.dc.html', cardOutro],
   ];
-  if (order.length !== TOTAL) throw new Error(`카드 수가 ${TOTAL} 이 아니다: ${order.length}`);
+  // 진행 막대·«NN / TOTAL» 표기가 실제 장수를 따라야 한다.
+  TOTAL = order.length;
+  if (![8, 10].includes(TOTAL)) throw new Error(`카드 수가 예상 밖이다: ${TOTAL}`);
   const cards = order.map(([name, fn], i) => [name, fn(f, i + 1)]);
   for (const [name, html] of cards) writeFileSync(join(outDir, name), html);
 
@@ -750,6 +778,7 @@ async function main() {
   console.log(`   미국 ${f.usSession} ${f.usLabel}: 위 ${f.usLead.name} ${fpct(f.usLead.pct)}(n=${f.usLead.n}) / 아래 ${f.usTail.name} ${fpct(f.usTail.pct)}(n=${f.usTail.n})`);
   console.log(`   코스피 ${f.krLabel.date} ${f.krLabel.text}: 위 ${f.krLead.name} ${fpct(f.krLead.pct)}(n=${f.krLead.n}) / 아래 ${f.krTail.name} ${fpct(f.krTail.pct)}(n=${f.krTail.n})`);
   console.log(`   양끝 개념 일치: ${f.sameOrder ? `예 (${f.conceptLead}/${f.conceptTail})` : '아니오'} · 겹친 종목 ${f.shared.length}개`);
+  console.log(`   테마 ${f.themes.length}개${f.themesSession.carried ? ` (${f.themesSession.date} 마감분 이월)` : ''} · 카드 ${TOTAL}장`);
   console.log(`   → ${outDir}`);
 
   if (!values.render) return;
@@ -773,4 +802,8 @@ async function main() {
     + `${CFG.site_url ?? 'https://82beye.github.io/BarroSkills/'}`);
 }
 
-main().catch((e) => { console.error('❌', e.message); process.exit(1); });
+// community-post.js 가 본문 숫자를 만들 때 facts() 를 그대로 쓴다 — 카드와 글이
+// 다른 계산을 하면 같은 판에서 서로 다른 수치가 나간다. import 로 main 이 돌지 않게 막는다.
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((e) => { console.error('❌', e.message); process.exit(1); });
+}

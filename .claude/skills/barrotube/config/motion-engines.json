@@ -77,5 +77,7 @@
     "이번 회차만 로컬 폴백으로: BT_MOTION_ENGINE=local-only bash lib/auto-pipeline.sh --slot us-close",
     "Grok 로그인 확인:          node scripts/automation/grok-motion-applescript.js --check",
     "자동 경로는 grok → local-only 둘뿐이다. wan·ltx 는 명시 지정해야 돈다."
-  ]
+  ],
+  "grok_account": "pushnpullwise@savatv.com",
+  "_grok_account_comment": "2026-09-17 운영자 확정: Chrome 에 로그인된 pushnpullwise@savatv.com(SuperGrok)을 쓴다. grok-motion-applescript.js의 계정 검사 기준이며 BT_GROK_ACCOUNT 환경변수가 이 값을 덮는다."
 }

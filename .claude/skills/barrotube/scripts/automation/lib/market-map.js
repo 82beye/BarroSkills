@@ -172,16 +172,34 @@ export const EDITIONS = {
  * 197일 전 기사 사고와 같은 계열이다. 네이버 응답의 localTradedAt(마지막 체결)과
  * marketStatus 가 세션을 그대로 알려주므로 그것만 쓴다.
  */
-export function krSessionOf(stocks) {
+export function krSessionOf(stocks, now = new Date()) {
   const s = (stocks ?? []).find((x) => x?.localTradedAt) ?? null;
-  return {
-    date: s?.localTradedAt ? String(s.localTradedAt).slice(0, 10) : null,
-    status: s?.marketStatus ?? null,
-  };
+  if (!s) return { date: null, status: null, open: false };
+
+  // localTradedAt 은 「마지막 체결」이 아니라 응답을 만든 시각이다. 장 마감 뒤에도 계속
+  // 흐르고 marketStatus 도 OPEN 으로 남는다 — 2026-09-17 18:30 실측: 마감 3시간 뒤인데
+  // status=OPEN, localTradedAt=18:30:22. 그래서 이 둘만 믿으면 석간판이 「장중」으로 나간다.
+  // 같은 응답의 stockExchangeType 이 거래시간(0900~1530)을 알려주므로 그걸로 판정한다.
+  const ex = s.stockExchangeType ?? {};
+  const start = Number(ex.startTime ?? '0900');
+  const end = Number(ex.endTime ?? '1530');
+  const p = new Intl.DateTimeFormat('en-CA', {
+    timeZone: ex.zoneId || 'Asia/Seoul', hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  }).formatToParts(now).reduce((o, x) => ({ ...o, [x.type]: x.value }), {});
+  const today = `${p.year}-${p.month}-${p.day}`;
+  const hhmm = Number(`${p.hour}${p.minute}`);
+  const traded = String(s.localTradedAt).slice(0, 10);
+
+  // 장중은 「거래시간 안 + 오늘 시세」일 때만. 그 밖은 전부 직전 세션의 마감이다.
+  const open = traded === today && hhmm >= start && hhmm < end;
+  // 장이 열리기 전이면 localTradedAt 이 직전 거래일을 가리킨다(실측 확인). 그대로 쓴다.
+  return { date: traded, status: s.marketStatus ?? null, open };
 }
 
 /** 코스피 세션 라벨. status 가 OPEN 이면 장중, 아니면 마감. 날짜는 응답이 정본. */
 export function krSessionLabel(krSession, fallbackDate) {
   const date = krSession?.date || fallbackDate;
-  return { date, text: krSession?.status === 'OPEN' ? '장중' : '15:30 마감' };
+  // status 가 아니라 거래시간으로 판정한 open 을 쓴다 (위 주석 참조).
+  return { date, text: krSession?.open ? '장중' : '15:30 마감' };
 }

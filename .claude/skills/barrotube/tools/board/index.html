@@ -269,6 +269,11 @@
       text-align: center;
     }
     th, td { padding: 8px 10px; vertical-align: middle; }
+    th[data-sort] { cursor: pointer; user-select: none; white-space: nowrap; }
+    th[data-sort]:hover { background: var(--blue-soft); }
+    th[data-sort]::after { content: '↕'; margin-left: 4px; opacity: .25; font-size: .85em; }
+    th[data-sort].sort-asc::after { content: '▲'; opacity: .9; }
+    th[data-sort].sort-desc::after { content: '▼'; opacity: .9; }
     tbody td { border-bottom: 1px solid var(--line-soft); }
     tbody tr:nth-child(even) { background: #fcfdff; }
     tbody tr:hover { background: #f5f8fc; }
@@ -824,20 +829,20 @@
           </colgroup>
           <thead>
             <tr>
-              <th scope="col" rowspan="2">Day / 에피소드</th>
-              <th scope="col" rowspan="2">에피소드 (폴더)</th>
-              <th scope="col" rowspan="2">포맷</th>
+              <th scope="col" rowspan="2" data-sort="created">Day / 에피소드</th>
+              <th scope="col" rowspan="2" data-sort="title">에피소드 (폴더)</th>
+              <th scope="col" rowspan="2" data-sort="format">포맷</th>
               <th scope="colgroup" colspan="4" class="generation-head">영상 생성</th>
-              <th scope="col" rowspan="2">영상 확인</th>
-              <th scope="col" rowspan="2">발행</th>
-              <th scope="col" rowspan="2">상태</th>
+              <th scope="col" rowspan="2" data-sort="qa">영상 확인</th>
+              <th scope="col" rowspan="2" data-sort="published">발행</th>
+              <th scope="col" rowspan="2" data-sort="stage">상태</th>
               <th scope="col" rowspan="2">관리</th>
             </tr>
             <tr>
-              <th scope="col">대본</th>
-              <th scope="col">이미지</th>
-              <th scope="col">영상</th>
-              <th scope="col">렌더</th>
+              <th scope="col" data-sort="script">대본</th>
+              <th scope="col" data-sort="image">이미지</th>
+              <th scope="col" data-sort="video">영상</th>
+              <th scope="col" data-sort="render">렌더</th>
             </tr>
           </thead>
           <tbody id="episodes">
@@ -984,6 +989,72 @@ var DATA = [];
 var CURRENT = null;
 var DETAIL = null;
 var EPISODE_GROUPS = [];
+// 기본 정렬: brief 의 created_at 역순 — 최근 만든 회차가 맨 위.
+// 게시 시각은 미발행 회차에 없어서 그걸로 잡으면 «아직 안 나간 것»이 바닥으로 밀린다.
+var SORT = { key: 'created', dir: 'desc' };
+
+/** 단계 칩의 완료 여부 — 정렬에서 «된 것/안 된 것»을 가른다. */
+function artifactDone(episode, artifacts, kind) {
+  var a = artifacts && artifacts[kind];
+  if (!a) return 0;
+  if (typeof a.ready === 'boolean') return a.ready ? 1 : 0;
+  if (typeof a.done === 'boolean') return a.done ? 1 : 0;
+  if (typeof a.count === 'number') return a.count > 0 ? 1 : 0;
+  return a ? 1 : 0;
+}
+
+var STAGE_ORDER = ['planned', 'script', 'assets', 'production', 'render', 'qa', 'qa-passed', 'approval', 'published'];
+
+/** 정렬 키 → 비교 가능한 값. 문자열은 소문자, 숫자/시각은 수치. */
+function sortValue(entry, key) {
+  var ep = entry.episode;
+  var group = entry.group;
+  var artifacts = visibleArtifacts(group, ep);
+  switch (key) {
+    case 'created': {
+      var c = ep.created_at || (ep.brief && ep.brief.created_at);
+      var ct = c ? Date.parse(c) : NaN;
+      // created_at 이 없으면(계획만 있는 회차) 맨 뒤로 보낸다.
+      return isNaN(ct) ? -Infinity : ct;
+    }
+    case 'published': {
+      var at = ep.publish && ep.publish.published_at;
+      var t = at ? Date.parse(at) : NaN;
+      if (!isNaN(t)) return t;
+      // 게시 시각이 없으면 발행 여부만으로 뒤에 둔다(미발행이 가장 뒤).
+      return episodePublished(ep) ? 1 : 0;
+    }
+    case 'episode': {
+      var n = Number(ep.episode_no);
+      if (!isNaN(n)) return n;
+      return String(ep.id || group.id || '').toLowerCase();
+    }
+    case 'title': return String(ep.title || ep.planned_title || ep.topic || '').toLowerCase();
+    case 'format': return String(ep.format || ep.planned_format || '').toLowerCase();
+    case 'stage': {
+      var st = episodeDisplayStage(group, ep);
+      var i = STAGE_ORDER.indexOf(st);
+      return i < 0 ? -1 : i;
+    }
+    case 'qa': return ep.qa && (ep.qa.passed || ep.qa.status === 'passed') ? 1 : 0;
+    case 'script': case 'image': case 'video': case 'render':
+      return artifactDone(ep, artifacts, key);
+    default: return 0;
+  }
+}
+
+function compareEntries(a, b) {
+  var va = sortValue(a, SORT.key), vb = sortValue(b, SORT.key);
+  var r;
+  if (typeof va === 'number' && typeof vb === 'number') r = va - vb;
+  else r = String(va).localeCompare(String(vb), 'ko');
+  if (r === 0) {
+    // 동률이면 회차 번호로 안정화 — 새로고침마다 순서가 흔들리지 않게.
+    var na = Number(a.episode.episode_no), nb = Number(b.episode.episode_no);
+    if (!isNaN(na) && !isNaN(nb)) r = na - nb; else r = a.index - b.index;
+  }
+  return SORT.dir === 'desc' ? -r : r;
+}
 var VARIANT_BY_EPISODE = Object.create(null);
 var PLATFORM_BY_VARIANT = Object.create(null);
 var EPISODE_META = {};
@@ -1657,6 +1728,31 @@ function renderEpisodeProductionSummary() {
     + '<span class="generated" style="width:' + (generatedOnly / total * 100) + '%"></span></span>';
 }
 
+/** 현재 정렬 상태를 헤더 화살표에 반영한다. */
+function syncSortIndicators() {
+  var ths = document.querySelectorAll('th[data-sort]');
+  for (var i = 0; i < ths.length; i += 1) {
+    var th = ths[i];
+    var on = th.getAttribute('data-sort') === SORT.key;
+    th.classList.toggle('sort-asc', on && SORT.dir === 'asc');
+    th.classList.toggle('sort-desc', on && SORT.dir === 'desc');
+    th.setAttribute('aria-sort', on ? (SORT.dir === 'asc' ? 'ascending' : 'descending') : 'none');
+  }
+}
+
+function bindSortHeaders() {
+  var ths = document.querySelectorAll('th[data-sort]');
+  for (var i = 0; i < ths.length; i += 1) {
+    ths[i].addEventListener('click', function () {
+      var key = this.getAttribute('data-sort');
+      if (SORT.key === key) SORT.dir = SORT.dir === 'asc' ? 'desc' : 'asc';
+      // 새 컬럼은 «의미 있는 쪽»부터 — 시각·수치는 내림차순, 이름은 오름차순.
+      else SORT = { key: key, dir: (key === 'title' || key === 'format') ? 'asc' : 'desc' };
+      renderEpisodes();
+    });
+  }
+}
+
 function renderEpisodes() {
   var term = document.getElementById('episodeSearch').value.trim().toLowerCase();
   var stageFilter = document.getElementById('stageFilter').value;
@@ -1686,6 +1782,8 @@ function renderEpisodes() {
     ].join(' ').toLowerCase();
     return (!term || haystack.indexOf(term) >= 0) && (!stageFilter || stage === stageFilter);
   });
+  visible.sort(compareEntries);
+  syncSortIndicators();
   document.getElementById('episodeCount').textContent =
     visible.length + ' / ' + EPISODE_GROUPS.length + '개';
   renderEpisodeProductionSummary();
@@ -2256,6 +2354,7 @@ function bindEvents() {
   document.getElementById('settingsButton').addEventListener('click', openSettings);
   document.getElementById('openDocumentButton').addEventListener('click', openDocument);
   document.getElementById('renderDocumentButton').addEventListener('click', renderDocument);
+  bindSortHeaders();
   document.getElementById('episodeSearch').addEventListener('input', renderEpisodes);
   document.getElementById('stageFilter').addEventListener('change', renderEpisodes);
   document.getElementById('settingsForm').addEventListener('submit', saveChannel);

@@ -496,7 +496,7 @@ if [ -n "$RESUME_EP" ] && [ -s "$SCRIPT_PATH" ]; then
   echo "⏭  RESUME: 기존 대본 유지 — $SCRIPT_PATH"
 else
   run_or_echo node scripts/automation/generate-script.js \
-    --episode "$EP_DIR" --platform "$PLATFORM" \
+    --episode "$EP_DIR" --platform "$PLATFORM" --slot "$SLOT" \
     || fail_with_alert "Phase 4 script" "generate-script.js 실패"
 fi
 
@@ -511,7 +511,7 @@ else
   if ! node scripts/automation/validate-image-prompts.js --episode "$EP_DIR" --platform "$PLATFORM"; then
     echo "⚠️  계약 위반 — 대본 1회 재생성 후 재검사"
     audit "auto_pipeline_prompt_retry" "WARN" "slot=$SLOT ep=$EP_ID"
-    node scripts/automation/generate-script.js --episode "$EP_DIR" --platform "$PLATFORM" --force \
+    node scripts/automation/generate-script.js --episode "$EP_DIR" --platform "$PLATFORM" --slot "$SLOT" --force \
       || fail_with_alert "Phase 5 rewrite" "대본 재생성 실패"
     node scripts/automation/validate-image-prompts.js --episode "$EP_DIR" --platform "$PLATFORM" \
       || halt_for_human "Phase 5 계약" "재생성 후에도 image_prompt 계약 위반 — 이미지를 굽지 않고 멈췄습니다. 대본을 손보고 재개하세요."
@@ -1165,12 +1165,23 @@ SuperGrok 구독 모달이 뜨면 결제·무료 체험 절대 하지 말고 닫
     # (2026-08-24 실측). AppleScript 의 execute javascript 는 CDP 포트도
     # webdriver 플래그도 쓰지 않아 자동화 지문이 없고, launchd(Aqua 세션)에서 그대로 돈다.
     # 첨부는 DataTransfer 주입 — 파일 선택 UI·클립보드·Playwright 파일 API 를 전부 우회한다.
-    if node scripts/automation/grok-motion-applescript.js --check >/dev/null 2>&1; then
+    #
+    # 실패 사유를 버리지 않는다. 예전에는 --check 출력을 /dev/null 로 보내고 "Chrome 로그아웃/차단"
+    # 이라고만 알렸는데, 실제 사유는 Grok UI 개편(720p·10s 가 드롭다운으로 바뀜)이었다 —
+    # 그 사이 EP-2026-0156~0159 가 전부 HyperFrames 로 나갔다 (2026-09-17 확인).
+    GROK_CHECK_OUT=$(node scripts/automation/grok-motion-applescript.js --check 2>&1)
+    GROK_CHECK_RC=$?
+    GROK_REASON=$(printf '%s\n' "$GROK_CHECK_OUT" | grep -m1 '❌')
+    if [ "$GROK_CHECK_RC" -eq 0 ]; then
       echo "  🎬 Grok 모션 (실제 Chrome · AppleScript): ${MEDIA_ASSETS_MISSING}"
       audit "grok_motion_applescript" "INFO" "ep=$EP_ID missing=${MEDIA_ASSETS_MISSING}"
+      GROK_RUN_ERR=$(mktemp "${TMPDIR:-/tmp}/bt-grok-run.XXXXXX")
       run_or_echo node scripts/automation/grok-motion-applescript.js \
-        --episode "$MEDIA_BASE" --platform "$PLATFORM" \
+        --episode "$MEDIA_BASE" --platform "$PLATFORM" 2>"$GROK_RUN_ERR" \
         || echo "  ⚠ AppleScript Grok 모션 일부 실패 — 아래 게이트가 판단합니다"
+      cat "$GROK_RUN_ERR" >&2
+      GROK_REASON=$(grep -m1 '❌' "$GROK_RUN_ERR")
+      rm -f "$GROK_RUN_ERR"
     # 2순위: 기존 Playwright 경로 (프로필 로그인 시). Cloudflare 가 풀린 환경용.
     elif node scripts/automation/grok-motion.js --status >/dev/null 2>&1; then
       echo "  🎬 Grok 모션 폴백 (Playwright 전용 프로필): ${MEDIA_ASSETS_MISSING}"
@@ -1179,7 +1190,8 @@ SuperGrok 구독 모달이 뜨면 결제·무료 체험 절대 하지 말고 닫
         --episode "$MEDIA_BASE" --platform "$PLATFORM" \
         || echo "  ⚠ Playwright Grok 모션 일부 실패 — 아래 게이트가 판단합니다"
     else
-      echo "  ⏭  Grok 경로 없음 — 건너뜀 (Chrome 로그아웃/차단, Playwright 프로필 미로그인)"
+      echo "  ⏭  Grok 경로 없음 — 건너뜀 (실제 Chrome 확인 실패, Playwright 프로필 미로그인)"
+      echo "     실제 Chrome 사유: ${GROK_REASON:-알 수 없음}"
       echo "     실제 Chrome 확인: node scripts/automation/grok-motion-applescript.js --check"
       echo "     확인: node scripts/automation/grok-motion.js --status"
       echo "     로그인: node scripts/automation/grok-motion.js --login"
@@ -1195,10 +1207,14 @@ SuperGrok 구독 모달이 뜨면 결제·무료 체험 절대 하지 말고 닫
     # 비우는 것보다, 덜 좋은 화면을 내보내고 알리는 편이 낫다는 결정이다.
     audit "grok_motion_missing" "WARN" "ep=$EP_ID missing=${MEDIA_ASSETS_MISSING} action=fallback_to_hyperframes"
     echo "  ⚠️  Grok 모션 클립 없음: ${MEDIA_ASSETS_MISSING}"
+    echo "     사유: ${GROK_REASON:-알 수 없음}"
     echo "     → Phase 8 의 S6c 가 HyperFrames 로 채웁니다 (경보 발송됨)"
     echo "     Grok 계정 확인: node ${BARROTUBE_HOME}/scripts/automation/grok-motion-applescript.js --check"
+    # 텔레그램은 HTML 모드다 — 사유에 < > & 가 섞이면 전송 자체가 거절된다.
+    GROK_REASON_HTML=$(printf '%s' "${GROK_REASON:-알 수 없음}" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')
     notify_telegram "⚠️ <b>${EP_ID}</b> Grok 모션 실패 → HyperFrames 폴백
 누락: ${MEDIA_ASSETS_MISSING}
+사유: ${GROK_REASON_HTML}
 계정 확인: grok-motion-applescript.js --check"
   fi
 fi

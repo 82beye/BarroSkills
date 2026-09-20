@@ -606,6 +606,10 @@ function discoverS12(context) {
         supported_actions: [...ACTIONS['barrotube-s12']],
         source_profile: 'barrotube-s12',
         updated_at: firstString(status?.last_updated, status?.updated_at, status?.created_at),
+        // 보드 기본 정렬 키. 00_brief.md frontmatter 의 created_at 이 «이 회차가 언제
+        // 기획됐는가» 를 말하는 유일한 값이다 — 게시 시각은 미발행 회차에 없고,
+        // updated_at 은 손댈 때마다 흔들려 목록 순서가 뒤집힌다.
+        created_at: firstString(frontmatterValue(brief, 'created_at'), status?.created_at),
         _root: episodeRoot,
         _platformRoots: Object.fromEntries(platformDirectories.map(item => [item.name, item.path])),
       };

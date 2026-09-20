@@ -27,8 +27,11 @@
  *   node market-map.js --render-only # 기존 data.json 으로 재렌더 (디자인 반복용)
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import {
+  readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync,
+} from 'node:fs';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { chromium } from 'playwright-core';
 import { getSecret } from './config-loader.js';
@@ -40,6 +43,8 @@ import {
 const ROOT = resolve(import.meta.dirname, '../..');
 const CFG = JSON.parse(readFileSync(join(ROOT, 'config', 'market-map.json'), 'utf-8'));
 const UA = { 'User-Agent': 'Mozilla/5.0 (Macintosh) BarroTube/1.0' };
+/** 「직전 판과 같은 마감」이라 거른 경우의 종료 코드. 크론이 나머지 단계를 건너뛴다. */
+const SKIP_EXIT = 10;
 
 /**
  * 미국 세션 라벨. 2026-09-16 23:36 KST 첫 생성분이 ET 10:36 **장중**인데 "마감 (현지)"로
@@ -99,6 +104,57 @@ async function mapPool(items, n, fn) {
   return out;
 }
 
+/** 판 폴더를 최신순으로 훑어 `pick` 이 값을 돌려주는 가장 최근 data.json 을 찾는다. */
+function findPrior(outRoot, pick) {
+  let best = null;
+  for (const dateDir of readdirSync(outRoot, { withFileTypes: true }).filter((e) => e.isDirectory())) {
+    for (const ed of ['evening', 'morning', '']) {
+      const p = ed ? join(outRoot, dateDir.name, ed, 'data.json') : join(outRoot, dateDir.name, 'data.json');
+      if (!existsSync(p)) continue;
+      let d;
+      try { d = JSON.parse(readFileSync(p, 'utf-8')); } catch { continue; }
+      const got = pick(d);
+      if (!got) continue;
+      const mt = statSync(p).mtimeMs;
+      if (!best || mt > best.mt) best = { ...got, mt };
+    }
+  }
+  return best;
+}
+
+/** 테마 등락률이 살아 있는 가장 최근 스냅샷. */
+const findPriorThemes = (outRoot) => findPrior(outRoot, (d) => (
+  Array.isArray(d.themes) && d.themes.length && d.themes.some((t) => t.pct || t.total)
+    ? { themes: d.themes, date: d.themesSession?.date || d.krSession?.date || d.date }
+    : null
+));
+
+/** 코스피 등락률이 살아 있는 가장 최근 스냅샷. 세션 라벨을 값과 함께 들고 온다. */
+const findPriorKr = (outRoot) => findPrior(outRoot, (d) => (
+  Array.isArray(d.kr) && d.kr.length && d.kr.some((k) => k.pct)
+    ? { kr: d.kr, session: d.krSession }
+    : null
+));
+
+/**
+ * 같은 종류의 직전 판이 실었던 **선도 시장** 세션. 조간은 미국, 석간은 코스피가 선도다.
+ */
+export function priorLeadSession(outRoot, edition, selfPath) {
+  const { leads } = EDITIONS[edition];
+  let best = null;
+  for (const dateDir of readdirSync(outRoot, { withFileTypes: true }).filter((e) => e.isDirectory())) {
+    const p = join(outRoot, dateDir.name, edition, 'data.json');
+    if (!existsSync(p) || p === selfPath) continue;
+    let d;
+    try { d = JSON.parse(readFileSync(p, 'utf-8')); } catch { continue; }
+    const session = leads === 'us' ? d.usSession : d.krSession?.date;
+    if (!session) continue;
+    const mt = statSync(p).mtimeMs;
+    if (!best || mt > best.mt) best = { session, date: dateDir.name, mt };
+  }
+  return best;
+}
+
 async function collect() {
   const date = kstDate();
   // 미국 유니버스 + 지수 4종
@@ -111,9 +167,24 @@ async function collect() {
 
   // 코스피 시총 상위
   const krRaw = await getJSON(`https://m.stock.naver.com/api/stocks/marketValue/KOSPI?page=1&pageSize=${CFG.kr.top_n}`);
-  const kr = krStocksToItems(krRaw.stocks);
+  let kr = krStocksToItems(krRaw.stocks);
   // 세션은 시계가 아니라 응답이 정본이다 — 08:00 회차엔 한국장이 안 열려 직전 세션이다.
-  const krSession = krSessionOf(krRaw.stocks);
+  let krSession = krSessionOf(krRaw.stocks, new Date());
+  // 아래 테마 주석은 「시총 API 는 직전 종가 등락률을 준다」고 적었지만 실측은 반대였다:
+  // 2026-09-17·18 조간에서 58종목의 fluctuationsRatio 가 전부 0 이었다. 라벨은 krSessionOf
+  // 가 직전 거래일을 가리키므로, 그대로 두면 「2026-09-17 15:30 마감」 밑에 전 종목 +0.00%
+  // 를 싣는다 — 오지 않은 보합을 마감 실적으로 발표하는 셈이다(그날 한화시스템은 +15.70%
+  // 였다). 테마와 같은 규칙으로 직전 유효 스냅샷을 그 세션 라벨째로 끌어온다.
+  if (!krSession.open && kr.length && kr.every((k) => !k.pct)) {
+    const prior = findPriorKr(join(ROOT, CFG.output_dir));
+    if (prior) {
+      kr = prior.kr;
+      krSession = { ...prior.session, carried: true };
+      console.log(`   \u23ea 코스피가 전부 0 (장 시작 전) — ${prior.session?.date} 스냅샷을 끌어온다`);
+    } else {
+      console.log('   \u26a0 코스피가 전부 0 이고 직전 스냅샷도 없다 — 등락 없이 시총만 싣는다');
+    }
+  }
 
   // 테마 랭킹 + 상위 테마 구성종목
   const themesRaw = await getJSON('https://m.stock.naver.com/api/stocks/theme?page=1&pageSize=40');
@@ -126,14 +197,32 @@ async function collect() {
     const d = await getJSON(`https://m.stock.naver.com/api/stocks/theme/${g.no}?page=1&pageSize=12`).catch(() => null);
     byNo[g.no] = d?.stocks ?? [];
   }
-  const themes = themeModel(themesRaw.groups, byNo, { topN: CFG.themes.top_n, stocksPer: CFG.themes.stocks_per_theme });
+  let themes = themeModel(themesRaw.groups, byNo, { topN: CFG.themes.top_n, stocksPer: CFG.themes.stocks_per_theme });
+  // 08:00 조간 회차에는 한국장이 안 열려(marketStatus=PREOPEN) 네이버 테마 API 가
+  // **오늘** 등락률, 즉 0 을 돌려준다. 시총 API 는 직전 종가 등락률을 주기 때문에
+  // 종목 카드는 멀쩡한데 테마 카드만 「광통신 +0.00% · 0중 0개 상승」으로 빈다.
+  // 2026-09-17 08:00 실제 산출에서 6개 테마가 전부 그랬다.
+  // 직전 유효 스냅샷을 끌어와 그 세션 날짜로 라벨한다 — 조간이 어제 마감 테마를
+  // 싣는 건 자연스럽고, 0 을 싣는 건 거짓이다.
+  let themesSession = { date: krSession.date ?? date, carried: false };
+  if (themes.length && themes.every((t) => !t.pct && !t.total)) {
+    const prior = findPriorThemes(join(ROOT, CFG.output_dir));
+    if (prior) {
+      themes = prior.themes;
+      themesSession = { date: prior.date, carried: true };
+      console.log(`   ⏪ 테마가 전부 0 (장 시작 전) — ${prior.date} 스냅샷을 끌어온다`);
+    } else {
+      themes = [];
+      console.log('   ⚠ 테마가 전부 0 이고 직전 스냅샷도 없다 — 테마 카드를 뺀다');
+    }
+  }
 
   const usSession = us.find((u) => u.sessionDate)?.sessionDate ?? null;
   console.log(`📊 수집 — 미국 ${us.length}/${usTickers.length}종목${missed ? ` (누락 ${missed})` : ''} · 코스피 ${kr.length}종목 · 테마 ${themes.length}개`);
   console.log(`   미국 세션: ${usSession} · 코스피 세션: ${krSession.date} (${krSession.status})`);
   if (us.length < usTickers.length * 0.8) throw new Error(`미국 시세 누락 과다 (${us.length}/${usTickers.length}) — 이미지를 만들지 않는다`);
   if (kr.length < CFG.kr.top_n * 0.8) throw new Error(`코스피 시세 누락 과다 (${kr.length})`);
-  return { date, usSession, krSession, idx, us, kr, themes };
+  return { date, usSession, krSession, themesSession, idx, us, kr, themes };
 }
 
 /* ── 렌더 ───────────────────────────────────────────────────────────── */
@@ -239,7 +328,7 @@ function buildHTML(d) {
       ${usMap.sectors.map((s) => `<div class="sec" style="left:${s.x}px;top:${s.y}px;width:${s.w}px;height:${s.h}px"><div class="sh">${esc(s.name)}</div></div>`).join('')}
       ${usMap.cells.map((c) => cellDiv(c, CFG.us.clamp_pct)).join('')}
     </div>
-    <div class="ft"><span>크기 = 시가총액 · 색 = 등락률</span><span><b>바로경제</b> 매일 08·12·18시 브리핑</span></div>
+    <div class="ft"><span>크기 = 시가총액 · 색 = 등락률</span><span><b>바로경제</b> 매일 08·20시 브리핑</span></div>
   </div>
 
   <div class="board" id="kr" style="height:1080px">
@@ -249,7 +338,7 @@ function buildHTML(d) {
       ${krMap.sectors.map((sct) => `<div class="sec" style="left:${sct.x}px;top:${sct.y}px;width:${sct.w}px;height:${sct.h}px"><div class="sh">${esc(sct.name)}</div></div>`).join('')}
       ${krMap.cells.map((c) => cellDiv(c, CFG.kr.clamp_pct, { compact: true })).join('')}
     </div>
-    <div class="ft"><span>시총 상위 ${d.kr.length}종목 · 테마별 그룹 · 크기 ∝ 시가총액 · 색 = 등락률</span><span><b>바로경제</b> 매일 08·12·18시 브리핑</span></div>
+    <div class="ft"><span>시총 상위 ${d.kr.length}종목 · 테마별 그룹 · 크기 ∝ 시가총액 · 색 = 등락률</span><span><b>바로경제</b> 매일 08·20시 브리핑</span></div>
   </div>
 
   <div class="board" id="themes">
@@ -311,6 +400,7 @@ async function main() {
   const { values } = parseArgs({ options: {
     telegram: { type: 'boolean', default: false },
     'render-only': { type: 'boolean', default: false },
+    force: { type: 'boolean', default: false },
     date: { type: 'string' },
     edition: { type: 'string' },
   } });
@@ -328,6 +418,19 @@ async function main() {
   } else {
     data = await collect();
     writeFileSync(dataPath, JSON.stringify(data, null, 2));
+
+    // 장이 안 열린 날은 직전 판과 **똑같은 마감**을 다시 싣게 된다. 2026-09-19~20 주말에
+    // 금요일 마감이 네 번 나갈 뻔했다(토 석간·일 조간·일 석간이 전부 9/18 마감). 달력으로
+    // 막지 않는다 — 선도 시장(조간=미국, 석간=코스피)의 세션이 직전 같은 판과 같으면 거른다.
+    // 휴장일·연휴도 같은 규칙으로 걸리고, 월요일 조간(미국은 아직 금요일 마감)도 걸린다.
+    const { leads } = EDITIONS[edition];
+    const mine = leads === 'us' ? data.usSession : data.krSession?.date;
+    const prior = priorLeadSession(join(ROOT, CFG.output_dir), edition, dataPath);
+    if (!values.force && mine && prior?.session === mine) {
+      console.log(`⏭  ${leads === 'us' ? '미국' : '코스피'} ${mine} 마감은 `
+        + `${prior.date} ${EDITIONS[edition].label}판이 이미 실었다 — 이번 판은 거른다 (--force 로 강행)`);
+      process.exit(SKIP_EXIT);
+    }
   }
 
   console.log(`🗞  ${date} ${EDITIONS[edition].label}판`);
@@ -340,4 +443,7 @@ async function main() {
   }
 }
 
-main().catch((e) => { console.error('❌', e.message); process.exit(1); });
+// 테스트가 priorLeadSession 을 import 할 수 있게 main 을 막는다.
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((e) => { console.error('❌', e.message); process.exit(1); });
+}

@@ -166,7 +166,32 @@ ${identity}
 `;
 }
 
-function buildSystemPrompt(format, persona, seriesContext, publicFiguresInfo = null, mascotClause = null) {
+/**
+ * 슬롯 전용 씬 뼈대 → scene_roles 문자열.
+ *
+ * config/routines.json 의 slots.<slot>.scene_skeleton 이 정본인데, 이 스크립트가 --slot 을
+ * 안 받아서 **한 번도 쓰인 적이 없었다** (2026-09-18 확인). 그래서 부동산 회차가 포맷 기본
+ * 뼈대를 타고 «global cause chain / US watchlist» 로 미국 금리 3씬을 실었다 — EP-2026-0150
+ * 과 0163 이 모두 그랬다. 부동산 뼈대는 원래 전부 국내다:
+ *   수치 → 원인 → 반대 해석 → 공급·미분양·거래량 → 실수요자 영향.
+ *
+ * 씬 수가 포맷과 맞을 때만 덮어쓴다 — 안 맞으면 포맷 기본값을 그대로 둔다.
+ */
+function slotSceneRoles(slot, sceneCount) {
+  if (!slot) return null;
+  try {
+    const cfg = JSON.parse(readFileSync(join(ROOT, 'config', 'routines.json'), 'utf-8'));
+    const skeleton = cfg?.slots?.[slot]?.scene_skeleton;
+    if (!Array.isArray(skeleton) || skeleton.length !== sceneCount) return null;
+    return skeleton.map((step, i) => {
+      const role = typeof step === 'string' ? step : step.role;
+      const intent = typeof step === 'string' ? '' : (step.intent || step.desc || step.note || '');
+      return `${String(i + 1).padStart(3, '0')}=${role}${intent ? ` — ${intent}` : ''}`;
+    }).join('\n  ');
+  } catch { return null; }
+}
+
+function buildSystemPrompt(format, persona, seriesContext, publicFiguresInfo = null, mascotClause = null, slot = null) {
   const spec = FORMAT_SPECS[format];
   const sceneCount = spec.scene_count;
 
@@ -182,6 +207,7 @@ function buildSystemPrompt(format, persona, seriesContext, publicFiguresInfo = n
   const pfResolved = publicFiguresInfo?.resolved || [];
   const hasCharacterizeFigure = pfResolved.some(r => r.treatment === 'CHARACTERIZE');
   const sceneCap = format === 'shorts' ? 2 : 3;
+  const slotRoles = slotSceneRoles(slot, sceneCount);
 
   return `You are "Writer Agent" of BarroTube, a Korean economy YouTube channel.
 
@@ -190,7 +216,7 @@ FORMAT: ${format}
 - Target total duration: ~${spec.target_total_seconds} seconds
 - Narration length: ${spec.scene_chars_range}
 - Aspect: ${spec.aspect}
-- Scene roles (mandatory): ${spec.scene_roles}
+- Scene roles (mandatory):${slotRoles ? '\n  ' + slotRoles : ' ' + spec.scene_roles}
 ${spec.mid_hook ? '- MID-HOOK REQUIRED: 씬 4 마지막 부분 또는 75초 지점에 "재점화 Hook" (이탈 방지 질문/궁금증 유발 1문장) 포함\n' : ''}${seriesBlock}${personaBlock}
 RULES:
 1. Output MUST be a single JSON object. No markdown, no prose, no code fences.
@@ -341,6 +367,7 @@ async function main() {
       platform: { type: 'string' },          // long | shorts — 명시 시 platforms/<platform>/00_brief.md 우선 + 출력 platforms/<platform>/30_script.md 강제
       brief: { type: 'string' },             // 명시 시 이 brief 파일을 우선 읽음 (--platform 보다 우선순위 높음)
       force: { type: 'boolean' },            // 기존 30_script.md 덮어쓰기 허용 (default: false → existing 보호)
+      slot: { type: 'string' },              // us-close | kr-close | realestate | omnibus — 슬롯 전용 씬 뼈대
     },
   });
   if (!values.episode) {
@@ -448,7 +475,7 @@ async function main() {
   const mascotClause = loadMascotClause(channel);
   console.log(`   Mascot DNA: ${mascotClause ? `주입됨 (${mascotClause.length}자)` : '없음 — 인라인 서술 지시'}`);
 
-  const systemPrompt = buildSystemPrompt(format, persona, seriesContext, publicFiguresInfo, mascotClause);
+  const systemPrompt = buildSystemPrompt(format, persona, seriesContext, publicFiguresInfo, mascotClause, values.slot || null);
 
   const userPromptParts = [
     `[EPISODE BRIEF]`,
