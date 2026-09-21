@@ -67,10 +67,24 @@ export const SPOKEN_NUMBER = new RegExp(
  * 지수 이름 — 이것이 훅의 주어가 되면 「오늘 지수가 몇 % 움직였다」 회차가 된다.
  * 운영자 지시(2026-09-16): "단순 영향이 없는 지수 수치는 에피소드 주제가 되면 안 된다."
  */
-/** 일상 등락률의 하한. config/growth.json content_policy.index_move_thresholds.index_pct 와 같은 값. */
-export const INDEX_MOVE_PCT_FLOOR = 2.0;
+/**
+ * 일상 등락률의 하한 — **기계 게이트의 정본은 이 상수 하나다.**
+ * config/growth.json 의 index_move_thresholds.index_pct 는 프롬프트 문장으로만 소비되므로
+ * (growth-directives.js·generate-metadata.js) 반드시 같은 값이어야 한다. 갈라지면 작가가
+ * 한 프롬프트 안에서 서로 다른 두 임계를 받는다 — tests 의 드리프트 검사가 그걸 잡는다.
+ *
+ * 2026-09-21 운영자 지시: "3% 를 넘지 못한 지수 등락은 에피소드 주제가 될 수 없다."
+ * 계기는 EP-2026-0169 — 코스피 +2.66% 가 훅의 주어로 나갔다. 그때 이 규칙은 임계 비교에
+ * 닿지도 못했다(정수 낭독 "이 퍼센트" 미파싱 + 대조어 면제). 숫자만 올리면 같은 훅이 또 샌다.
+ */
+export const INDEX_MOVE_PCT_FLOOR = 3.0;
 
-export const INDEX_NAMES = ['코스피', '코스닥', '나스닥', '다우', '에스앤피', 's&p', '스탠더드앤드푸어스'];
+export const INDEX_NAMES = [
+  '코스피', '코스닥', '나스닥', '다우', '에스앤피', 's&p', '스탠더드앤드푸어스',
+  // 2026-09-21 추가. 목록에 없으면 그 지수로 연 훅은 검사 자체를 받지 않는다.
+  '니케이', '닛케이', '항셍', '상하이종합', '선전종합', '빅스', 'vix',
+  '필라델피아반도체', '러셀', '유로스톡스', '닥스', 'dax', '에프티에스이', 'ftse',
+];
 
 /**
  * 낭독체 소수 → 숫자. "일점삼칠" → 1.37
@@ -78,13 +92,35 @@ export const INDEX_NAMES = ['코스피', '코스닥', '나스닥', '다우', '�
  * 프롬프트 지시(generate-script 10a)만으로는 지켜지는지 확인할 방법이 없었다.
  */
 const DIGIT = { 영: 0, 공: 0, 일: 1, 이: 2, 삼: 3, 사: 4, 오: 5, 육: 6, 칠: 7, 팔: 8, 구: 9 };
+/**
+ * 훅이 말한 등락률을 찾는 토큰. 낭독체 소수("일점삼칠 퍼센트")만 보던 것을 정수 낭독
+ * ("이 퍼센트")·띄어쓴 소수("육 점 구칠")·아라비아 표기("1.74%")까지 넓힌다.
+ * EP-2026-0169 가 「이 퍼센트 넘게」로 임계 비교를 통째로 건너뛴 것이 계기다.
+ */
+const SPOKEN_INT = '[영공일이삼사오육칠팔구십]+';
+export const PCT_TOKEN = new RegExp(
+  `(?:(${SPOKEN_INT})(?:\\s*점\\s*([영공일이삼사오육칠팔구]+))?|(\\d+(?:\\.\\d+)?))\\s*(?:퍼센트|%)`,
+  'g',
+);
+
+/** PCT_TOKEN 매치 하나를 숫자로 읽는다. 아라비아 표기는 그대로, 낭독체는 spokenToNumber 로. */
+export function readPct(m) {
+  if (m[3] !== undefined) {
+    const v = Number(m[3]);
+    return Number.isFinite(v) ? v : null;
+  }
+  return spokenToNumber(m[2] ? `${m[1]}점${m[2]}` : m[1]);
+}
+
 export function spokenToNumber(token) {
-  const m = String(token).match(/^([영공일이삼사오육칠팔구십]+)점([영공일이삼사오육칠팔구]+)$/);
+  // 소수부는 선택이다. "이" → 2 를 못 읽으면 정수로 말한 등락률이 전부 검사 밖으로 샌다.
+  const m = String(token).match(/^([영공일이삼사오육칠팔구십]+)(?:\s*점\s*([영공일이삼사오육칠팔구]+))?$/);
   if (!m) return null;
   const whole = m[1] === '십' ? 10
     : m[1].includes('십')
       ? (DIGIT[m[1][0]] ?? 1) * 10 + (DIGIT[m[1].slice(-1)] ?? 0)
       : [...m[1]].reduce((n, c) => (DIGIT[c] === undefined ? n : n * 10 + DIGIT[c]), 0);
+  if (!m[2]) return Number.isFinite(whole) ? whole : null;
   const frac = [...m[2]].map((c) => DIGIT[c]).join('');
   const v = Number(`${whole}.${frac}`);
   return Number.isFinite(v) ? v : null;
@@ -212,6 +248,45 @@ function countHedges(narration) {
  * 헤지를 error 로 두지 않는 이유: 팩트체크가 근거 부족을 이유로 톤을 낮추라고
  * 지시하는 경우가 정상 경로에 있다. 그때 헤지는 결함이 아니라 준수다.
  */
+/**
+ * 훅의 주어가 '지수 일간 등락률' 인지 판정한다.
+ *
+ * **문장 단위로 본다.** 지수명과 등락률이 같은 문장에 있고 지수명이 앞설 때만 그 지수가
+ * 움직임의 주어다. narration.slice(0,40) 창을 쓰던 예전 방식은 도입부가 한 문장만 길어도
+ * 수치를 창 밖으로 밀어내 검사를 놓쳤다.
+ *
+ * **대조 면제는 수치 뒤에 오는 대조만 인정한다.** 원래 취지는 "대조의 앞쪽 절로 쓰인 수치는
+ * 주어가 아니다" 였다(「코스피가 1.37% 올랐**지만** 개인은 팔았다」 — 주제는 괴리다).
+ * 그런데 narration 전체에서 마커를 찾는 바람에 「연준이 올렸**는데** 코스피가 이 퍼센트
+ * 뛰었습니다」처럼 **수치가 대조의 결론인** 훅까지 면제됐다(2026-09-21 EP-2026-0169).
+ * 그 훅에서 지수 등락은 정확히 주어다. 이 채널 훅은 거의 항상 대조어를 포함하므로,
+ * 좁히지 않으면 임계를 몇으로 올리든 규칙이 상시 무력화된다.
+ *
+ * 레벨 돌파·N년래 최고·연속기록은 등락률이 아니라 사건이라 여기서 제외한다
+ * (config/growth.json content_policy.always_newsworthy).
+ */
+export function findIndexMoveSubject(narration) {
+  const text = String(narration || '');
+  if (/돌파|뚫|붕괴|최고|최저|이후 처음|만에|연속/.test(text)) return null;
+  // 숫자 사이의 마침표는 문장 경계가 아니다. `[^.!?]+` 로 끊으면 "나스닥이 1.74%" 가
+  // "나스닥이 1." / "74%" 로 쪼개져 지수명과 수치가 서로 다른 문장이 된다(2026-09-21 실측).
+  for (const s of text.split(/(?<![0-9])[.!?]+(?![0-9])/)) {
+    const found = INDEX_NAMES
+      .map((n) => ({ n, at: s.toLowerCase().indexOf(n.toLowerCase()) }))
+      .filter((o) => o.at >= 0)
+      .sort((a, b) => a.at - b.at)[0];
+    if (!found) continue;
+    PCT_TOKEN.lastIndex = 0;
+    let pct = null, m;
+    while ((m = PCT_TOKEN.exec(s))) { if (m.index > found.at) { pct = m; break; } }
+    if (!pct) continue;
+    const after = pct.index + pct[0].length;
+    if (CONTRAST_MARKERS.some((c) => { const i = s.indexOf(c); return i >= 0 && i >= after; })) return null;
+    return { index: found.n, value: readPct(pct), raw: pct[0].trim() };
+  }
+  return null;
+}
+
 export function validateScript(scenes) {
   const issues = [];
   if (!Array.isArray(scenes) || scenes.length === 0) return issues;
@@ -263,23 +338,14 @@ export function validateScript(scenes) {
     // 프롬프트 규칙(generate-script 10a/10b)만 있고 기계 검사가 없어서 확인이 안 됐다.
     // 레벨 돌파·N년래 최고 같은 사건은 예외다 — 그건 등락률이 아니라 사건이다.
     if (role === 'hook') {
-      const head = narration.slice(0, 40);
-      const idx = INDEX_NAMES.find((n) => head.includes(n));
-      const pct = head.match(/([영공일이삼사오육칠팔구십]+점[영공일이삼사오육칠팔구]+)\s*퍼센트/);
-      const eventful = /돌파|뚫|붕괴|최고|최저|이후 처음|만에|연속/.test(narration);
-      // 대조의 앞쪽 절로 쓰인 수치는 '주어'가 아니다.
-      // 「코스피가 1.37% 올랐**지만** 개인도 외국인도 팔았습니다」의 주제는 등락률이 아니라 괴리다.
-      // 2026-09-16 EP-2026-0158 실측 오탐 — 이걸 안 빼면 멀쩡한 훅이 재작성을 한 번 태운다.
-      const contrasted = CONTRAST_MARKERS.some((m) => narration.includes(m));
-      if (idx && pct && !eventful && !contrasted) {
-        const v = spokenToNumber(pct[1]);
-        if (v !== null && v < INDEX_MOVE_PCT_FLOOR) {
-          issues.push({
-            rule: 'index-move-as-subject', severity: 'warn', rewrite: true, scene_id: id,
-            message: `씬 ${id}(hook): ${idx} ${v}% 로 열었다 — 일상 등락률은 주제가 못 된다 (임계 ${INDEX_MOVE_PCT_FLOOR}%)`,
-            suggestion: '훅의 주어를 등락률에서 사건으로 바꿔라 — 누가 샀나/무엇이 통념과 달랐나/그래서 시청자에게 무슨 뜻인가. 지수 수치는 근거로 뒤에 붙이거나 subtitle_text 로 옮겨라.',
-          });
-        }
+      const hit = findIndexMoveSubject(narration);
+      if (hit && hit.value !== null && hit.value < INDEX_MOVE_PCT_FLOOR) {
+        issues.push({
+          // 2026-09-21 운영자 지시로 warn → error. "기록하고 진행" 이 아니라 금지다.
+          rule: 'index-move-as-subject', severity: 'error', rewrite: true, scene_id: id,
+          message: `씬 ${id}(hook): ${hit.index} ${hit.value}% 로 열었다 — ${INDEX_MOVE_PCT_FLOOR}% 를 넘지 못한 지수 등락은 에피소드 주제가 될 수 없다`,
+          suggestion: '훅의 주어를 등락률에서 사건으로 바꿔라 — 누가 샀나/무엇이 통념과 달랐나/그래서 시청자에게 무슨 뜻인가. 지수 수치는 근거로 뒤에 붙이거나 subtitle_text 로 옮겨라. 오늘 레벨 돌파·N년래 최고·연속기록이 있으면 그쪽을 주어로 삼아라.',
+        });
       }
     }
 

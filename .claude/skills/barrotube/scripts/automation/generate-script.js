@@ -44,7 +44,7 @@ import {
 import { formatToPlatform } from './paths.js';
 import { TEMPLATE, BOUNDS, KNOWN_PALETTES, CANONICAL_TAIL, MASCOT_CLAUSE } from './lib/image-prompt-contract.js';
 import { callClaudeCode, callCodex, resolveChain, runEngineChain } from './lib/text-engine.js';
-import { buildAnalystContractBlock, validateScript, formatIssue } from './lib/script-quality-contract.js';
+import { buildAnalystContractBlock, validateScript, formatIssue, INDEX_MOVE_PCT_FLOOR } from './lib/script-quality-contract.js';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const DEFAULT_MODEL = process.env.GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
@@ -232,7 +232,7 @@ ${buildAnalystContractBlock(sceneCount)}
 8. FORBIDDEN: specific stock buy/sell recommendations, "무조건/100%/확실/이것만 하면 부자", 정치 편향.
 9. CRITICAL — narration is FOR TTS ONLY. DO NOT include in narration: emojis (📚 🚨 etc), bracket tags ([1/5]), intro card text, subtitle overlays, or any text that appears as visual-only elements. Those belong to video/subtitle layers — not to spoken audio.
 10. CRITICAL — Hook scene (씬 001): speak AT MOST ONE number, and the same scene must say why it matters to the viewer. A hook that only recites a figure fails — index moves are on every channel (see RULE 4-CONTRACT D). Open on the counter-intuitive fact: what moved against expectations, who disagreed, what broke the usual pattern. Put the remaining figures in subtitle_text.
-10a. CRITICAL — A ROUTINE DAILY MOVE MAY NOT BE THE SUBJECT of the hook. "오늘 X% 올랐다/내렸다" is not news below index 2.0% / FX 1.0% / commodity 3.0% / rates 10bp / single name 5.0% (absolute). Below those, the hook's subject must be the mechanism, the disagreement, or the consequence to the viewer; the figure may appear later only as EVIDENCE ("…때문에" / "그 결과…"), never as the thing being announced.
+10a. CRITICAL — A ROUTINE DAILY MOVE MAY NOT BE THE SUBJECT of the hook. "오늘 X% 올랐다/내렸다" is not news below index ${INDEX_MOVE_PCT_FLOOR}% / FX 1.0% / commodity 3.0% / rates 10bp / single name 5.0% (absolute). Below those, the hook's subject must be the mechanism, the disagreement, or the consequence to the viewer; the figure may appear later only as EVIDENCE ("…때문에" / "그 결과…"), never as the thing being announced.
 10b. CRITICAL — BUT THESE ARE ALWAYS HEADLINE-WORTHY regardless of how small the daily move is, and when one is present in the research it MUST be the episode's main subject:
     * LEVEL BREACH — crossing a round psychological line (미 10년물 5%, 유가 100달러, 원/달러 1,400원, 코스피 7000선). A 5bp move that takes the 10-year through 5% is the story; the 5bp is not.
     * MULTI-YEAR EXTREME — N년래 최고·최저 경신.
@@ -569,6 +569,18 @@ async function main() {
     if (!qualityIssues.some((i) => i.severity === 'error' || i.rewrite)) break;
 
     if (attempt === 2) {
+      // 2026-09-21 운영자 지시: 「3% 를 넘지 못하면 지수를 주제로 잡지 못하게 하라」.
+      // 이 규칙만은 '기록하고 진행' 하지 않는다 — 나머지 위반의 처리는 그대로 둔다.
+      // 여기서 멈추면 이미지·TTS 비용을 쓰기 전이다(Phase 4). auto-pipeline 이
+      // fail_with_alert 로 텔레그램을 울린다. exit 2·3 은 produce-episode 에서 다른
+      // 뜻으로 쓰이므로 1 을 쓴다.
+      const blocking = qualityIssues.filter((i) => i.rule === 'index-move-as-subject');
+      if (blocking.length) {
+        console.error(`❌ ${blocking[0].message}`);
+        console.error('   재작성 후에도 훅의 주어가 지수 등락률이다 — 대본을 내보내지 않는다.');
+        console.error('   토픽을 바꾸거나(레벨 돌파·N년래 최고·연속기록) 훅의 주어를 사건·인과로 바꿔라.');
+        process.exit(1);
+      }
       console.warn('   ⚠ 재작성 후에도 품질 계약 위반이 남았다 — frontmatter 에 기록하고 진행한다');
       break;
     }

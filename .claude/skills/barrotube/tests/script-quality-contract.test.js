@@ -296,3 +296,43 @@ test('대조 구문의 지수 수치는 주어가 아니다', () => {
 test('대조 없이 등락률만 나열하면 여전히 걸린다', () => {
   assert.equal(idxIssues('코스피가 오늘 일점삼칠 퍼센트 올랐습니다. 상승 마감했습니다.').length, 1);
 });
+
+/**
+ * 2026-09-21 EP-2026-0169 회귀.
+ * 「연준이 금리를 올렸는데 코스피가 이 퍼센트 넘게 뛰었습니다」 — 코스피 +2.66% 가 훅의
+ * 주어로 그대로 발행됐다. 이 규칙은 임계 비교에 **닿지도 못했다**: 정수 낭독("이 퍼센트")을
+ * 파서가 못 읽었고, 설령 읽었어도 앞쪽 대조어("는데"·"왜")가 검사 전체를 면제시켰다.
+ * 셋(파서·면제 범위·심각도) 중 하나만 고치면 같은 훅이 다시 샌다.
+ */
+test('EP-2026-0169 훅은 새 임계에서 걸린다', () => {
+  const hits = idxIssues('연준이 금리를 올렸는데 코스피가 이 퍼센트 넘게 뛰었습니다. 이 반등을 해결로 읽으면 내 계좌에 왜 위험할까요?');
+  assert.equal(hits.length, 1, '정수 낭독과 앞쪽 대조로 두 번 빠져나갔던 훅이다');
+  assert.equal(hits[0].severity, 'error', '운영자 지시는 금지다 — 기록하고 진행이 아니다');
+});
+
+test('정수 낭독·띄어쓴 소수·아라비아 표기를 모두 읽는다', () => {
+  assert.equal(spokenToNumber('이'), 2, '정수를 못 읽으면 "이 퍼센트"가 검사 밖으로 샌다');
+  assert.equal(spokenToNumber('삼'), 3);
+  assert.equal(spokenToNumber('육 점 구칠'), 6.97);
+  assert.equal(idxIssues('나스닥이 1.74% 올랐습니다. 마감했습니다.').length, 1, '아라비아 표기도 본다');
+  assert.equal(idxIssues('나스닥이 5.2% 올랐습니다. 마감했습니다.').length, 0, '임계 위는 통과');
+  // 소수점이 문장 경계로 오해되면 지수명과 수치가 다른 문장이 돼 검사가 죽는다.
+  assert.equal(idxIssues('코스피가 삼 퍼센트 올랐습니다. 마감했습니다.').length, 0, '3.0% 는 임계 이상이라 허용');
+});
+
+/**
+ * 면제의 원래 취지는 "대조의 **앞쪽 절**로 쓰인 수치는 주어가 아니다" 였다.
+ * 수치가 대조의 **결론**이면 그 지수 등락이 곧 주어다. narration 전체에서 마커를 찾으면
+ * 이 채널 훅은 거의 전부 면제된다 — 규칙이 상시 무력화된다.
+ */
+test('대조 표지가 수치 앞에 있으면 면제되지 않는다', () => {
+  assert.equal(idxIssues('코스피가 일점삼칠 퍼센트 올랐지만 개인은 팔았습니다.').length, 0, '수치 뒤 대조는 면제 유지');
+  assert.equal(idxIssues('연준이 올렸는데 코스피가 일점삼칠 퍼센트 뛰었습니다.').length, 1, '수치 앞 대조는 면제 아님');
+});
+
+/** 헤더 주석이 "config 와 같은 값" 이라고 선언만 하고 아무도 확인하지 않았다(2026-09-21). */
+test('임계 정본이 config/growth.json 과 갈라지지 않는다', () => {
+  const cfg = JSON.parse(readFileSync(join(ROOT, 'config', 'growth.json'), 'utf-8'));
+  assert.equal(cfg.content_policy.index_move_thresholds.index_pct, INDEX_MOVE_PCT_FLOOR,
+    'config 는 작가 프롬프트 문장, INDEX_MOVE_PCT_FLOOR 는 기계 게이트 — 갈라지면 한 프롬프트 안에서 임계가 둘이 된다');
+});

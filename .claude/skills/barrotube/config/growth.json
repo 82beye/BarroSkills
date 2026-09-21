@@ -16,11 +16,12 @@
     "index_as_headline": "conditional",
     "index_move_thresholds": {
       "_comment": "**일상 등락률**에만 적용한다. 이 폭을 넘지 못한 '오늘 몇 % 올랐다/내렸다'는 제목·훅의 주어가 될 수 없다. 아래 always_newsworthy 에 해당하면 등락률과 무관하게 주어가 될 수 있다.",
-      "index_pct": 2.0,
+      "index_pct": 3.0,
       "fx_pct": 1.0,
       "commodity_pct": 3.0,
       "rate_bp": 10,
-      "single_name_pct": 5.0
+      "single_name_pct": 5.0,
+      "_index_pct_note": "2026-09-21 운영자 지시로 2.0 → 3.0. 이 값은 프롬프트 문장으로만 쓰이고, 기계 게이트의 정본은 scripts/automation/lib/script-quality-contract.js 의 INDEX_MOVE_PCT_FLOOR 다. 둘이 갈라지면 작가가 한 프롬프트 안에서 서로 다른 임계를 받는다 — tests 가 드리프트를 잡는다."
     },
     "always_newsworthy": {
       "_comment": "등락률이 작아도 그 자체로 헤드라인이 되는 사건들. 일상 등락 임계를 적용하지 않는다. 2026-09-16 운영자 지시: '미 10년물 5% 돌파'는 5bp 움직임이어도 무조건 메인이다 — 5% 는 심리적 선이기 때문이다.",
