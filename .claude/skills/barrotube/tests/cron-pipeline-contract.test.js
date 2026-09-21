@@ -713,20 +713,34 @@ test('발행 쿼터 가드는 uploadedAt 을 인정하고, 날짜 미상 옛 기
 });
 
 /**
- * 기상 예약 없이 다음 회차까지 다리를 놓는다.
+ * 회차가 끝난 뒤 **다음 작업이 시작할 때까지** 슬립을 막는다.
  *
- * pmset 기상 예약은 root 가 필요해 무인으로 걸 수 없다(2026-09-16 실측:
- * `pmset: This operation must be run as root`). 대신 이미 깨어 있는 06:00 회차가
- * 10:00 회차 시작까지 슬립을 붙잡아 두면 같은 효과가 난다.
- * 16:00 회차에는 일부러 안 건다 — 11시부터 5시간을 더 깨워 두면 가방 속에서
- * 배터리·발열을 태운다. 그 회차는 늦은-게시 유예(6h)가 받아 준다.
+ * launchd 는 잠든 기계를 깨우지 못한다. 예전에는 pmset 기상 예약이 root 를 요구해
+ * 무인으로 걸 수 없었고(2026-09-16 실측: `pmset: This operation must be run as root`),
+ * 그래서 이미 깨어 있는 회차가 다음 회차까지 버티는 것이 유일한 수단이었다.
+ * 그 시절엔 16:00 회차에 다리를 안 걸었다 — 오전 회차가 5시간을 더 깨워 두면 가방 속에서
+ * 배터리·발열을 태우기 때문이다.
+ *
+ * 2026-09-21 운영자가 `pmset repeat wakeorpoweron ... 15:55` 를 직접 걸면서 전제가 바뀌었다.
+ * 기상은 이제 pmset 이 맡고, 다리는 '깨우기' 가 아니라 '다음 작업까지 잠들지 않기' 만 한다.
+ * 그래서 16:00 회차에도 다리를 건다 — 20:00 마켓맵 석간판까지다. 저녁 시간대라 대개
+ * 전원에 연결돼 있어, 다리를 안 걸던 이유(일과 중 가방 속 발열)가 적용되지 않는다.
  */
-test('06시 회차가 점심 회차까지 슬립을 막는다', () => {
+test('각 회차가 다음 작업까지 슬립을 막는다', () => {
   const r = JSON.parse(readFileSync(ROUTINES, 'utf8'));
   assert.equal(r.slots['us-close'].keep_awake_until, '10:05',
-    '10:00 회차 직후까지 — 정확히 10:00 이면 경계에서 놓칠 수 있다');
-  assert.equal(r.slots['kr-close'].keep_awake_until, undefined,
-    '오후 회차까지 깨워 두면 배터리를 태운다 — 늦은-게시 유예로 받는다');
+    '10:00 점심 회차 직후까지 — 정확히 10:00 이면 경계에서 놓칠 수 있다');
+  assert.equal(r.slots['kr-close'].keep_awake_until, '20:05',
+    '20:00 마켓맵 석간판 직후까지 (2026-09-21 운영자 지시)');
+
+  // 다리는 다음 작업을 **넘겨야** 의미가 있고, 하루를 통째로 깨워 두면 안 된다.
+  const toMin = (s) => Number(s.slice(0, 2)) * 60 + Number(s.slice(3, 5));
+  for (const [slot, nextJob] of [['us-close', '10:00'], ['kr-close', '20:00']]) {
+    const until = toMin(r.slots[slot].keep_awake_until);
+    const start = toMin(String(r.slots[slot].cron).slice(-5));
+    assert.ok(until > toMin(nextJob), `${slot} 다리가 다음 작업(${nextJob}) 전에 끊긴다`);
+    assert.ok(until - start < 12 * 60, `${slot} 다리가 12시간 상한을 넘는다`);
+  }
 });
 
 test('깨움 다리는 SLOT·ROUTINES 가 정해진 뒤에 걸린다', () => {
