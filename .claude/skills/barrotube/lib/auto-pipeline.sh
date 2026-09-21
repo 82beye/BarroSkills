@@ -155,14 +155,28 @@ run_with_timeout() {
 #             셋 다 이미지·클립은 5/5 였고 인트로·썸네일만 없었다.)
 #   stills — 이미지만. 브라우저가 정말 필요한 건 시트를 붙이는 스틸뿐인 단계에서 쓴다.
 media_assets_ready() {
-  local base="$1" mode="${2:-full}" id path hash hashes="" missing=""
+  local base="$1" mode="${2:-full}" id path hash hashes="" missing="" ihash ihashes=""
   # 이 게이트는 **브라우저가 만들어야 할 자산**만 본다. 모션 정본이 Wan(헤드리스)으로
   # 바뀐 뒤로 클립은 Phase 8 의 S6c 가 만들므로, 여기서 클립을 요구하는 건 브라우저가
   # 실제로 클립을 굽는 grok 일 때뿐이다. (2026-09-02 기본값 grok → wan)
   local motion_engine="${BT_MOTION_ENGINE:-grok}"
   for id in 001 002 003 004 005; do
     path="${base}/40_assets/images/scene_${id}.png"
-    [ -s "$path" ] || missing="${missing}${missing:+, }images/scene_${id}.png"
+    if [ ! -s "$path" ]; then
+      missing="${missing}${missing:+, }images/scene_${id}.png"
+    else
+      # 같은 그림이 두 씬에 박히면 같은 화면이 두 번 나간다. 영상에는 이 검사가 있었는데
+      # 이미지에는 없어서 2026-09-21 EP-2026-0169 의 씬 002·005 가 각각 직전 씬의 바이트
+      # 복사본으로 이 게이트를 통과했다. 원인은 브라우저 워커가 blob 다운로드에 실패하면
+      # $TMPDIR/browser-use/assets 를 -mmin -20 으로 뒤져 **직전 씬이 남긴 자산**을 복사하는
+      # 폴백이다. 워커는 그때도 "생성·검수해 저장했습니다" 라고 보고한다 — 판정은 산출물로만 한다.
+      # 중복이면 그 씬을 missing 으로 잡아 top-up 루프가 다시 만들게 한다.
+      ihash=$(shasum -a 256 "$path" | awk '{print $1}')
+      if printf '%s\n' "$ihashes" | grep -qx "$ihash"; then
+        missing="${missing}${missing:+, }images/scene_${id}.png(duplicate bytes)"
+      fi
+      ihashes="${ihashes}${ihashes:+$'\n'}${ihash}"
+    fi
 
     # stills 모드는 이름 그대로 스틸만 본다 — 브라우저가 정말 필요한 건 시트를 붙이는
     # 스틸뿐이고, 클립은 Phase 8 의 ensureMotion()(로컬 HyperFrames)이 스틸을 누가
@@ -953,6 +967,14 @@ ChatGPT 탭이 여러 개면 하나의 로그아웃 탭만 보고 중단하지 �
      && ! media_assets_ready "$MEDIA_BASE" stills; do
     NEXT_SCENE=$(printf '%s' "$MEDIA_ASSETS_MISSING" | grep -o 'scene_[0-9]\{3\}\.png' | head -1 | sed 's/scene_\([0-9]*\)\.png/\1/')
     [ -n "$NEXT_SCENE" ] || break
+    # 중복으로 걸린 스틸은 **지우고** 다시 만든다. 파일을 남겨 두면 덮어쓰기가 실패했을 때
+    # 중복이 그대로 발행되고, 워커가 "이미 있음" 으로 판단할 여지도 남는다.
+    # 2026-09-21 EP-2026-0169 에서는 사람이 손으로 지워야 재생성이 돌았다.
+    if printf '%s' "$MEDIA_ASSETS_MISSING" | grep -q "scene_${NEXT_SCENE}\.png(duplicate bytes)"; then
+      echo "     ♻︎ 씬 ${NEXT_SCENE} 스틸이 앞 씬과 같은 바이트다 — 지우고 다시 만든다"
+      audit "media_render_duplicate_still" "WARN" "ep=$EP_ID scene=$NEXT_SCENE"
+      rm -f "${MEDIA_BASE}/40_assets/images/scene_${NEXT_SCENE}.png"
+    fi
     TOPUP_TRIES=$((TOPUP_TRIES + 1))
     echo "  ➕ ChatGPT 이어 만들기 ${TOPUP_TRIES}/${BT_CHATGPT_TOPUP_MAX} — 씬 ${NEXT_SCENE}"
     audit "media_render_chatgpt_topup" "INFO" "ep=$EP_ID scene=$NEXT_SCENE try=$TOPUP_TRIES"

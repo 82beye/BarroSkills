@@ -835,3 +835,52 @@ test('install-cron 이 문서·코드가 가리키는 wake 하위명령을 실�
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /pmset repeat wakeorpoweron/, '설정 명령을 그대로 찍어 줘야 한다');
 });
+
+/**
+ * 2026-09-21 EP-2026-0169 회귀 — 같은 그림이 두 씬에 박혀도 게이트가 통과시켰다.
+ *
+ * media_assets_ready 는 **영상**에는 SHA-256 중복 검사를 걸어 두고 **이미지**에는
+ * 존재 검사만 했다. 브라우저 워커가 blob 다운로드에 실패하면 $TMPDIR/browser-use/assets 를
+ * -mmin -20 으로 뒤져 직전 씬이 남긴 자산을 복사하는 폴백이 있는데, 그때 워커는
+ * "생성·검수해 저장했습니다" 라고 보고한다. 그날 씬 002·005 가 각각 그렇게 만들어졌고
+ * 사람이 md5 를 손으로 재서야 발견했다. 하류 어디에도 이미지 중복 검사는 없었다.
+ */
+test('media_assets_ready 가 같은 바이트의 씬 스틸을 중복으로 잡는다', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bt-dup-'));
+  try {
+    const imgs = join(dir, '40_assets', 'images');
+    mkdirSync(imgs, { recursive: true });
+    for (let i = 1; i <= 5; i += 1) {
+      writeFileSync(join(imgs, `scene_00${i}.png`), `unique-${i}`.padEnd(64, 'x'));
+    }
+    // 함수만 떼어 내 부른다 — auto-pipeline 을 통째로 source 하면 파이프라인이 돈다.
+    const fn = readFileSync(AUTO, 'utf8').match(/^media_assets_ready\(\) \{[\s\S]*?\n\}/m);
+    assert.ok(fn, 'media_assets_ready 를 찾지 못했다');
+    const call = (base) => spawnSync('bash', ['-c',
+      `${fn[0]}\nmedia_assets_ready "${base}" stills; echo "MISSING=$MEDIA_ASSETS_MISSING"`],
+      { encoding: 'utf8', timeout: 30_000 });
+
+    assert.match(call(dir).stdout, /MISSING=$/m, '5장이 전부 다르면 통과해야 한다');
+
+    // 씬 002 를 씬 001 의 바이트 복사본으로 — 그날 실제로 일어난 일이다.
+    writeFileSync(join(imgs, 'scene_002.png'), readFileSync(join(imgs, 'scene_001.png')));
+    const dup = call(dir).stdout;
+    assert.match(dup, /images\/scene_002\.png\(duplicate bytes\)/,
+      '같은 바이트의 스틸은 missing 으로 잡혀 top-up 이 다시 만들어야 한다');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('중복으로 걸린 스틸은 재생성 전에 지운다', () => {
+  // 파일을 남겨 두면 덮어쓰기 실패 시 중복이 그대로 발행되고, 워커가 "이미 있음" 으로
+  // 판단할 여지도 남는다. 2026-09-21 에는 사람이 손으로 지워야 재생성이 돌았다.
+  const src = readFileSync(AUTO, 'utf8');
+  // NEXT_SCENE 을 고른 직후 구간을 본다 — 제거는 워커를 부르기 **전에** 일어나야 한다.
+  const at = src.indexOf("NEXT_SCENE=$(printf");
+  assert.ok(at > 0, 'top-up 루프의 NEXT_SCENE 선택부를 찾지 못했다');
+  const window = src.slice(at, src.indexOf('run_with_timeout 900 codex', at));
+  assert.match(window, /duplicate bytes/, 'top-up 루프가 중복 표기를 읽어야 한다');
+  assert.match(window, /rm -f "\$\{MEDIA_BASE\}\/40_assets\/images\/scene_\$\{NEXT_SCENE\}\.png"/,
+    '중복 스틸을 지우고 다시 만들어야 한다');
+});
