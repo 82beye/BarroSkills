@@ -114,6 +114,30 @@ else
   add_result "paperclip_leak" "YELLOW" "$PAPERCLIP_LEAK files still reference Paperclip API URL"
 fi
 
+# 6b. 유튜브 실제 공개 상태 동기화
+# 보드와 파이프라인은 "발행됨"을 로컬 기록으로 판정한다. 슬롯 시각을 넘겨 예약이 걸리지
+# 않으면 유튜브는 private 로 남기는데, 업로드는 됐고 ID 도 있어서 전부 발행으로 세어 왔다.
+# 2026-09-23 실측: 보드가 107편을 발행으로 셌고 실제 공개는 83편이었다.
+# videos.list 는 50건당 1유닛(일일 10,000)이라 무과금이고 읽기 전용이다.
+if node scripts/automation/sync-youtube-state.js --quiet 2>/dev/null; then
+  YT_BURIED=$(python3 -c "
+import json,sys
+try:
+    d=json.load(open('workspace/youtube-state.json'))
+    c=d.get('counts',{})
+    print(f\"{c.get('private',0)} {c.get('public',0)} {c.get('gone',0)}\")
+except Exception: print('? ? ?')
+" 2>/dev/null)
+  set -- $YT_BURIED
+  if [ "${1:-?}" != "?" ] && [ "${1:-0}" -gt 0 ] 2>/dev/null; then
+    add_result "youtube_buried_private" "YELLOW" "업로드했지만 비공개로 묻힌 영상 ${1}편 (공개 ${2}, 유실 ${3}) — 보드의 '비공개' 칩으로 확인"
+  else
+    add_result "youtube_buried_private" "GREEN" "비공개로 묻힌 영상 없음"
+  fi
+else
+  add_result "youtube_buried_private" "INFO" "유튜브 상태 동기화 실패 — 보드는 로컬 기록으로 표시한다"
+fi
+
 # 7. YouTube OAuth 만료 임박
 # 동의 화면이 "테스트" 상태면 refresh token 이 7일 뒤 만료된다. 무비용 경과일 검사만 한다
 # (실검증은 1 unit 이라 doctor 에 넣지 않는다 — check-oauth-expiry.js --verify 로 따로).
