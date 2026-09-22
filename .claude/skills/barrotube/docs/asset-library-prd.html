@@ -1,0 +1,557 @@
+<title>경제뉴스 씬 자산 라이브러리</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+KR:wght@400;500;700&display=swap">
+<style>
+:root{
+  --ground:#F4F5F8; --surface:#FFFFFF; --surface-2:#EDEFF4; --sunken:#E4E7EE;
+  --ink:#131A26; --ink-2:#48536A; --ink-3:#77839C;
+  --line:#D9DEE8; --line-strong:#B9C2D2;
+  --accent:#C86A00; --accent-ink:#FFFFFF; --accent-soft:#FFF1DE;
+  --up:#C8322F; --up-soft:#FDECEB;
+  --down:#2A5FD0; --down-soft:#E9EFFC;
+  --warn:#9A6400; --warn-soft:#FFF3D6;
+  --ok:#1F7A4D; --ok-soft:#E6F4EC;
+  --shadow:0 1px 2px rgba(19,26,38,.06), 0 8px 24px -16px rgba(19,26,38,.35);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#0B111C; --surface:#121A28; --surface-2:#18212F; --sunken:#0E1622;
+    --ink:#E8ECF4; --ink-2:#A3AFC4; --ink-3:#74819A;
+    --line:#26313F; --line-strong:#3A4657;
+    --accent:#FF9A1F; --accent-ink:#1A1204; --accent-soft:#2A1F0C;
+    --up:#FF6B66; --up-soft:#2B1616;
+    --down:#6E9BFF; --down-soft:#141F36;
+    --warn:#FFC24D; --warn-soft:#2A2109;
+    --ok:#4FC98A; --ok-soft:#0F2619;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -18px rgba(0,0,0,.9);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0B111C; --surface:#121A28; --surface-2:#18212F; --sunken:#0E1622;
+  --ink:#E8ECF4; --ink-2:#A3AFC4; --ink-3:#74819A;
+  --line:#26313F; --line-strong:#3A4657;
+  --accent:#FF9A1F; --accent-ink:#1A1204; --accent-soft:#2A1F0C;
+  --up:#FF6B66; --up-soft:#2B1616;
+  --down:#6E9BFF; --down-soft:#141F36;
+  --warn:#FFC24D; --warn-soft:#2A2109;
+  --ok:#4FC98A; --ok-soft:#0F2619;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -18px rgba(0,0,0,.9);
+}
+*{box-sizing:border-box}
+body{
+  background:var(--ground); color:var(--ink);
+  font-family:"Noto Sans KR","IBM Plex Sans KR",-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo",sans-serif;
+  font-size:16px; line-height:1.75; margin:0;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:860px; margin:0 auto; padding-inline:20px; padding-block:0 96px}
+h1,h2,h3,.display{font-family:"IBM Plex Sans KR","Noto Sans KR",sans-serif; text-wrap:balance; letter-spacing:-.015em}
+code,.mono,.slot,table td.num,table th.num{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,monospace; font-variant-numeric:tabular-nums}
+a{color:var(--accent)}
+:focus-visible{outline:2px solid var(--accent); outline-offset:3px; border-radius:3px}
+
+/* ── 머리말 ── */
+.masthead{padding-block:56px 40px; border-bottom:1px solid var(--line)}
+.eyebrow{
+  font-family:"IBM Plex Mono",monospace; font-size:12px; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--ink-3); margin:0 0 18px
+}
+.eyebrow b{color:var(--accent); font-weight:600}
+h1{font-size:clamp(30px,6.2vw,46px); line-height:1.2; font-weight:700; margin:0 0 20px}
+.standfirst{font-size:clamp(17px,2.4vw,19px); color:var(--ink-2); margin:0; max-width:60ch; line-height:1.7}
+.meta-row{
+  display:flex; flex-wrap:wrap; gap:8px 20px; margin-top:26px;
+  font-family:"IBM Plex Mono",monospace; font-size:12.5px; color:var(--ink-3)
+}
+.meta-row span b{color:var(--ink-2); font-weight:500}
+
+/* ── 섹션 ── */
+section{padding-block:44px; border-bottom:1px solid var(--line)}
+section:last-of-type{border-bottom:0}
+h2{font-size:23px; font-weight:600; margin:0 0 6px; display:flex; align-items:baseline; gap:12px}
+h2 .n{font-family:"IBM Plex Mono",monospace; font-size:13px; color:var(--accent); font-weight:500; flex:none}
+.lede{color:var(--ink-2); margin:0 0 26px; max-width:62ch}
+h3{font-size:16px; font-weight:600; margin:32px 0 10px; color:var(--ink)}
+p{margin:0 0 16px; max-width:66ch}
+strong{font-weight:700}
+.note{color:var(--ink-2); font-size:14.5px}
+
+/* ── 논지 배너 ── */
+.thesis{
+  background:var(--surface); border:1px solid var(--line); border-left:3px solid var(--accent);
+  border-radius:4px; padding:24px 26px; margin:0 0 30px; box-shadow:var(--shadow)
+}
+.thesis p{margin:0; font-size:19px; font-weight:600; line-height:1.6; font-family:"IBM Plex Sans KR",sans-serif}
+.thesis p+p{margin-top:10px; font-size:15px; font-weight:400; color:var(--ink-2); font-family:inherit}
+
+/* ── 편중 비교 ── */
+.skew{display:grid; gap:14px; margin:26px 0 8px}
+.skew-row{display:grid; grid-template-columns:minmax(120px,190px) 1fr; gap:14px; align-items:center}
+.skew-label{font-size:13.5px; color:var(--ink-2); line-height:1.4}
+.skew-label b{display:block; color:var(--ink); font-weight:600; font-size:14.5px}
+.skew-bar{position:relative; height:34px; background:var(--sunken); border-radius:3px; overflow:hidden}
+.skew-fill{position:absolute; inset-block:0; left:0; display:flex; align-items:center; padding-inline:11px; border-radius:3px}
+.skew-fill span{font-family:"IBM Plex Mono",monospace; font-size:13px; font-weight:600; font-variant-numeric:tabular-nums}
+.f-bell{background:var(--accent); width:100%}
+.f-bell span{color:var(--accent-ink)}
+.f-up{background:var(--up-soft); border:1px solid var(--up); width:71.9%}
+.f-up span{color:var(--up)}
+@media(max-width:560px){
+  .skew-row{grid-template-columns:1fr; gap:6px}
+}
+
+/* ── 수치 타일 ── */
+.figs{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:4px; overflow:hidden; margin:24px 0}
+.fig{background:var(--surface); padding:18px 16px}
+.fig dt{font-size:12px; color:var(--ink-3); margin:0 0 7px; line-height:1.4}
+.fig dd{margin:0; font-family:"IBM Plex Mono",monospace; font-size:25px; font-weight:600; font-variant-numeric:tabular-nums; line-height:1.1}
+.fig dd small{font-size:13px; font-weight:400; color:var(--ink-3); margin-left:5px}
+
+/* ── 표 ── */
+.scroll{overflow-x:auto; margin:20px 0; border:1px solid var(--line); border-radius:4px; background:var(--surface)}
+table{border-collapse:collapse; width:100%; font-size:14.5px; min-width:440px}
+th,td{padding:11px 14px; text-align:left; border-bottom:1px solid var(--line); vertical-align:top}
+thead th{
+  background:var(--surface-2); font-family:"IBM Plex Sans KR",sans-serif; font-weight:600; font-size:12.5px;
+  letter-spacing:.04em; color:var(--ink-2); white-space:nowrap; border-bottom:1px solid var(--line-strong)
+}
+tbody tr:last-child td{border-bottom:0}
+td.num,th.num{text-align:right; white-space:nowrap}
+
+/* ── 커버리지 매트릭스 ── */
+.matrix{margin:26px 0 10px}
+.matrix-grid{
+  display:grid; grid-template-columns:minmax(108px,1.3fr) repeat(3,minmax(74px,1fr));
+  gap:5px; min-width:400px
+}
+.mh{
+  font-family:"IBM Plex Mono",monospace; font-size:11.5px; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--ink-3); padding:0 0 6px; text-align:center
+}
+.mh:first-child{text-align:left}
+.mrow-label{
+  display:flex; align-items:center; justify-content:space-between; gap:8px;
+  padding:9px 11px; background:var(--surface); border:1px solid var(--line); border-radius:3px; font-size:13.5px
+}
+.mrow-label .pct{font-family:"IBM Plex Mono",monospace; font-size:11.5px; color:var(--ink-3)}
+.cell{
+  border:1px solid var(--line); border-radius:3px; padding:9px 6px; text-align:center;
+  background:var(--surface); display:flex; flex-direction:column; gap:3px; align-items:center; justify-content:center
+}
+.cell .g{font-family:"IBM Plex Mono",monospace; font-size:11px; font-weight:600; letter-spacing:.05em}
+.cell .t{font-family:"IBM Plex Mono",monospace; font-size:16px; font-weight:600; font-variant-numeric:tabular-nums; line-height:1}
+.cell.a{background:var(--up-soft); border-color:var(--up)}
+.cell.a .g,.cell.a .t{color:var(--up)}
+.cell.b{background:var(--accent-soft); border-color:var(--accent)}
+.cell.b .g,.cell.b .t{color:var(--accent)}
+.cell.c{background:var(--surface-2)}
+.cell.c .g,.cell.c .t{color:var(--ink-2)}
+.legend{display:flex; flex-wrap:wrap; gap:8px 18px; margin-top:16px; font-size:13px; color:var(--ink-2)}
+.legend i{display:inline-block; width:11px; height:11px; border-radius:2px; margin-right:6px; vertical-align:-1px}
+.legend .la{background:var(--up-soft); border:1px solid var(--up)}
+.legend .lb{background:var(--accent-soft); border:1px solid var(--accent)}
+.legend .lc{background:var(--surface-2); border:1px solid var(--line-strong)}
+
+/* ── 상태 배지 ── */
+.pill{
+  display:inline-block; font-family:"IBM Plex Mono",monospace; font-size:11.5px; font-weight:600;
+  padding:2px 8px; border-radius:999px; white-space:nowrap
+}
+.p-gap{background:var(--down-soft); color:var(--down)}
+.p-sat{background:var(--warn-soft); color:var(--warn)}
+.p-ok{background:var(--ok-soft); color:var(--ok)}
+
+/* ── 규칙 목록 ── */
+ol.rules{margin:18px 0; padding:0; list-style:none; counter-reset:r; display:grid; gap:10px}
+ol.rules li{
+  counter-increment:r; position:relative; padding:13px 16px 13px 46px;
+  background:var(--surface); border:1px solid var(--line); border-radius:4px; font-size:14.5px; line-height:1.65
+}
+ol.rules li::before{
+  content:counter(r); position:absolute; left:15px; top:13px;
+  font-family:"IBM Plex Mono",monospace; font-size:12px; font-weight:600; color:var(--accent)
+}
+ol.rules b{font-weight:600}
+
+ul.plain{margin:14px 0; padding-left:20px}
+ul.plain li{margin-bottom:9px; line-height:1.7}
+
+/* ── 단계 ── */
+.phase{background:var(--surface); border:1px solid var(--line); border-radius:4px; padding:20px 22px; margin-bottom:14px}
+.phase-head{display:flex; flex-wrap:wrap; align-items:baseline; gap:10px; margin-bottom:10px}
+.phase-head h3{margin:0; font-size:16.5px}
+.phase-cost{
+  font-family:"IBM Plex Mono",monospace; font-size:11.5px; padding:2px 8px; border-radius:999px;
+  background:var(--ok-soft); color:var(--ok); font-weight:600
+}
+.phase-cost.paid{background:var(--warn-soft); color:var(--warn)}
+.phase ul{margin:10px 0 0; padding-left:19px}
+.phase ul li{margin-bottom:6px; font-size:14.5px}
+.crit{margin-top:14px; padding-top:13px; border-top:1px dashed var(--line-strong)}
+.crit h4{margin:0 0 8px; font-size:12px; letter-spacing:.07em; text-transform:uppercase; color:var(--ink-3); font-family:"IBM Plex Mono",monospace; font-weight:600}
+
+/* ── 코드 ── */
+pre{
+  background:var(--sunken); border:1px solid var(--line); border-radius:4px; padding:16px 18px;
+  overflow-x:auto; font-size:13px; line-height:1.65; margin:16px 0
+}
+pre code{font-size:inherit; color:var(--ink-2)}
+p code,li code,td code{background:var(--surface-2); border:1px solid var(--line); padding:1px 5px; border-radius:3px; font-size:13px}
+
+/* ── 경고 ── */
+.callout{border:1px solid var(--warn); background:var(--warn-soft); border-radius:4px; padding:17px 20px; margin:22px 0}
+.callout p{margin:0; font-size:14.5px; color:var(--ink)}
+.callout p+p{margin-top:9px}
+.callout .tag{
+  font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--warn); font-weight:600; display:block; margin-bottom:7px
+}
+
+footer{padding-block:34px; color:var(--ink-3); font-size:13.5px}
+footer p{max-width:none}
+</style>
+<div class="wrap">
+
+<header class="masthead">
+  <p class="eyebrow">PRD · Phase 1 완료 · 2026-09-22 · <b>BarroTube</b></p>
+  <h1>경제뉴스 씬 자산 라이브러리</h1>
+  <p class="standfirst">이미지 생성 쿼터는 주기적으로 마른다. 마른 동안에도 채널은 하루 3편을 낸다. 쌓인 자산을 슬롯으로 분류하고, 무엇이 있고 무엇이 없는지를 옵시디언 체크리스트로 드러내고, 쿼터가 살아 있을 때 빈 곳을 의도적으로 채운다.</p>
+  <div class="meta-row">
+    <span>구현 폴백 <b>9a40d44</b></span>
+    <span>정책 정본 <b>config/asset-reuse.json</b></span>
+    <span>실측일 <b>2026-09-22</b></span>
+  </div>
+</header>
+
+<section>
+  <h2><span class="n">01</span>배경</h2>
+  <p class="lede">2026-09-22, 이미지를 굽는 경로가 전부 동시에 말랐다. 3단으로 설계된 폴백이 실은 2단이었다 — 브라우저 ChatGPT와 codex imagegen이 같은 계정 쿼터를 쓴다.</p>
+
+  <div class="scroll">
+    <table>
+      <thead><tr><th>경로</th><th>상태</th></tr></thead>
+      <tbody>
+        <tr><td>ChatGPT 브라우저</td><td>주간 한도 — 9/25 07:17 해제</td></tr>
+        <tr><td>codex imagegen</td><td>같은 ChatGPT 계정 — 같은 한도</td></tr>
+        <tr><td>gpt-image-1</td><td>크레딧 고갈</td></tr>
+        <tr><td>Gemini</td><td>402 prepayment depleted</td></tr>
+        <tr><td>Grok <span class="note">(모션)</span></td><td>주간 한도</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>같은 날 자산 재사용 폴백을 구현해 EP-2026-0172를 <strong>이미지 생성 0회로 완주</strong>시켰다. 그 폴백은 동작한다. 문제는 무엇을 고르게 되는지가 운에 달려 있다는 점이다.</p>
+</section>
+
+<section>
+  <h2><span class="n">02</span>문제 — 자산이 부족한 게 아니다</h2>
+
+  <div class="thesis">
+    <p>자산이 부족한 게 아니라 엉뚱한 곳에 쏠려 있다.</p>
+    <p>작가가 회차마다 오브제를 새로 발명한다. 그래서 자주 다루는 주제의 커버리지는 얇고, 우연히 겹친 한 군데만 극단적으로 두껍다.</p>
+  </div>
+
+  <dl class="figs">
+    <div class="fig"><dt>사용 가능 스틸</dt><dd>426<small>/ 748</small></dd></div>
+    <div class="fig"><dt>중앙 객체 고유 종류</dt><dd>251</dd></div>
+    <div class="fig"><dt>단 1회만 등장</dt><dd>228<small>91%</small></dd></div>
+    <div class="fig"><dt>실제 모션 클립</dt><dd>196<small>46%</small></dd></div>
+  </dl>
+
+  <h3>편중의 크기</h3>
+  <p><code>cta</code> 역할 64컷 중 <strong>정확히 절반인 32컷이 “알림 벨”</strong> 하나이고, 그것이 24개 변형으로 흩어져 있다 — <code>glowing alarm bell</code>, <code>large alert bell</code>, <code>ringing alarm bell</code>, <code>bright notification bell</code>… 사실상 같은 그림에 형용사만 다르다.</p>
+
+  <div class="skew">
+    <div class="skew-row">
+      <div class="skew-label"><b>cta 역할 1개</b>그중 32컷이 “벨”</div>
+      <div class="skew-bar"><div class="skew-fill f-bell"><span>64컷</span></div></div>
+    </div>
+    <div class="skew-row">
+      <div class="skew-label"><b>11개 주제군 전체</b>상승(bullish) 방향 합계</div>
+      <div class="skew-bar"><div class="skew-fill f-up"><span>46컷</span></div></div>
+    </div>
+  </div>
+  <p class="note">역할 슬롯 하나가 가진 양이, 주제군 전체의 상승 방향을 합친 것보다 많다.</p>
+
+  <h3>방향 분포 <span class="note">— 사용 가능 426컷</span></h3>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>팔레트</th><th class="num">컷</th><th>방향</th></tr></thead>
+      <tbody>
+        <tr><td><code>bearish</code></td><td class="num">153</td><td>down</td></tr>
+        <tr><td><code>explainer</code></td><td class="num">130</td><td>neutral</td></tr>
+        <tr><td><code>cta</code></td><td class="num">71</td><td>역할 슬롯</td></tr>
+        <tr><td><code>bullish</code></td><td class="num">46</td><td>up</td></tr>
+        <tr><td><code>wealth</code></td><td class="num">21</td><td>up 계열</td></tr>
+        <tr><td>기타 5종</td><td class="num">5</td><td>미분류</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p><strong>상승이 하락 대비 약 1:3으로 부족하다.</strong> 시장이 오른 날의 에피소드는 재사용할 컷이 구조적으로 얕다. 한편 팔레트는 426컷 <strong>전부가 보유</strong>하고 있어, 방향 분류는 추측 없이 프롬프트에서 역산할 수 있다.</p>
+
+  <h3>결과 — 매칭 품질의 편차</h3>
+  <p>최근 9편 45컷 재현 점수(TF-IDF 코사인). 채널 핵심 도메인은 잘 맞지만 벗어나면 무너진다. EP-2026-0173(프랑스 와인)은 5컷 중 3컷이 약한 매칭이었다.</p>
+  <div class="scroll">
+    <table>
+      <thead><tr><th class="num">최소</th><th class="num">p10</th><th class="num">p25</th><th class="num">중앙</th><th class="num">p75</th><th class="num">최대</th></tr></thead>
+      <tbody><tr><td class="num">0.139</td><td class="num">0.214</td><td class="num">0.255</td><td class="num">0.394</td><td class="num">0.487</td><td class="num">0.682</td></tr></tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">03</span>슬롯 체계</h2>
+  <p class="lede">슬롯 키는 <code>&lt;주제군&gt;/&lt;방향&gt;</code>. 주제군 11개는 163편 브리프의 실측 비중에서 뽑았고, 방향 3개는 이미 프롬프트에 있는 <code>[palette:*]</code> 축을 그대로 쓴다.</p>
+
+  <div class="matrix">
+    <div class="scroll" style="border:0;background:transparent">
+      <div class="matrix-grid">
+        <div class="mh">주제군 · 비중</div><div class="mh">up</div><div class="mh">down</div><div class="mh">neutral</div>
+
+        <div class="mrow-label"><span>index</span><span class="pct">45%</span></div>
+        <div class="cell a"><span class="g">A</span><span class="t">4</span></div>
+        <div class="cell a"><span class="g">A</span><span class="t">4</span></div>
+        <div class="cell a"><span class="g">A</span><span class="t">4</span></div>
+
+        <div class="mrow-label"><span>semis</span><span class="pct">35%</span></div>
+        <div class="cell a"><span class="g">A</span><span class="t">4</span></div>
+        <div class="cell a"><span class="g">A</span><span class="t">4</span></div>
+        <div class="cell a"><span class="g">A</span><span class="t">4</span></div>
+
+        <div class="mrow-label"><span>rates</span><span class="pct">30%</span></div>
+        <div class="cell a"><span class="g">A</span><span class="t">4</span></div>
+        <div class="cell a"><span class="g">A</span><span class="t">4</span></div>
+        <div class="cell a"><span class="g">A</span><span class="t">4</span></div>
+
+        <div class="mrow-label"><span>energy</span><span class="pct">13%</span></div>
+        <div class="cell b"><span class="g">B</span><span class="t">3</span></div>
+        <div class="cell b"><span class="g">B</span><span class="t">3</span></div>
+        <div class="cell b"><span class="g">B</span><span class="t">3</span></div>
+
+        <div class="mrow-label"><span>fx</span><span class="pct">9%</span></div>
+        <div class="cell b"><span class="g">B</span><span class="t">3</span></div>
+        <div class="cell b"><span class="g">B</span><span class="t">3</span></div>
+        <div class="cell b"><span class="g">B</span><span class="t">3</span></div>
+
+        <div class="mrow-label"><span>earnings</span><span class="pct">8%</span></div>
+        <div class="cell b"><span class="g">B</span><span class="t">3</span></div>
+        <div class="cell b"><span class="g">B</span><span class="t">3</span></div>
+        <div class="cell b"><span class="g">B</span><span class="t">3</span></div>
+
+        <div class="mrow-label"><span>labor</span><span class="pct">8%</span></div>
+        <div class="cell b"><span class="g">B</span><span class="t">3</span></div>
+        <div class="cell b"><span class="g">B</span><span class="t">3</span></div>
+        <div class="cell b"><span class="g">B</span><span class="t">3</span></div>
+
+        <div class="mrow-label"><span>geopolitics</span><span class="pct">6%</span></div>
+        <div class="cell c"><span class="g">C</span><span class="t">2</span></div>
+        <div class="cell c"><span class="g">C</span><span class="t">2</span></div>
+        <div class="cell c"><span class="g">C</span><span class="t">2</span></div>
+
+        <div class="mrow-label"><span>crypto</span><span class="pct">6%</span></div>
+        <div class="cell c"><span class="g">C</span><span class="t">2</span></div>
+        <div class="cell c"><span class="g">C</span><span class="t">2</span></div>
+        <div class="cell c"><span class="g">C</span><span class="t">2</span></div>
+
+        <div class="mrow-label"><span>realestate</span><span class="pct">3%</span></div>
+        <div class="cell c"><span class="g">C</span><span class="t">2</span></div>
+        <div class="cell c"><span class="g">C</span><span class="t">2</span></div>
+        <div class="cell c"><span class="g">C</span><span class="t">2</span></div>
+
+        <div class="mrow-label"><span>metals</span><span class="pct">1%</span></div>
+        <div class="cell c"><span class="g">C</span><span class="t">2</span></div>
+        <div class="cell c"><span class="g">C</span><span class="t">2</span></div>
+        <div class="cell c"><span class="g">C</span><span class="t">2</span></div>
+      </div>
+    </div>
+    <div class="legend">
+      <span><i class="la"></i>A등급 · 비중 30%+ · 슬롯당 4컷</span>
+      <span><i class="lb"></i>B등급 · 8~13% · 3컷</span>
+      <span><i class="lc"></i>C등급 · 6% 이하 · 2컷</span>
+    </div>
+  </div>
+
+  <p>여기에 주제와 무관하게 구도가 고정되는 <strong>역할 슬롯 1개</strong>(<code>cta/generic</code>)를 더해 총 <strong>34슬롯 · 목표 102컷</strong>이다. 슬롯마다 최소 2컷이 필요한 이유는 두 가지다. 한 편 안에서 같은 바이트가 두 씬에 박히는 것을 막아야 하고, 30일 쿨다운을 지키려면 여유분이 있어야 한다.</p>
+
+  <div class="callout">
+    <p><span class="tag">Phase 1 정정</span>초안에는 <code>hook/generic</code>도 있었으나 <strong>채워질 수 없는 유령 슬롯</strong>이었다. hook 씬은 그 회차의 주제로 열리므로 본질적으로 주제 슬롯이다 — semis 회차의 hook은 semis 컷이다. 남겨 두면 영구히 “비어 있음”으로 표시돼 체크리스트의 신호를 죽인다.</p>
+  </div>
+
+  <h3>주제는 프롬프트가 아니라 대사로 판정한다</h3>
+  <p>초안은 프롬프트의 중앙 객체로 주제를 맞히자고 했다. 실제 어휘를 세어 보니 대부분이 조명·분위기어였다 — <code>glow</code> 204, <code>warm</code> 191, <code>skyline</code> 78에 비해 주제어는 <code>chip</code> 15, <code>oil</code> 16 수준이다. <strong>프롬프트는 “어떻게 보이나”를 적고, 주제는 한국어 대사에 있다.</strong> 같은 저울 그림이 유가 대사와 금리 대사에 각각 붙을 수 있고, 슬롯을 가르는 것은 대사다. 대사 기반으로 바꾸자 미분류가 15%로 떨어졌다.</p>
+
+  <h3>커버리지의 두 번째 축 — 중복 포화</h3>
+  <p>커버리지는 “부족”만으로 표현되지 않는다. <code>cta</code> 슬롯은 64컷이라 수량은 초과 충족인데, 그 절반이 사실상 같은 벨이라 다양성은 2~3컷 수준이다. 쿨다운을 걸면 같은 벨이 계속 돌아온다. <strong>수량만 세는 체크리스트는 이걸 ✅로 표시해 문제를 숨긴다.</strong></p>
+
+  <div class="scroll">
+    <table>
+      <thead><tr><th>값</th><th>정의</th><th>판정</th></tr></thead>
+      <tbody>
+        <tr><td><strong>보유량</strong></td><td>슬롯에 배정된 컷 수</td><td><span class="pill p-gap">부족</span> 목표 미달</td></tr>
+        <tr><td><strong>쏠림</strong></td><td>최빈 객체가 차지하는 비율<br><span class="note">large glowing alarm bell → bell</span></td><td><span class="pill p-sat">포화</span> 35% 이상이고 4컷 이상</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout">
+    <p><span class="tag">Phase 1 정정</span>초안은 포화를 “고유 종류 수 &lt; 목표의 절반”으로 쟀는데 <strong>정작 문제 슬롯을 못 잡았다.</strong> <code>cta/generic</code>은 71컷에 고유 객체 31종이라 그 기준을 여유롭게 통과했지만, 실제로는 43%가 전부 “벨”이다. 세어야 할 것은 종류 수가 아니라 <strong>한 객체로 쏠린 양</strong>이다.</p>
+    <p>객체를 하나도 못 읽어낸 슬롯은 판정하지 않는다 — 파싱 실패를 포화로 보고하면 운영자가 없는 문제를 쫓는다.</p>
+  </div>
+
+  <p>포화 슬롯에는 백필을 <strong>더 굽지 않는다.</strong> 대신 체크리스트에 표시해 작가 프롬프트 쪽에서 다른 오브제를 쓰도록 유도한다.</p>
+</section>
+
+<section>
+  <h2><span class="n">04</span>백필 — 생산을 굶기지 않는 규칙</h2>
+  <p class="lede">이 PRD의 가장 중요한 제약이다. 백필이 에피소드 쿼터를 먹으면 본말이 전도된다.</p>
+
+  <ol class="rules">
+    <li><b>후순위 실행</b> — 그날의 모든 회차(us-close · omnibus · kr-close)가 완료된 뒤에만 돈다.</li>
+    <li><b>폴백 무발생 조건</b> — 그날 한 편도 재사용 폴백을 타지 않았을 때만 돈다. 폴백이 걸린 날은 이미 쿼터가 마른 날이다.</li>
+    <li><b>일일 상한</b> — 하루 5컷. 에피소드가 쓰는 15컷 대비 1/3 이하.</li>
+    <li><b>우선순위</b> — A등급 빈 슬롯 → B → C → R. 같은 등급 안에서는 부족분이 큰 슬롯 먼저, 같은 부족분이면 <b>up 방향을 먼저</b> 굽는다.</li>
+    <li><b>즉시 중단</b> — 한도 신호(<code>usage limit</code>, <code>insufficient_quota</code>, <code>402</code>)를 만나면 그 자리에서 멈추고 다음 날로 넘긴다. 재시도하지 않는다.</li>
+  </ol>
+
+  <h3>재사용 엔진 연동 — 퇴행 불가 구조</h3>
+  <p>재사용이 폴백 경로에서만 도는 것은 그대로 둔다. 바뀌는 것은 폴백이 돌 때 <strong>무엇을 보는지</strong>다.</p>
+  <pre><code>폴백 진입 → ① 라이브러리 슬롯 조회 (주제·방향 일치 후보만)
+          → ② 슬롯 후보가 없으면 기존 전체 TF-IDF 조회 (현행 동작)</code></pre>
+  <p>슬롯으로 먼저 좁히면 “오브제는 비슷한데 주제가 다른” 오배정이 줄어든다. 와인 사례처럼 슬롯 자체가 비면 ②로 떨어져 현행과 같아진다.</p>
+</section>
+
+<section>
+  <h2><span class="n">05</span>옵시디언 문서</h2>
+  <p class="lede">기존 볼트 번호 규약(<code>00-Index</code>~<code>05-Lifecycle</code>)을 이어 <code>06-Assets</code>를 쓴다.</p>
+
+  <pre><code>~/youtube-co/obsidian-vault/BarroTube/06-Assets/
+├── MOC-assets.md              진입점 · 커버리지 요약
+├── coverage-checklist.md      체크리스트 본문  ← 매일 보는 화면
+├── gaps.md                    지금 비어 있는 슬롯만
+├── retired.md                 구세대 화풍 · 캐리커처 제외 목록
+└── slots/&lt;slot-id&gt;.md         슬롯별 상세 · 사용 이력</code></pre>
+
+  <div class="callout">
+    <p><span class="tag">확인 필요</span><strong>볼트가 4개월째 멈춰 있다.</strong> 마지막 자동 동기화 커밋이 2026-05-23이고, 그 주체는 <code>_legacy_paperclip/lifecycle-bridge.js</code>다. 이름의 <code>_legacy</code>가 말하듯 폐기 경로이므로 <strong>이 PRD는 그 동기화에 의존하지 않고 자체 writer를 둔다.</strong></p>
+    <p>기존 <code>03-Episodes/</code> 노트가 낡았다는 사실은 별건으로 남긴다.</p>
+  </div>
+
+  <h3>체크리스트 형식</h3>
+  <p class="note">아래 수치는 형식을 보이기 위한 예시다. 실제 충족 현황은 Phase 1 분류를 돌려야 나온다.</p>
+  <pre><code>## A등급 — 핵심
+
+- [x] `index/down`   — 4/4 ✅ · 다양성 4 · 클립 3
+- [ ] `index/up`     — 2/4 🔴 2컷 부족 · 다양성 2 · 클립 1
+- [ ] `semis/up`     — 0/4 🔴 비어 있음
+
+## R등급 — 역할
+
+- [x] `cta/generic`  — 64/6 ✅ 수량 초과
+      🟡 다양성 3 (포화) — 32컷이 “벨” 계열 · 백필 대상 아님</code></pre>
+
+  <h3>소유권 경계</h3>
+  <p>체크리스트는 <strong>생성물</strong>이다. 손으로 고치면 다음 렌더에서 사라진다. 생성 문서에 사람이 적은 내용이 조용히 없어지는 것은 흔한 실패이고, 한 번 겪으면 그 문서를 아무도 신뢰하지 않게 된다.</p>
+  <ul class="plain">
+    <li>생성 파일 첫 줄에 <code>&lt;!-- 자동 생성 — 손으로 고치지 마세요 --&gt;</code>를 넣는다.</li>
+    <li>운영자 의도(슬롯 우선순위, 특정 슬롯 보류)는 옵시디언이 아니라 <code>config/asset-reuse.json</code>의 <code>backfill.slot_overrides</code>에 적는다. <strong>정본은 항상 코드 옆이다.</strong></li>
+    <li>자유 메모는 <code>06-Assets/notes.md</code>에 두고, 렌더가 이 파일을 건드리지 않는다.</li>
+  </ul>
+</section>
+
+<section>
+  <h2><span class="n">06</span>구현 단계</h2>
+
+  <div class="phase">
+    <div class="phase-head"><h3>Phase 1 — 분류와 가시성</h3><span class="phase-cost">완료 · 2026-09-22</span></div>
+    <ul>
+      <li><code>lib/scene-slot-taxonomy.js</code> · <code>classify-scene-assets.js</code> · <code>sync-asset-obsidian.js</code></li>
+      <li><code>config/asset-reuse.json</code>에 <code>library</code> · <code>backfill</code> 블록 <span class="note">(백필은 <code>enabled: false</code>)</span></li>
+      <li>볼트 <code>06-Assets/</code> 생성 + 첫 렌더 — 38개 파일</li>
+    </ul>
+    <div class="crit">
+      <h4>완료 기준 대비 결과</h4>
+      <div class="scroll" style="margin:10px 0 0">
+        <table>
+          <thead><tr><th>기준</th><th class="num">목표</th><th class="num">결과</th></tr></thead>
+          <tbody>
+            <tr><td>미분류 비율</td><td class="num">25% 이하</td><td class="num"><strong>15%</strong> ✅</td></tr>
+            <tr><td>전 슬롯 표시</td><td class="num">34</td><td class="num"><strong>34/34</strong> ✅</td></tr>
+            <tr><td>재분류 결정성</td><td class="num">2회 동일</td><td class="num"><strong>동일</strong> ✅</td></tr>
+            <tr><td>테스트</td><td class="num">전부 통과</td><td class="num"><strong>503/504</strong> ✅</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <pre style="margin-top:14px"><code>인덱스 748 → 사용 가능 426 (폐기 322: legacy_era 305 · caricature 17)
+배정 361 · 미분류 65 (15%)
+슬롯 충족 23/34 · 부족 11슬롯 18컷 · 포화 2</code></pre>
+      <p style="margin:12px 0 0;font-size:14.5px">부족 11슬롯 중 <strong>6개가 <code>up</code> 방향</strong>이다 — <code>rates/up</code> 2/4(A등급) · <code>labor/up</code> 0/3 · <code>energy/up</code> 1/3 · <code>earnings/up</code> 1/3 · <code>fx/up</code> 2/3 · <code>metals/up</code> 0/2. 팔레트 분포로 예측한 상승 편중이 슬롯 단위로 확인됐다.</p>
+      <p style="margin:8px 0 0;font-size:14.5px">포화 2건: <code>cta/generic</code>(<code>bell</code> 43%) · <code>labor/neutral</code>(<code>line</code> 50%).</p>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="phase-head"><h3>Phase 2 — 슬롯 우선 조회</h3><span class="phase-cost">무과금</span></div>
+    <ul>
+      <li><code>pickReuseSet()</code>에 슬롯 필터 단계 추가. 후보 0이면 전체 조회로 폴백</li>
+    </ul>
+    <div class="crit">
+      <h4>완료 기준</h4>
+      <ul>
+        <li>45컷 재현 점수 중앙값이 현행(0.394) <strong>이상</strong></li>
+        <li>슬롯이 채워진 주제(index·semis·rates)에서 약한 매칭 0건</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="phase-head"><h3>Phase 3 — 백필</h3><span class="phase-cost paid">쿼터 사용</span></div>
+    <ul>
+      <li><code>backfill-library.js</code> + launchd 등록 (그날 마지막 회차 완료 후)</li>
+      <li>§04의 5개 규칙을 코드로 강제하고 각각 테스트</li>
+    </ul>
+    <div class="crit">
+      <h4>완료 기준</h4>
+      <ul>
+        <li>A등급 9슬롯이 목표 4컷 충족</li>
+        <li>백필이 돈 날에도 다음 날 에피소드가 이미지 한도로 죽지 않는다 <span class="note">(2주 관측)</span></li>
+        <li>쿼터 마른 날 약한 매칭 비율 <strong>5% 이하</strong></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">07</span>측정 지표</h2>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>지표</th><th class="num">현재</th><th class="num">목표</th></tr></thead>
+      <tbody>
+        <tr><td>슬롯 충족률</td><td class="num">23/34</td><td class="num">34/34</td></tr>
+        <tr><td>약한 매칭 비율</td><td class="num">하위 18%</td><td class="num">5% 이하</td></tr>
+        <tr><td>재현 점수 중앙값</td><td class="num">0.394</td><td class="num">0.45+</td></tr>
+        <tr><td>미분류 비율</td><td class="num"><strong>15%</strong></td><td class="num">25% 이하 ✅</td></tr>
+        <tr><td>포화 슬롯 수</td><td class="num"><strong>2건</strong></td><td class="num">0건</td></tr>
+        <tr><td>A등급 실제 모션 클립 보유율</td><td class="num">전체 46%</td><td class="num">75%+</td></tr>
+        <tr><td><strong>백필로 인한 생산 장애</strong></td><td class="num">—</td><td class="num"><strong>0건</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">08</span>미결 질문</h2>
+  <p class="lede">운영자 판단이 필요한 항목.</p>
+  <ol class="rules">
+    <li><b>주간 이미지 한도의 실제 수치를 모른다.</b> ChatGPT는 남은 양을 노출하지 않는다. 백필 상한 5컷은 추정이고 2주 관측 후 조정이 필요하다.</li>
+    <li><b>Grok 클립 백필을 할 것인가.</b> 실제 모션 클립은 426컷 중 196개(46%)뿐이고, 브라우저 자동화라 실패율이 높다. A등급만 채우고 나머지는 HyperFrames로 갈지.</li>
+    <li><b><code>unclassified</code> 규모를 아직 모른다.</b> Phase 1 분류를 돌려야 나온다. 사전을 보강해 흡수할지, 전체 조회 전용으로 남길지는 그 수치를 보고 정한다.</li>
+    <li><b>포화를 작가 쪽에서 고칠 것인가.</b> <code>cta</code> 32컷이 같은 벨인 원인은 자산 관리가 아니라 <code>generate-script.js</code>의 작가 지시다. “최근 N편에서 쓴 오브제를 피하라”가 근본 해결인데 image_prompt 계약 길이 밴드(640~780자)와 충돌할 수 있다.</li>
+    <li><b>볼트 위치 확정.</b> <code>~/youtube-co/obsidian-vault</code>가 정본인지 확인이 필요하다. 다른 두 볼트도 존재하지만 비어 있다.</li>
+  </ol>
+</section>
+
+<footer>
+  <p>근거 데이터는 2026-09-22 실측이며 커밋 <code>9a40d44</code> 기준으로 재현할 수 있다. 세대·캐리커처 판정은 <code>image-prompt-contract.js</code>의 <code>BOUNDS</code>·<code>CARICATURE</code> 계약에 위임되어 있어, 계약이 바뀌면 판정도 따라온다.</p>
+</footer>
+
+</div>

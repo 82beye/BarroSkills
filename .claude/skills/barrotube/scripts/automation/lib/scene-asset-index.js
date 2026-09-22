@@ -76,6 +76,15 @@ export function indexScriptDir(scriptPath) {
       role: String(scene.role ?? ''),
       palette: (prompt.match(/\[palette:(\w+)\]/) || [, ''])[1],
       prompt,
+      /**
+       * 한국어 대사. 슬롯 주제 분류의 정본이다.
+       *
+       * image_prompt 로 주제를 맞히려 해 봤는데(2026-09-22 실측) 어휘의 대부분이
+       * 조명·분위기어였다 — glow 204 · warm 191 · skyline 78 에 비해 주제어는
+       * chip 15 · oil 16 수준이다. 프롬프트는 **어떻게 보이나**를 적고, 주제는
+       * 대사에 있다. 같은 실측에서 대사 기반 분류의 미분류율이 16% 로 떨어졌다.
+       */
+      text: `${scene.narration ?? ''} ${scene.subtitle_text ?? ''}`.trim(),
       image,
       video: existsSync(video) && statSync(video).size > 0 ? video : null,
       /**
@@ -111,6 +120,7 @@ export function readTargetScenes(scriptPath) {
       role: String(scene.role ?? ''),
       palette: (prompt.match(/\[palette:(\w+)\]/) || [, ''])[1],
       prompt,
+      text: `${scene.narration ?? ''} ${scene.subtitle_text ?? ''}`.trim(),
     };
   }).filter((s) => {
     if (!s.prompt) {

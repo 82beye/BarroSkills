@@ -26,5 +26,26 @@
     "block_palette_conflict": "bullish 그림을 bearish 대본에 붙이지 않는다. 상승 계단이 하락 대본에 붙으면 시청자가 즉시 알아본다. explainer·cta 는 중립이라 섞여도 된다.",
     "block_caricature": "공인 캐리커처가 들어간 컷은 재사용하지 않는다. 2026-09-22 EP-0172 2차 실측에서 씬 005 가 실존 인물 캐리커처 컷(EP-2026-0128 s001)으로 배정됐는데 대본은 다른 인물을 말했다 — 인물 오귀속이다. 748컷 중 17개뿐이라 빼도 후보가 줄지 않는다. 판정은 image-prompt-contract.js 의 CARICATURE.clauseRe.",
     "measured_2026_09_22": "최근 9편을 각각 대상으로 돌려 45컷 전부 배정 성공(미배정 0). 후보 풀은 현행 화풍 443컷 + 캐리커처 17컷 제외. 하루 5컷·쿨다운 30일 기준으로 여유가 있다."
+  },
+  "library": {
+    "manifest": "workspace/assets/scene-library.json",
+    "obsidian_vault": "~/youtube-co/obsidian-vault/BarroTube",
+    "obsidian_dir": "06-Assets",
+    "_notes": "슬롯 분류 결과의 기계 정본은 manifest 다. 옵시디언 문서는 그 렌더일 뿐이고 손으로 고치면 다음 렌더에서 사라진다. 운영자 의도는 아래 backfill.slot_overrides 에 적는다 — 정본은 항상 코드 옆이다. 자유 메모는 <obsidian_dir>/notes.md 에 두고 렌더가 건드리지 않는다."
+  },
+  "backfill": {
+    "enabled": false,
+    "daily_cap": 5,
+    "require_no_fallback_today": true,
+    "grade_order": [
+      "A",
+      "B",
+      "C",
+      "R"
+    ],
+    "prefer_direction": "up",
+    "slot_overrides": {},
+    "_notes": "Phase 3 에서 켠다. enabled=false 인 동안에는 분류·가시성(Phase 1)만 돈다. daily_cap 5 는 에피소드가 쓰는 15컷의 1/3 이하로 잡은 추정치이고 2주 관측 후 조정이 필요하다 — ChatGPT 는 남은 주간 한도를 노출하지 않는다. prefer_direction=up 의 근거: 2026-09-22 슬롯 분류에서 부족 11슬롯 중 6슬롯이 up 이었다(rates/up 2/4 · labor/up 0/3 · energy/up 1/3 · earnings/up 1/3 · fx/up 2/3 · metals/up 0/2). slot_overrides 는 {\"<slot>\": {\"hold\": true}} 형태로 특정 슬롯을 백필에서 제외한다.",
+    "_saturation_note": "포화 슬롯에는 백필하지 않는다. 수량이 아니라 쏠림이 문제이므로 더 구워도 해결되지 않는다 — 작가 프롬프트 쪽 문제다."
   }
 }
