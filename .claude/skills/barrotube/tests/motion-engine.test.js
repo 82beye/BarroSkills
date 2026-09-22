@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { buildSceneComposition, CANVAS, MOVES, moveFor } from '../scripts/automation/lib/motion-composition.js';
-import { MOTION_MIN_DIFF, motionDistance, verifyMotionClip } from '../scripts/automation/lib/motion-verify.js';
+import { MOTION_MIN_DIFF, motionDistance, verifyMotionClip, verifyGrokClip } from '../scripts/automation/lib/motion-verify.js';
 
 const ROOT = join(import.meta.dirname, '..');
 const GEN_SRC = readFileSync(join(ROOT, 'scripts', 'automation', 'generate-motion.js'), 'utf-8');
@@ -86,6 +86,22 @@ function ffmpeg(args) {
   const r = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', ...args], { encoding: 'utf-8' });
   assert.equal(r.status, 0, r.stderr);
 }
+
+test('Grok 원본은 720p·10초·AAC 규격을 파일에서 확인한다', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'bt-grok-spec-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const clip = join(dir, 'clip.mp4');
+  for (const [size, duration, audio, expected] of [
+    ['720x1264', 10, true, true], ['400x736', 6, true, false],
+    ['720x1280', 6, true, false], ['720x1280', 10, false, false],
+  ]) {
+    ffmpeg(['-f', 'lavfi', '-i', `color=s=${size}:r=1`,
+      ...(audio ? ['-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-c:a', 'aac'] : []),
+      '-t', String(duration), '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', clip]);
+    assert.equal(verifyGrokClip(clip).ok, expected, `${size}/${duration}s/audio=${audio}`);
+  }
+  assert.equal(verifyGrokClip(join(dir, 'missing.mp4')).ok, false);
+});
 
 test('정지 클립은 모션 클립으로 인정하지 않는다', (t) => {
   if (spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status !== 0) return t.skip('ffmpeg unavailable');

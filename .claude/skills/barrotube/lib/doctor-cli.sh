@@ -28,23 +28,20 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/guards.sh"
 
 add_result() {
   local key="$1"; local status="$2"; local detail="$3"
-  RESULTS+=("\"${key}\": {\"status\": \"${status}\", \"detail\": \"${detail}\"}")
+  RESULTS+=("$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1])+": "+json.dumps({"status":sys.argv[2],"detail":sys.argv[3]}))' "$key" "$status" "$detail")")
 }
 
-# 1. .env + 필수 키
-if [ -f .env ]; then
-  source .env 2>/dev/null
-  MISSING=()
-  for key in ELEVENLABS_API_KEY GOOGLE_AI_API_KEY YOUTUBE_DATA_API_KEY YOUTUBE_OAUTH_REFRESH_TOKEN; do
-    [ -z "${!key:-}" ] && MISSING+=("$key")
-  done
-  if [ ${#MISSING[@]} -eq 0 ]; then
-    add_result "secrets" "GREEN" "4/4 keys present"
-  else
-    add_result "secrets" "RED" "missing: ${MISSING[*]}"
-  fi
+# 1. 설정은 데이터로 파싱한다. source .env 는 명령 치환까지 실행한다.
+MISSING=$(node --input-type=module -e '
+import { validateSecrets } from "./scripts/automation/config-loader.js";
+console.log(validateSecrets(["ELEVENLABS_API_KEY", "GOOGLE_AI_API_KEY", "YOUTUBE_DATA_API_KEY", "YOUTUBE_OAUTH_REFRESH_TOKEN"]).missing.join(", "));
+')
+if [ $? -ne 0 ]; then
+  add_result "secrets" "RED" "secret validation failed"
+elif [ -n "$MISSING" ]; then
+  add_result "secrets" "RED" "missing: $MISSING"
 else
-  add_result "secrets" "RED" ".env file not found"
+  add_result "secrets" "GREEN" "4/4 keys present"
 fi
 
 # 2. PAPERCLIP_DISABLED
@@ -150,7 +147,40 @@ else
   fi
 fi
 
-# 9. 최근 24h audit 활동
+# 9. 실제 cron 종료 상태·KPI 신선도·게시 조정 잠금·비밀 파일 권한
+RUNTIME_RESULTS=$(python3 - "$BARROTUBE_HOME" <<'PY'
+import datetime, json, os, pathlib, re, subprocess
+root = pathlib.Path(__import__('sys').argv[1])
+def emit(key, status, detail):
+    print(json.dumps(key) + ': ' + json.dumps({'status': status, 'detail': detail}, ensure_ascii=False))
+for routine in ('us-close', 'kr-close', 'realestate', 'growth', 'competitor-scan', 'publish-resume'):
+    label = 'com.barroskills.barrotube.' + routine
+    r = subprocess.run(['launchctl', 'print', f'gui/{os.getuid()}/{label}'], capture_output=True, text=True)
+    code = re.search(r'last exit code = (-?\d+)', r.stdout)
+    running = bool(re.search(r'^\s*state = running$', r.stdout, re.M))
+    status = 'RED' if r.returncode or (code and code[1] != '0' and not running) else 'GREEN'
+    emit('cron_' + routine, status, 'not loaded' if r.returncode else ('running' if running else 'last exit=' + (code[1] if code else 'not yet observed')))
+files = sorted((root / 'workspace/growth/kpi').glob('????-??-??.json'))
+try:
+    card = json.loads(files[-1].read_text())
+    observed = card.get('inputs', {}).get('observed_at')
+    t = datetime.datetime.fromisoformat(observed.replace('Z', '+00:00'))
+    age = (datetime.datetime.now(datetime.timezone.utc) - t).total_seconds() / 3600
+    emit('growth_kpi', 'GREEN' if 0 <= age <= 24 else 'RED', f'observation age={age:.1f}h; performance={card.get("overall")}')
+except (IndexError, AttributeError, ValueError, TypeError, OSError):
+    emit('growth_kpi', 'RED', 'KPI missing or observation freshness unverified')
+locks = sorted((root / 'workspace/episodes').glob('EP-*/platforms/*/80_publish_result.json.lock'))
+pending = [p for p in locks if not p.with_suffix('').exists()]
+emit('publish_reconciliation', 'RED' if pending else 'GREEN', ', '.join(p.parent.parent.parent.name for p in pending) or 'no pending upload locks')
+unsafe = [p.name for p in root.glob('.env*') if p.name != '.env.example' and p.is_file() and p.stat().st_mode & 0o077]
+emit('secret_permissions', 'RED' if unsafe else 'GREEN', ', '.join(unsafe) or 'secret files restricted to owner')
+PY
+ ) || add_result "runtime_checks" "RED" "runtime diagnostic failed"
+while IFS= read -r result; do
+  [ -n "$result" ] && RESULTS+=("$result")
+done <<< "$RUNTIME_RESULTS"
+
+# 10. 최근 24h audit 활동
 AUDIT_TODAY=$(wc -l < "$AUDIT_LOG" 2>/dev/null || echo 0)
 add_result "audit_today" "INFO" "$AUDIT_TODAY entries"
 

@@ -340,6 +340,8 @@ async function runStage(episodeDir, episodeId, stage, dryRun, opts = {}) {
       });
 
       console.log(`  📤 Publishing to YouTube...`);
+      const { assertPublishControls, saveUploadSession } = await import('./publish-youtube.js');
+      assertPublishControls(episodeId);
       const reservation = reservePublishResult(bundle.publishResultFile, { allowExisting: opts.forceRepublish });
       let uploadAttempted = false;
       let resultPersisted = false;
@@ -355,7 +357,8 @@ async function runStage(episodeDir, episodeId, stage, dryRun, opts = {}) {
           credentialEnv: publishChannel.credentialEnv,
           expectedChannelId: publishChannel.expectedYouTubeChannelId,
           channelDefaults: publishChannel.channelDefaults,
-          onUploadAttempt: () => { uploadAttempted = true; },
+          onUploadAttempt: () => { assertPublishControls(episodeId); uploadAttempted = true; },
+          onUploadSession: (session) => saveUploadSession(reservation, session),
         });
         uploadAttempted ||= Boolean(ytResult.videoId);
         publishResult = {

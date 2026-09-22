@@ -40,13 +40,26 @@ import {
 import { dirname, extname, resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import { getSecret } from './config-loader.js';
-import { assertPublishApproval, effectiveYoutubeUpload } from './lib/publish-approval.js';
+import { assertPublishApproval, effectiveYoutubeUpload, sha256Buffer } from './lib/publish-approval.js';
+import { setTimeout as delay } from 'node:timers/promises';
 import { createChannelRegistry } from './lib/channel-registry.js';
 
 const OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const UPLOAD_ENDPOINT = 'https://www.googleapis.com/upload/youtube/v3/videos';
 const THUMBNAIL_ENDPOINT = 'https://www.googleapis.com/upload/youtube/v3/thumbnails/set';
 const ENV_REFERENCE = /^[A-Z][A-Z0-9_]*$/;
+
+export function assertPublishControls(episodeId, root = resolve(import.meta.dirname, '../..')) {
+  if (!/^EP-\d{4}-\d{4}$/.test(episodeId || '')) throw new Error('Invalid publish episode ID');
+  const policy = JSON.parse(readFileSync(join(root, 'config/autonomy-pause.json'), 'utf8'));
+  if (policy.status !== 'active') throw new Error('Publishing paused by operator');
+  const base = join(root, 'workspace/.reject-window', episodeId);
+  if (existsSync(`${base}.flag`)) throw new Error('Publishing rejected by operator');
+  if (existsSync(`${base}.open`)) {
+    const deadline = Date.parse(readFileSync(`${base}.open`, 'utf8').trim());
+    if (!Number.isFinite(deadline) || Date.now() < deadline) throw new Error('Publish reject window is open or unverified');
+  }
+}
 
 function credentialKey(value, label) {
   if (value === undefined || value === null || value === '') {
@@ -82,11 +95,11 @@ export async function getAccessToken(credentialEnv = {}) {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body,
+    signal: AbortSignal.timeout(30_000),
   });
 
   if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`OAuth token refresh failed: ${res.status} ${err}`);
+    throw new Error(`OAuth token refresh failed: HTTP ${res.status}`);
   }
 
   const data = await res.json();
@@ -96,7 +109,7 @@ export async function getAccessToken(credentialEnv = {}) {
 export async function assertOAuthChannel(accessToken, expectedChannelId) {
   if (!expectedChannelId) throw new Error('Expected YouTube channel_id is required for a real upload');
   const url = 'https://www.googleapis.com/youtube/v3/channels?part=id&mine=true&maxResults=50';
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(30_000) });
   if (!res.ok) throw new Error(`YouTube channel identity check failed: ${res.status} ${await res.text()}`);
   const ids = (await res.json()).items?.map(item => item.id).filter(Boolean) || [];
   if (!ids.includes(expectedChannelId)) {
@@ -118,6 +131,7 @@ async function initResumableUpload(accessToken, videoBody, fileSize) {
       'X-Upload-Content-Type': 'video/*',
     },
     body: JSON.stringify(videoBody),
+    signal: AbortSignal.timeout(30_000),
   });
 
   if (!res.ok) {
@@ -127,28 +141,64 @@ async function initResumableUpload(accessToken, videoBody, fileSize) {
 
   const uploadUrl = res.headers.get('location');
   if (!uploadUrl) throw new Error('No Location header returned from resumable init');
+  const parsed = new URL(uploadUrl);
+  if (parsed.origin !== 'https://www.googleapis.com' || !parsed.pathname.startsWith('/upload/youtube/')) {
+    throw new Error('Unexpected resumable upload URL; refusing to send approved media');
+  }
   return uploadUrl;
 }
 
 /**
  * 영상 파일을 Resumable URL에 PUT (단일 청크)
  */
-async function uploadVideoChunk(uploadUrl, buffer, onUploadAttempt) {
-  onUploadAttempt?.();
-  const res = await fetch(uploadUrl, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'video/*',
-      'Content-Length': String(buffer.length),
-    },
-    body: buffer,
-  });
-
-  if (!res.ok && res.status !== 200 && res.status !== 201) {
-    const err = await res.text();
-    throw new Error(`Upload failed: ${res.status} ${err}`);
+async function uploadVideoChunk(uploadUrl, buffer, accessToken, onUploadAttempt) {
+  let offset = 0;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    onUploadAttempt?.();
+    let res;
+    try {
+      res = await fetch(uploadUrl, {
+        method: 'PUT', redirect: 'error',
+        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'video/*',
+          'Content-Length': String(buffer.length - offset),
+          'Content-Range': `bytes ${offset}-${buffer.length - 1}/${buffer.length}` },
+        body: buffer.subarray(offset), signal: AbortSignal.timeout(600_000),
+      });
+    } catch { /* Ask the SAME session what arrived; never start a second upload. */ }
+    if (res?.status === 200 || res?.status === 201) return res.json();
+    if (res && res.status !== 308 && ![500, 502, 503, 504].includes(res.status)) {
+      throw new Error(`Upload failed: HTTP ${res.status}; session preserved for reconciliation`);
+    }
+    await delay(1000 * 2 ** attempt);
+    res = await fetch(uploadUrl, {
+      method: 'PUT', redirect: 'error',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Length': '0',
+        'Content-Range': `bytes */${buffer.length}` },
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (res.status === 200 || res.status === 201) return res.json();
+    if (res.status !== 308) throw new Error(`Upload status check failed: HTTP ${res.status}; session preserved`);
+    const range = res.headers.get('range');
+    const match = range && /^bytes=0-(\d+)$/.exec(range);
+    if (range && !match) throw new Error('Invalid resumable upload Range');
+    const next = match ? Number(match[1]) + 1 : 0;
+    if (next < offset || next >= buffer.length) throw new Error('Unexpected resumable upload offset; reconcile session');
+    offset = next;
+    const retryAfter = res.headers.get('retry-after');
+    if (retryAfter) {
+      const seconds = /^\d+$/.test(retryAfter) ? Number(retryAfter) : Math.ceil((Date.parse(retryAfter) - Date.now()) / 1000);
+      if (!Number.isFinite(seconds) || seconds > 60) throw new Error('Upload retry deferred by server; session preserved');
+      if (seconds > 0) await delay(seconds * 1000);
+    }
   }
-  return res.json();
+  throw new Error('Upload remains incomplete; session preserved for reconciliation');
+}
+
+export function saveUploadSession(reservation, session) {
+  const lock = JSON.parse(readFileSync(reservation.lockPath, 'utf8'));
+  const tmp = `${reservation.lockPath}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify({ ...lock, ...session }, null, 2), { mode: 0o600, flag: 'wx' });
+  renameSync(tmp, reservation.lockPath);
 }
 
 /**
@@ -185,6 +235,7 @@ export async function publishYouTube({
   expectedChannelId = null,
   channelDefaults = {},
   onUploadAttempt = null,
+  onUploadSession = null,
 }) {
   // Copy every upload input before the first await. Approval callers pass the
   // exact verified buffers, so later filesystem changes cannot alter bytes sent.
@@ -232,10 +283,13 @@ export async function publishYouTube({
 
   console.log('📤 Initializing resumable upload...');
   const uploadUrl = await initResumableUpload(accessToken, videoBody, fileSize);
+  onUploadSession?.({ upload_url: uploadUrl, file_size: fileSize, channel_id: expectedChannelId,
+    video_sha256: sha256Buffer(approvedVideo), metadata_sha256: sha256Buffer(JSON.stringify(videoBody)) });
 
   console.log(`📤 Uploading video (${(fileSize / 1024 / 1024).toFixed(2)} MB)...`);
-  const video = await uploadVideoChunk(uploadUrl, approvedVideo, onUploadAttempt);
+  const video = await uploadVideoChunk(uploadUrl, approvedVideo, accessToken, onUploadAttempt);
   const videoId = video.id;
+  if (typeof videoId !== 'string' || !videoId) throw new Error('Upload response has no video ID; reconcile saved session');
   console.log(`✅ Uploaded: video_id=${videoId}`);
 
   // 썸네일 (선택)
@@ -410,6 +464,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       if (opts.thumbnail && resolve(opts.thumbnail) !== verified.thumbnailPath) {
         throw new Error('--thumbnail does not match the thumbnail selected from approved metadata');
       }
+      assertPublishControls(opts['episode-id']);
       resultLock = reservePublishResult(resolve(opts.out));
     }
     const result = await publishYouTube({
@@ -422,7 +477,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       credentialEnv,
       expectedChannelId,
       channelDefaults,
-      onUploadAttempt: () => { uploadAttempted = true; },
+      onUploadAttempt: () => { assertPublishControls(opts['episode-id']); uploadAttempted = true; },
+      onUploadSession: (session) => saveUploadSession(resultLock, session),
     });
     uploadAttempted ||= Boolean(!opts.dryRun && result.videoId);
     console.log('\n📊 Result:');

@@ -30,6 +30,14 @@ test('spoken numbers are counted, index names spelled in Korean are not', () => 
   // 보통 낱말이 수사로 잡히면 안 된다.
   assert.equal(countSpokenNumbers('일명 그림자 금융이라 불립니다').length, 0);
   assert.equal(countSpokenNumbers('만일에 대비해야 합니다').length, 0);
+
+  // 앞이 한글이면 그 한 음절은 수사가 아니라 조사다. 이걸 세면 멀쩡한 문장이
+  // 씬 상한에 걸려 자동 재집필이 통째로 막힌다 (EP-2026-0128 실사례).
+  assert.equal(countSpokenNumbers('수급 반전이 달러 재료를 압도했다').length, 0, '"…반전이 달러" 의 조사 이');
+  assert.equal(countSpokenNumbers('전망이 원 단위로 갈린다').length, 0, '"…전망이 원" 의 조사 이');
+  // 다만 진짜 수사는 문장 첫머리에서도 계속 세야 한다.
+  assert.equal(countSpokenNumbers('이 퍼센트 올랐습니다').length, 1);
+  assert.equal(countSpokenNumbers('금리는 오 퍼센트입니다').length, 1);
 });
 
 test('a scene may speak only a couple of numbers — the screen shows the rest for free', () => {
@@ -127,4 +135,164 @@ test('the gate accepts most of what the channel already ships', () => {
   }
   const rate = pass / files.length;
   assert.ok(rate > 0.5, `기존 대본 통과율이 ${Math.round(rate * 100)}% 로 떨어졌다 — 규칙이 과하다`);
+});
+
+
+test('hook-too-long — 훅 10초 상한, 되돌리되 막지는 않는다', async () => {
+  const { validateScript, HOOK_MAX_SECONDS } = await import('../scripts/automation/lib/script-quality-contract.js');
+  const body = (over = {}) => ([
+    { scene_id: '001', role: 'hook', narration: '코스피가 크게 올랐습니다. 왜일까요?', target_seconds: 9, ...over },
+    { scene_id: '002', role: 'context', narration: '배경입니다.', target_seconds: 13 },
+    { scene_id: '003', role: 'insight', narration: '수급 때문입니다.', target_seconds: 13 },
+    { scene_id: '004', role: 'implication', narration: '그래서 이런 뜻입니다.', target_seconds: 13 },
+    { scene_id: '005', role: 'cta', narration: '팔로우하세요.', target_seconds: 12 },
+  ]);
+
+  assert.equal(validateScript(body()).filter((i) => i.rule === 'hook-too-long').length, 0, '9초는 통과');
+
+  const long = validateScript(body({ target_seconds: HOOK_MAX_SECONDS + 0.5 }))
+    .filter((i) => i.rule === 'hook-too-long');
+  assert.equal(long.length, 1, '상한 초과는 잡힌다');
+  assert.equal(long[0].severity, 'warn', '게이트를 막지는 않는다');
+  assert.equal(long[0].rewrite, true, '한 번은 되돌린다');
+
+  // 3분 포맷은 표본이 2편뿐이라 이 규칙을 적용하지 않는다 — 근거 없는 확대 금지.
+  const longFormat = [
+    { scene_id: '001', role: 'hook', narration: '훅.', target_seconds: 24 },
+    ...Array.from({ length: 6 }, (_, i) => ({
+      scene_id: `00${i + 2}`, role: 'context', narration: '본문.', target_seconds: 25,
+    })),
+  ];
+  assert.equal(
+    validateScript(longFormat).filter((i) => i.rule === 'hook-too-long').length, 0,
+    '총 90초 초과 대본에는 적용하지 않는다',
+  );
+
+  // 계약 블록의 숫자가 검증기와 갈라지면 안 된다
+  const { buildAnalystContractBlock } = await import('../scripts/automation/lib/script-quality-contract.js');
+  assert.match(buildAnalystContractBlock(5), new RegExp(`훅\\(씬 1\\)은 ${HOOK_MAX_SECONDS}초`));
+});
+
+/**
+ * 조건부 인과 「X-면 … Y도/따라 …」는 이 채널의 주력 서술이다.
+ * 2026-09-16 EP-2026-0156 씬 004 「미국 금리가 오르면 국내 은행채와 주담대 금리도 따라
+ * 오르고」가 no-mechanism 으로 잡혔다 — 전이 메커니즘 그 자체인데 오탐이었다.
+ * 조건 어미만으로는 과탐하므로 결과절 표지가 따라올 때만 인과로 센다.
+ */
+import { MECHANISM_CONDITIONAL, MECHANISM_MARKERS as MM, MECHANISM_VERB_JA as MV }
+  from '../scripts/automation/lib/script-quality-contract.js';
+
+const causal = (t) => MM.some((m) => t.includes(m)) || MV.test(t) || MECHANISM_CONDITIONAL.test(t);
+
+test('조건부 인과를 인과로 센다', () => {
+  assert.ok(causal('미국 금리가 오르면 국내 은행채와 주택담보대출 금리도 따라 오르고'));
+  assert.ok(causal('유가가 오르면 항공주도 같이 눌립니다'));
+  assert.ok(causal('금리가 뛰면 성장주가 덩달아 밀립니다'));
+});
+
+test('결과절 없는 조건 어미는 인과가 아니다 — 과탐 방지', () => {
+  assert.equal(causal('어쩌면 좋을까요'), false);
+  assert.equal(causal('이렇게 하면 됩니다'), false);
+});
+
+test('전이 계열 동사도 인과다', () => {
+  assert.ok(causal('미 금리 상승이 국내로 전이됩니다'));
+  assert.ok(causal('충격이 채권시장으로 옮겨붙었습니다'));
+});
+
+test('수치 나열은 여전히 인과가 아니다', () => {
+  assert.equal(causal('코스피는 1.76% 내렸고 코스닥은 2.1% 내렸습니다'), false);
+});
+
+/**
+ * 답할 자리에서 유보하면 회차가 껍데기가 된다.
+ *
+ * 2026-09-16 EP-2026-0157: 제목 「이란 휴전설에도 방산주가 급등한 이유」로 나갔는데
+ * insight 씬이 「정확한 상승 배경은 후속 보도로 다시 확인이 필요합니다」였다.
+ * 원본(rev0)에는 「휴전 뒤 중동 재건과 무기 현대화 수요가 열릴 거란 기대 때문에
+ * 매수세가 몰렸습니다」라는 답이 있었는데 팩트체크 재작성이 지워 버렸다.
+ * 팩트체크가 지울 것은 '틀린 것'이지 '검증 안 되는 것'이 아니다 —
+ * 검증이 안 되면 해석으로 표시하면 된다("…라는 해석이 나옵니다").
+ */
+import { validateScript as vs, DODGE_PHRASES } from '../scripts/automation/lib/script-quality-contract.js';
+
+const dodgeScene = (role, narration) => ({
+  scene_id: '003', role, narration, target_seconds: 12, subtitle_text: '', emphasis_tokens: ['a'],
+});
+const dodgeIssues = (s) => vs([s]).filter((i) => i.rule === 'dodge-in-analysis');
+
+test('분석 씬의 유보 문장은 error 다 — 게시를 막는다', () => {
+  const bad = dodgeScene('insight', '방산주가 오늘 큰 폭으로 올랐습니다. 정확한 상승 배경은 후속 보도로 다시 확인이 필요합니다.');
+  const hits = dodgeIssues(bad);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].severity, 'error', 'warn 이면 그대로 나간다 — EP-0157 이 그렇게 나갔다');
+});
+
+test('해석으로 표시한 설명은 통과한다 — 이게 올바른 수정 방향', () => {
+  const good = dodgeScene('insight', '휴전 뒤 재건과 무기 현대화 수요가 열릴 거란 기대가 작용했다는 해석이 나옵니다.');
+  assert.equal(dodgeIssues(good).length, 0);
+  const good2 = dodgeScene('insight', '시장은 종전보다 재건 수요를 먼저 본 것으로 보입니다.');
+  assert.equal(dodgeIssues(good2).length, 0);
+});
+
+test('훅의 유보는 잡지 않는다 — 훅은 질문을 던지는 자리다', () => {
+  const hook = dodgeScene('hook', '왜 올랐는지는 아직 알 수 없습니다. 그런데 시장은 이미 답을 냈습니다.');
+  assert.equal(dodgeIssues(hook).length, 0);
+});
+
+test('유보 문구 목록이 실제 사고 문장을 덮는다', () => {
+  const real = '정확한 상승 배경은 후속 보도로 다시 확인이 필요합니다';
+  assert.ok(DODGE_PHRASES.some((d) => real.includes(d)), '실제로 나간 문장을 못 잡으면 의미가 없다');
+});
+
+/**
+ * 「오늘 지수가 몇 % 움직였다」로 훅을 열면 이 채널이 파는 게 사라진다.
+ * 운영자 지시(2026-09-16): "단순 영향이 없는 지수 수치는 에피소드 주제가 되면 안 된다."
+ *
+ * generate-script 의 규칙 10a/10b 는 프롬프트 지시일 뿐이라 지켜졌는지 확인할 수단이 없었다.
+ * 레벨 돌파·N년래 최고는 등락률이 아니라 사건이므로 예외다.
+ */
+import { spokenToNumber, INDEX_MOVE_PCT_FLOOR } from '../scripts/automation/lib/script-quality-contract.js';
+
+const hook = (n) => ({ scene_id: '001', role: 'hook', narration: n, target_seconds: 10, subtitle_text: '', emphasis_tokens: ['a'] });
+const idxIssues = (n) => vs([hook(n)]).filter((i) => i.rule === 'index-move-as-subject');
+
+test('낭독체 소수를 숫자로 읽는다', () => {
+  assert.equal(spokenToNumber('일점삼칠'), 1.37);
+  assert.equal(spokenToNumber('사점구칠'), 4.97);
+  assert.equal(spokenToNumber('십점칠영'), 10.7);
+  assert.equal(spokenToNumber('그냥말'), null);
+});
+
+test('임계 미만 지수 등락으로 훅을 열면 되돌린다', () => {
+  const hits = idxIssues('코스피가 오늘 일점삼칠 퍼센트 올랐습니다. 그런데 개인은 팔았습니다.');
+  assert.equal(hits.length, 1, `1.37% 는 임계 ${INDEX_MOVE_PCT_FLOOR}% 미만이라 주제가 못 된다`);
+  assert.equal(hits[0].rewrite, true, '막지는 않되 한 번 되돌린다');
+});
+
+test('임계를 넘는 등락은 통과한다', () => {
+  assert.equal(idxIssues('코스피가 오늘 삼점이육 퍼센트 빠졌습니다.').length, 0, '3.26% 는 실제 사건이다');
+});
+
+test('레벨 돌파·N년래 최고는 등락률이 아니라 사건이다', () => {
+  assert.equal(idxIssues('미국 국채금리가 오 퍼센트를 뚫으면서 주식이 밀렸습니다.').length, 0);
+  assert.equal(idxIssues('코스피가 삼 년 만에 최고를 찍었습니다.').length, 0);
+});
+
+test('지수가 주어가 아니면 걸리지 않는다', () => {
+  assert.equal(idxIssues('개인이 일조 칠천억을 파는 동안 기관 혼자 사들였습니다.').length, 0);
+});
+
+/**
+ * 대조의 앞쪽 절로 쓰인 수치는 '주어'가 아니다.
+ * 2026-09-16 EP-2026-0158 실측 오탐: 「코스피가 1.37% 올랐지만 개인도 외국인도 팔았습니다」의
+ * 주제는 등락률이 아니라 괴리인데 검사기가 잡았다. 이걸 안 빼면 멀쩡한 훅이 재작성을 한 번 태운다.
+ */
+test('대조 구문의 지수 수치는 주어가 아니다', () => {
+  assert.equal(idxIssues('코스피가 오늘 일점삼칠 퍼센트 올랐지만 개인도 외국인도 주식을 팔았습니다.').length, 0);
+  assert.equal(idxIssues('코스피가 오늘 일점삼칠 퍼센트 올랐는데 개인 계좌는 그대로였습니다.').length, 0);
+});
+
+test('대조 없이 등락률만 나열하면 여전히 걸린다', () => {
+  assert.equal(idxIssues('코스피가 오늘 일점삼칠 퍼센트 올랐습니다. 상승 마감했습니다.').length, 1);
 });

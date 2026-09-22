@@ -46,8 +46,22 @@ function buildSystemPrompt(format, seriesInfo, publicFiguresInfo = null) {
   // 시리즈 표시명: seriesInfo.series_name (series.json에서 동적 로드) 또는 series_id 자체.
   // 이전 코드는 sp500을 hardcode해서 다른 시리즈에도 sp500 라벨이 박혔음 — 이를 동적으로 교체.
   const seriesName = seriesInfo?.series_name || seriesInfo?.series_id || '';
+  // 제목이 무엇을 말해야 하는지는 config/growth.json 의 content_policy 가 정본이다.
+  // 2026-09-16 영상별 구독 실측: '왜·역설·숨은 원인' 구조가 있으면 구독/1k뷰 2.12,
+  // 없으면 0.63 (26편). 조회는 수치 나열로도 받지만 구독은 안 따라온다 —
+  // 최근 8편 중 7편이 수치 나열이었고 그 8편의 순증 구독 합이 1 이었다.
+  // 북극성이 weekly_net_subs 이므로 이 규칙이 경쟁 채널 조회 lift 보다 위다.
+  const cp = loadContentPolicy();
+  const th = cp?.index_move_thresholds ?? {};
+  const causalRule = cp?.title_requires_causal_clause
+    ? ` · 제목은 반드시 "왜"를 말한다 — 통념과 어긋난 것/반대로 움직인 것/숨은 원인 중 하나를 제목 안에서 주장하라`
+      + ` (예: "…인데도 …", "진짜 이유는 …", "금리 아니라 …")`
+      + ` · **일상 등락률**(오늘 X% 올랐다/내렸다)을 제목의 주어로 쓰지 마라 — 지수 ${th.index_pct}%·환율 ${th.fx_pct}%·원자재 ${th.commodity_pct}%·금리 ${th.rate_bp}bp·개별종목 ${th.single_name_pct}% 미만은 뉴스가 아니다`
+      + ` · 단, 레벨 돌파(금리 5%·유가 100달러·환율 1,400원 같은 라운드 넘버 돌파/붕괴)·N년래 최고최저·기간 누적 급등·연속기록은 등락폭과 무관하게 **반드시 제목의 메인**이다. 여럿이면 레벨돌파 > N년래최고 > 기간누적 > 연속기록 순`
+      + ` · 시황 라벨([美마감]·[속보] 등)로 시작하지 마라 — 그 자리에 "왜"가 들어가야 한다`
+    : '';
   const titleHint = isShorts
-    ? "100자 이내, primary keyword 앞 30자에, '#Shorts' 포함 권장"
+    ? `100자 이내, primary keyword 앞 30자에, '#Shorts' 포함 권장${causalRule}`
     : `70자 이내, primary keyword 앞 30자, 시리즈 번호 포함 예: '[${seriesName} ${seriesInfo?.series_episode || 1}/${seriesInfo?.series_total || 5}]', #Shorts 사용 금지`;
   const shortsTagValue = isShorts ? 'true' : 'false';
   const brandHashtags = isShorts ? '#BarroTube, #60초경제' : '#BarroTube, #3분경제, #경제수업';
@@ -140,13 +154,69 @@ async function callGemini(systemPrompt, userPrompt, model = DEFAULT_MODEL, maxTo
   return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
 }
 
+/**
+ * 목표 공개 시각이 지났다면, 얼마나 지났는지(시간). 아직 안 지났으면 null.
+ *
+ * 이 기계는 노트북이라 예약 시각을 놓치는 일이 구조적으로 생긴다 — 일과 중(08~18시)
+ * 잠들어 있다가 늦게 깨면 10:00 목표가 13:00 에 도달한다. 그때 선택지는 둘뿐이다:
+ *   (a) private 로 남긴다 → 아무도 안 보는 사이 영영 묻힌다 (텔레그램도 죽어 있다)
+ *   (b) 즉시 공개한다     → 늦었지만 나간다
+ * 뉴스 채널이므로 조금 늦은 건 (b)가 맞고, 너무 늦으면 내용이 죽었으니 (a)가 맞다.
+ * 경계는 config/routines.json 의 guards.publish_late_grace_hours.
+ */
+function hoursLate(input, now) {
+  const s = String(input ?? '').trim();
+  let target = null;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) target = new Date(s);
+  else {
+    const m = s.match(/^(?:\+(\d)d\s+)?(\d{1,2}):(\d{2})$/);
+    if (!m) return null;
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(now);
+    const day = m[1]
+      ? new Date(Date.parse(`${today}T00:00:00Z`) + Number(m[1]) * 86400_000).toISOString().slice(0, 10)
+      : today;
+    target = new Date(`${day}T${m[2].padStart(2, '0')}:${m[3]}:00+09:00`);
+  }
+  if (!target || Number.isNaN(target.getTime())) return null;
+  const late = (now.getTime() - target.getTime()) / 3600_000;
+  return late > 0 ? late : null;
+}
+
+/** config/growth.json 의 content_policy. 없으면 null — 규칙 없이 기존 동작. */
+function loadContentPolicy() {
+  try {
+    const p = join(resolve(import.meta.dirname, '../..'), 'config', 'growth.json');
+    if (!existsSync(p)) return null;
+    return JSON.parse(readFileSync(p, 'utf-8')).content_policy ?? null;
+  } catch { return null; }
+}
+
+/** 늦은 게시를 즉시 내보낼 유예 시간(h). 기본 6 — 반나절 넘으면 뉴스가 죽는다. */
+function loadLateGraceHours() {
+  try {
+    const p = join(resolve(import.meta.dirname, '../..'), 'config', 'routines.json');
+    const v = JSON.parse(readFileSync(p, 'utf-8'))?.guards?.publish_late_grace_hours;
+    return Number.isFinite(v) && v >= 0 ? v : 6;
+  } catch { return 6; }
+}
+
 function parseFrontmatter(md) {
   const m = md.match(/^---\n([\s\S]*?)\n---/);
   return m ? parseYAML(m[1]) : null;
 }
 
 /**
- * "HH:MM" (KST) → "YYYY-MM-DDTHH:MM:00+09:00". 완전한 ISO8601 이면 그대로 통과.
+ * "HH:MM" 또는 "+Nd HH:MM" (KST) → "YYYY-MM-DDTHH:MM:00+09:00". 완전한 ISO8601 이면 그대로 통과.
+ *
+ * "+Nd" 는 **만든 날과 공개하는 날을 떼어 놓기 위한** 것이다. 2026-09-14 실측(채널
+ * Analytics 09-01~09-11): 하루에 2편을 올린 날 채널 총 조회 중앙값 1249(n=5), 3편을 올린
+ * 날 1239(n=3) — 셋째 편은 도달을 **넓히지 않고 같은 파이를 나눈다**(편당 625 → 413).
+ * 그런데 금요일만 us-close·realestate·kr-close 가 겹쳐 3편이고 토·일은 1편씩이라, 주 13편
+ * 중 한 편이 구조적으로 낭비되고 있었다. realestate 를 토요일 공개로 미루면 같은 13편으로
+ * 주간 도달이 +3.7~10.7% 늘어난다(제작 추가 0).
+ * 크론 자체를 토요일로 옮기지 않는 이유 — 한국부동산원 주간지수가 목요일 발표라 금요일
+ * 생성이 가장 신선하고, 금 10:00 은 kr-close(16:00) 와 겹치지 않도록 2026-09-10 에 고른
+ * 자리다. 생성은 그대로 두고 공개만 미루는 편이 두 제약을 다 지킨다.
  *
  * 달력일은 실행 머신 TZ 가 아니라 Asia/Seoul 기준으로 잡는다 — launchd plist 에 TZ 가
  * 빠져 있던 이력이 있어 머신 TZ 를 신뢰하지 않는다.
@@ -159,19 +229,32 @@ export function resolvePublishAt(input, now = new Date()) {
   if (!s) return null;
 
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) {
-    return Number.isNaN(new Date(s).getTime()) ? null : s;
+    const at = new Date(s);
+    if (Number.isNaN(at.getTime())) return null;
+    // 전체 ISO 도 **과거 검사를 받아야 한다.** 예전에는 여기서 그대로 통과시켰고,
+    // HH:MM 경로에만 있던 5분 가드를 건너뛰었다. 2026-09-16 EP-2026-0156 실측:
+    // 07:18 에 시작하며 10:00 을 목표로 넘겼는데 Grok 실패·폴백으로 13:09 에야 업로드돼
+    // publishAt 이 3시간 전이 됐다 — 유튜브가 즉시 공개해 버렸고, 파이프라인은
+    // 그걸 `status: scheduled` 로 보고했다. 의도한 시각도 아니고 보고도 틀렸다.
+    if (at.getTime() - now.getTime() < 5 * 60 * 1000) return null;
+    return s;
   }
 
-  const m = s.match(/^(\d{1,2}):(\d{2})$/);
+  const m = s.match(/^(?:\+(\d)d\s+)?(\d{1,2}):(\d{2})$/);
   if (!m) return null;
-  const hh = Number(m[1]);
-  const mm = Number(m[2]);
+  const plusDays = m[1] ? Number(m[1]) : 0;
+  const hh = Number(m[2]);
+  const mm = Number(m[3]);
   if (hh > 23 || mm > 59) return null;
 
+  // 달력일을 KST 로 잡은 뒤 일수를 더한다. UTC 자정 기준으로 더해야 서머타임 없는
+  // KST 에서 날짜가 어긋나지 않는다.
   const today = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(now);
-  const iso = `${today}T${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:00+09:00`;
+  const day = plusDays === 0 ? today
+    : new Date(Date.parse(`${today}T00:00:00Z`) + plusDays * 86400_000).toISOString().slice(0, 10);
+  const iso = `${day}T${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:00+09:00`;
 
   const when = new Date(iso);
   if (Number.isNaN(when.getTime())) return null;
@@ -354,9 +437,18 @@ async function main() {
     if (publishAt) {
       meta.publishAt = publishAt;
       console.log(`  ⏰ 예약 공개: ${publishAt}`);
-    } else if (/^\d{1,2}:\d{2}$/.test(String(publishAtArg).trim())) {
-      // 형식은 맞는데 null → 이미 지난 시각. 예약 없이 private 로 남는다는 걸 분명히 알린다.
-      console.warn(`  ⚠ 예약 시각 ${publishAtArg} (KST) 이 이미 지났습니다 — 예약 없이 private 로 둡니다. 운영자 확인 필요.`);
+    } else if (hoursLate(publishAtArg, new Date()) !== null) {
+      // 목표를 놓쳤다. 얼마나 놓쳤는지로 갈린다.
+      const late = hoursLate(publishAtArg, new Date());
+      const grace = loadLateGraceHours();
+      if (late <= grace) {
+        meta.publishAt = null;
+        meta.publish_late = { target: String(publishAtArg), hours_late: Number(late.toFixed(2)), action: 'publish_now' };
+        console.warn(`  ⏱  목표 ${publishAtArg} 를 ${late.toFixed(1)}시간 놓쳤습니다 (유예 ${grace}h 이내) — 예약 없이 **즉시 공개**합니다.`);
+      } else {
+        meta.publish_late = { target: String(publishAtArg), hours_late: Number(late.toFixed(2)), action: 'hold_private' };
+        console.warn(`  ⚠ 목표 ${publishAtArg} 를 ${late.toFixed(1)}시간 놓쳤습니다 (유예 ${grace}h 초과) — 내용이 낡았을 수 있어 private 로 둡니다. 운영자 확인 필요.`);
+      }
     } else {
       console.warn(`  ⚠ --publish-at 형식을 해석하지 못해 무시합니다: ${publishAtArg}`);
     }
@@ -427,6 +519,20 @@ async function main() {
   // 어느 엔진이 만들었는지 남긴다 — 폴백이 일어난 EP 를 사후에 가릴 수 있어야 한다.
   meta.generated_by = `metadata-writer (${engineUsed})`;
 
+  // EXP-02-distinct-headline: 최근 3일 제목과 같은 수치를 또 쓰면 표시해 둔다.
+  try {
+    const idxPath = join(resolve(import.meta.dirname, '../..'), 'workspace', 'growth', 'channel', 'videos.json');
+    if (existsSync(idxPath) && meta.title) {
+      const hit = findHeadlineCollision(meta.title, JSON.parse(readFileSync(idxPath, 'utf-8')), new Date());
+      if (hit) {
+        meta.headline_conflict = { shared: hit.shared, with: hit.title, published_at: hit.publishedAt };
+        console.warn(`   ⚠ 제목 수치 충돌: ${hit.shared.join(', ')} — 최근 회차 「${String(hit.title).slice(0, 40)}」 와 겹친다`);
+      }
+    }
+  } catch (e) {
+    console.warn(`   ⚠ 제목 충돌 검사 건너뜀: ${e.message}`);
+  }
+
   const outPath = join(baseDir, '70_publish_meta.json');
   writeFileSync(outPath, JSON.stringify(meta, null, 2), 'utf-8');
 
@@ -434,6 +540,36 @@ async function main() {
   console.log(`   Title: ${meta.title}`);
   console.log(`   shortsTag: ${meta.shortsTag}`);
   console.log(`   Tags: ${meta.tags?.length || 0}개`);
+}
+
+/**
+ * 최근 회차가 이미 쓴 수치를 제목에 또 박았는지 본다.
+ *
+ * 2026-09-14 실측(48h 조회, 2026-09-01~09-11): 3일 안에 같은 수치를 제목에 반복한
+ * 두 번째 영상은 -68%(고용·코스피 1.64%) · -64%(코스피 4.61%) · -32%(브렌트유 100달러)
+ * 였다. 반대로 같은 사건을 다른 각도·다른 수치로 연 회차는 +67% · +48% 였다.
+ * 하루 두 편(us-close·kr-close)을 돌리는 채널이라 이 충돌이 구조적으로 생긴다.
+ *
+ * 막지는 않는다 — 제목 하나 때문에 게시를 멈추면 손실이 더 크다. 표시만 남겨
+ * 거부창에서 사람이 판단하게 하고, 주간 회고가 EXP-02 를 실측할 근거로 쓴다.
+ */
+const NUM_TOKEN = /\d+(?:[.,]\d+)?\s*(?:%|퍼센트|달러|원|bp|배|선|조|억|만|포인트)/g;
+
+export function headlineNumberTokens(title) {
+  return new Set((String(title || '').match(NUM_TOKEN) || []).map((t) => t.replace(/\s+/g, '')));
+}
+
+export function findHeadlineCollision(title, videosIndex, now, { days = 3 } = {}) {
+  const mine = headlineNumberTokens(title);
+  if (!mine.size) return null;
+  const cutoff = now.getTime() - days * 86400_000;
+  for (const v of Object.values(videosIndex?.videos ?? {})) {
+    const t = Date.parse(v?.publishedAt ?? '');
+    if (!Number.isFinite(t) || t < cutoff || t > now.getTime()) continue;
+    const shared = [...headlineNumberTokens(v.title)].filter((x) => mine.has(x));
+    if (shared.length) return { title: v.title, publishedAt: v.publishedAt, shared };
+  }
+  return null;
 }
 
 // 직접 실행일 때만 main. resolvePublishAt 을 테스트에서 import 할 수 있게 한다.

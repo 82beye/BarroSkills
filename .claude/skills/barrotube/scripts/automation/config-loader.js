@@ -10,7 +10,7 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 
 const PROJECT_ROOT = resolve(import.meta.dirname, '../..');
 const ENV_PATH = resolve(PROJECT_ROOT, '.env');
@@ -58,9 +58,9 @@ export function loadEnv(path = ENV_PATH) {
  */
 function getFromKeychain(serviceName) {
   try {
-    return execSync(
-      `security find-generic-password -s "${serviceName}" -w 2>/dev/null`,
-      { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+    return execFileSync(
+      'security', ['find-generic-password', '-s', serviceName, '-w'],
+      { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10_000 }
     ).trim();
   } catch {
     return null;
@@ -75,6 +75,7 @@ function getFromKeychain(serviceName) {
  * @returns {string|null}
  */
 export function getSecret(key) {
+  if (!/^[A-Z][A-Z0-9_]*$/.test(key)) throw new Error('Invalid secret key name');
   loadEnv();
 
   // 1. .env 파일
@@ -112,7 +113,7 @@ export function validateSecrets(requiredKeys) {
       sources[key] = '.env';
     } else if (process.env[key]) {
       sources[key] = 'env';
-    } else if (getFromKeychain(key)) {
+    } else if (getSecret(key)) {
       sources[key] = 'keychain';
     } else {
       missing.push(key);
@@ -179,9 +180,7 @@ if (import.meta.url === `file://${scriptPath}`) {
   } else if (cmd === 'get' && process.argv[3]) {
     const val = getSecret(process.argv[3]);
     if (val) {
-      // 보안: 앞 4자만 표시
-      const masked = val.slice(0, 4) + '•'.repeat(Math.max(0, val.length - 4));
-      console.log(`${process.argv[3]}: ${masked}`);
+      console.log(`${process.argv[3]}: present`);
     } else {
       console.log(`${process.argv[3]}: not found`);
     }

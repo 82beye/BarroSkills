@@ -71,5 +71,11 @@
       "pastebin.com",
       "hastebin.com"
     ]
-  }
+  },
+  "rss_feeds": [
+    "https://www.yna.co.kr/rss/economy.xml",
+    "https://www.hankyung.com/feed/economy",
+    "https://rss.etnews.com/Section901.xml"
+  ],
+  "_rss_feeds_comment": "2026-09-16 신설. 이 필드가 없어서 fallback 2개만 쓰고 있었고 그중 매일경제(mk.co.kr/rss/30000001)는 영구 403 이다. 실측으로 200 + item 수를 확인한 것만 넣는다 (연합 120건 · 한경 50건 · 전자신문 30건). 피드를 추가할 때는 반드시 `curl -sL -o /dev/null -w '%{http_code}' <url>` 로 200 인지, item 이 실제로 있는지 먼저 확인할 것 — biz.chosun 은 200 을 주지만 item 이 0 이라 뺐다."
 }

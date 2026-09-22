@@ -291,7 +291,12 @@ test('a browser pass that runs out of context is topped up scene by scene', () =
 
   // 무진전이면 멈춰야 한다 — 같은 씬에 codex 를 무한히 던지면 타임아웃까지 태운다.
   assert.match(source, /TOPUP_STALLED" -lt 2/);
-  assert.match(source, /BT_CHATGPT_TOPUP_MAX:-6/);
+  // 상한은 씬 수에서 나와야 한다. 6 으로 고정돼 있던 동안 7씬 슬롯은 완주가 산술적으로
+  // 불가능했다 — 첫 패스가 0장이면 남은 6회로 7장을 못 채운다 (2026-09-10 EP-2026-0147:
+  // 1/6~6/6 을 다 쓰고 5/7 에서 멈췄다).
+  assert.match(source, /BT_CHATGPT_TOPUP_MAX:-\$\(\( SLOT_SCENES \+ 2 \)\)/,
+    'top-up 상한은 SLOT_SCENES 에서 파생돼야 한다');
+  assert.ok(!/BT_CHATGPT_TOPUP_MAX:-\d/.test(source), '고정 숫자 상한은 7씬 슬롯을 막는다');
   // 한 번에 한 씬만. 프롬프트가 다시 커지면 같은 소진에 빠진다.
   assert.match(source, /씬 \$\{NEXT_SCENE\} 이미지 한 장만/);
 });
@@ -313,7 +318,8 @@ test('every autonomy guard is either read by the live pipeline or classified', (
   // Paperclip 전용. PAPERCLIP_DISABLED=1 이라 현행 크론 경로에서는 죽은 노브다.
   const legacyOnly = ['max_publish_per_day', 'max_new_series_per_day', 'accept_new_issues'];
 
-  const unclassified = guards.filter((k) =>
+  // '_' 로 시작하는 키는 사람용 주석이다 — 읽는 코드가 있을 리 없다.
+  const unclassified = guards.filter((k) => !k.startsWith('_')).filter((k) =>
     !live.includes(k) && !(k in hardcodedOn) && !legacyOnly.includes(k));
   assert.deepEqual(unclassified, [],
     `guard 가 늘었는데 읽는 코드도 분류도 없다: ${unclassified.join(', ')}`);
@@ -539,16 +545,41 @@ test('quota target accounts for the twice-daily cadence', () => {
   assert.ok(perDay < policy.quota.daily_cap_units, 'routine cost must stay under the self-imposed cap');
 });
 
-test('publishing cadence is 2 on weekdays and 1 on weekends', () => {
+/**
+ * 2026-09-16 운영자 환경에 맞춰 하루 3편으로 재편.
+ * 08~18시 일과 중 손을 못 대므로 생성 시각과 공개 시각을 떼어 놓는다:
+ *   06시 생성 → 08시 공개 (us-close)
+ *   10시 생성 → 12시 공개 (omnibus · 금요일은 realestate 가 그 자리를 쓴다)
+ *   16시 생성 → 18시 공개 (kr-close)
+ * 일과 중 두 회차는 기계가 잠들어 있으므로 pmset 기상 예약 + caffeinate 가 함께 있어야 한다.
+ */
+test('하루 3편 — 생성 06·10·16시, 공개 08·12·18시', () => {
   const routines = JSON.parse(readFileSync(ROUTINES, 'utf8'));
-  assert.deepEqual(
-    { weekday: routines.publishing_cadence?.weekday, weekend: routines.publishing_cadence?.weekend },
-    { weekday: 2, weekend: 1 });
+  const s = routines.slots;
+  assert.equal(s['us-close'].cron, '06:00');
+  assert.equal(s['us-close'].publish_at, '08:00');
+  assert.equal(s.omnibus.publish_at, '12:00');
+  assert.equal(s['kr-close'].cron, '16:00', '주말에도 18시 회차가 나가야 하루 3편이 성립한다');
+  assert.equal(s['kr-close'].publish_at, '18:00');
+  // 금요일 10:00 은 realestate 가 쓰므로 omnibus 는 그날을 빼야 한다 — 겹치면 락에서 뒤쪽이 죽는다.
+  assert.match(s.omnibus.cron, /Mon-Thu,Sat,Sun 10:00/);
+  assert.match(s.realestate.cron, /Fri 10:00/);
+  assert.equal(s.realestate.publish_at, '12:00');
+});
 
-  // us-close 는 매일 (토=금요일 미국장, 일=sunday_preopen)
-  assert.equal(routines.slots['us-close'].cron, '06:00');
-  // kr-close 는 평일만 — 토요일 16:00 은 이미 하루 지난 금요일 종가라 새 정보가 없다
-  assert.equal(routines.slots['kr-close'].cron, 'Mon-Fri 16:00');
+test('일일 에피소드 상한이 3편 구조를 막지 않는다', () => {
+  const a = JSON.parse(readFileSync(join(ROOT, 'config', 'autonomy-pause.json'), 'utf8'));
+  assert.ok(a.guards.max_episodes_per_day >= 3,
+    `상한 ${a.guards.max_episodes_per_day} — 3 미만이면 세 번째 회차가 Phase 0 에서 막힌다`);
+});
+
+test('파이프라인이 스스로 슬립을 막는다 — 래퍼에 의존하지 않는다', () => {
+  // install-schedule.js 가 만드는 래퍼에 caffeinate 가 있었지만(FR-S-002) 설치된 launchd 는
+  // auto-pipeline.sh 를 직접 불러서 한 번도 적용되지 않았다 (2026-09-16 EP-0156: 08:05 수면
+  // → 13:09 업로드, 10:00 예약이 3시간 전이 돼 즉시 공개).
+  const src = readFileSync(join(ROOT, 'lib', 'auto-pipeline.sh'), 'utf8');
+  assert.match(src, /caffeinate -i -w \$\$/, '파이프라인 자체가 caffeinate 를 걸어야 한다');
+  assert.match(src, /BT_NO_CAFFEINATE/, '끄는 스위치도 있어야 한다');
 });
 
 test('install-cron expands a weekday range without bash 4 associative arrays', () => {
@@ -601,4 +632,109 @@ test('the pipeline survives a bare launchd PATH', () => {
   assert.equal(r.status, 0, `must exit 0 under a bare PATH: ${r.stderr}`);
   assert.match(r.stdout, /경쟁 인텔 루틴/);
   assert.doesNotMatch(r.stdout + r.stderr, /node: command not found|node 를 찾을 수 없습니다/);
+});
+
+
+test('시드 대화 판정 전에 지연 렌더를 기다린다', () => {
+  // ChatGPT 는 대화 본문을 늦게 그린다. 열자마자 판정하면 멀쩡한 시드를 「없음」 으로 버린다
+  // (2026-09-10: 재시드해 정상 동작하던 대화를 두 슬롯이 모두 "시드 대화 없음" 으로 처리).
+  const source = readFileSync(AUTO, 'utf8');
+  // **두 프롬프트 모두** 알아야 한다. 2026-09-11 실측: top-up 에만 넣었더니
+  // 「시드 대화 없음」 이 메인 패스에서 그대로 3건씩 재발했다 — 그 문구를 내는 곳이
+  // 둘인데 한쪽만 고쳤던 것이다.
+  const seedVerdicts = source.match(/「시드 대화 없음」/g) ?? [];
+  const waitNotices = source.match(/지연 렌더/g) ?? [];
+  assert.ok(seedVerdicts.length >= 2, '시드 판정 지점이 둘 이상이라는 전제');
+  assert.equal(waitNotices.length, seedVerdicts.length,
+    '「시드 대화 없음」 을 지시하는 모든 곳에 지연 렌더 대기가 붙어야 한다');
+  assert.match(source, /최소 20초/, '판정 전 대기 시간이 명시돼야 한다');
+  assert.match(source, /새로고침해 다시/, '한 번은 새로고침하고 다시 기다려야 한다');
+});
+
+test('슬롯 스케줄이 서로 겹치지 않는다 — in-flight 락은 겹치면 뒤쪽을 죽인다', () => {
+  // 락은 설계대로 직렬화하지만, 겹치게 짜면 뒤에 온 쪽이 이미 만든 자산을 버리고 exit 2 로 죽는다.
+  // 2026-09-10 실측: kr-close(16:00, 3.5h)가 이미지 5/5 를 끝내고 Phase 8 에서
+  // realestate(17:00)가 쥔 락에 막혀 종료. 목요일 2회 모두 두 슬롯 동반 실패했다.
+  const routines = JSON.parse(readFileSync(join(ROOT, 'config', 'routines.json'), 'utf8'));
+  const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const RUN_HOURS = 4;   // 실측 최장 3.5h + 여유
+
+  const windows = [];
+  for (const [name, slot] of Object.entries(routines.slots ?? {})) {
+    const cron = String(slot.cron ?? '');
+    const hm = cron.match(/(\d{1,2}):(\d{2})/);
+    if (!hm) continue;
+    const start = Number(hm[1]) + Number(hm[2]) / 60;
+    // "Mon-Thu,Sat,Sun 10:00" 처럼 범위와 단일 요일이 섞인 표기를 그대로 편다.
+    const daySpec = cron.includes(' ') ? cron.split(' ')[0] : '';
+    let days = DAYS;
+    if (daySpec) {
+      days = [];
+      for (const tok of daySpec.split(',')) {
+        const range = tok.match(/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)-(Mon|Tue|Wed|Thu|Fri|Sat|Sun)$/);
+        if (range) {
+          const a = DAYS.indexOf(range[1]); const b = DAYS.indexOf(range[2]);
+          for (let k = a; k <= b; k += 1) days.push(DAYS[k]);
+        } else if (DAYS.includes(tok)) days.push(tok);
+      }
+      if (!days.length) days = DAYS;
+    }
+    for (const d of days) windows.push({ name, day: d, start, end: start + RUN_HOURS });
+  }
+
+  for (let i = 0; i < windows.length; i++) {
+    for (let j = i + 1; j < windows.length; j++) {
+      const a = windows[i]; const b = windows[j];
+      if (a.name === b.name || a.day !== b.day) continue;
+      const overlap = a.start < b.end && b.start < a.end;
+      assert.ok(!overlap,
+        `${a.day}: ${a.name}(${a.start}시~) 와 ${b.name}(${b.start}시~) 가 겹친다 — 뒤쪽이 락에 막혀 죽는다`);
+    }
+  }
+});
+
+/**
+ * 일일 발행 쿼터 가드는 **날짜를 못 읽는 옛 기록 하나로 전체를 막아서는 안 된다.**
+ *
+ * 2026-09-16 실측: EP-2026-0062(2026-07-12 게시)가 publishedAt 없이 uploadedAt 만
+ * 갖고 있어 Phase 0 이 `ValueError: publish timestamp missing` 로 죽었고,
+ * 새 회차가 한 편도 시작되지 못했다. 두 달 전 파일 하나가 영구 정지를 만든 것이다.
+ * 그렇다고 조용히 건너뛰면 오늘치 발행을 놓칠 수 있으므로, 파일 수정 시각을 상한으로 쓴다.
+ */
+test('발행 쿼터 가드는 uploadedAt 을 인정하고, 날짜 미상 옛 기록에 죽지 않는다', () => {
+  const src = readFileSync(new URL('../lib/guards.sh', import.meta.url), 'utf8');
+  const guard = src.slice(src.indexOf('guard_daily_quota'), src.indexOf('PY_CHECK\n  )'));
+
+  assert.match(guard, /uploadedAt/, '옛 필드명 uploadedAt 도 같은 사건으로 읽어야 한다');
+  assert.match(guard, /st_mtime/, '타임스탬프가 없으면 파일 수정 시각을 상한으로 써야 한다');
+  assert.match(guard, /\n\s*continue\n/, '오늘 것이 아니면 막지 말고 건너뛰어야 한다');
+  // 오늘 쓰인 파일에 타임스탬프가 없는 건 진짜 이상 상황이라 여전히 막는다.
+  assert.match(guard, /written today/, '오늘 쓰인 파일은 여전히 에러로 막아야 한다');
+});
+
+/**
+ * 기상 예약 없이 다음 회차까지 다리를 놓는다.
+ *
+ * pmset 기상 예약은 root 가 필요해 무인으로 걸 수 없다(2026-09-16 실측:
+ * `pmset: This operation must be run as root`). 대신 이미 깨어 있는 06:00 회차가
+ * 10:00 회차 시작까지 슬립을 붙잡아 두면 같은 효과가 난다.
+ * 16:00 회차에는 일부러 안 건다 — 11시부터 5시간을 더 깨워 두면 가방 속에서
+ * 배터리·발열을 태운다. 그 회차는 늦은-게시 유예(6h)가 받아 준다.
+ */
+test('06시 회차가 점심 회차까지 슬립을 막는다', () => {
+  const r = JSON.parse(readFileSync(ROUTINES, 'utf8'));
+  assert.equal(r.slots['us-close'].keep_awake_until, '10:05',
+    '10:00 회차 직후까지 — 정확히 10:00 이면 경계에서 놓칠 수 있다');
+  assert.equal(r.slots['kr-close'].keep_awake_until, undefined,
+    '오후 회차까지 깨워 두면 배터리를 태운다 — 늦은-게시 유예로 받는다');
+});
+
+test('깨움 다리는 SLOT·ROUTINES 가 정해진 뒤에 걸린다', () => {
+  const src = readFileSync(join(ROOT, 'lib', 'auto-pipeline.sh'), 'utf8');
+  const routinesAt = src.indexOf('ROUTINES="${BARROTUBE_HOME}/config/routines.json"');
+  const bridgeAt = src.indexOf('keep_awake_until');
+  assert.ok(routinesAt > 0 && bridgeAt > routinesAt,
+    'ROUTINES 정의보다 앞서면 빈 문자열을 읽어 다리가 안 걸린다');
+  // 12시간 상한 — 역전된 시각을 만나면 하루치를 통째로 깨워 두게 된다.
+  assert.match(src, /43200/, '12시간 상한이 있어야 한다');
 });

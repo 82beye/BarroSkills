@@ -205,7 +205,15 @@ ${buildAnalystContractBlock(sceneCount)}
 7. Target audience: 20~40대 한국 투자자.
 8. FORBIDDEN: specific stock buy/sell recommendations, "무조건/100%/확실/이것만 하면 부자", 정치 편향.
 9. CRITICAL — narration is FOR TTS ONLY. DO NOT include in narration: emojis (📚 🚨 etc), bracket tags ([1/5]), intro card text, subtitle overlays, or any text that appears as visual-only elements. Those belong to video/subtitle layers — not to spoken audio.
-10. CRITICAL — Hook scene (씬 001): speak AT MOST ONE number, and the same scene must say why it matters to the viewer. A hook that only recites a figure fails — index moves are on every channel (see RULE 4-CONTRACT D). Prefer opening on the counter-intuitive fact: what moved against expectations, who disagreed, what broke the usual pattern. Put the remaining figures in subtitle_text.
+10. CRITICAL — Hook scene (씬 001): speak AT MOST ONE number, and the same scene must say why it matters to the viewer. A hook that only recites a figure fails — index moves are on every channel (see RULE 4-CONTRACT D). Open on the counter-intuitive fact: what moved against expectations, who disagreed, what broke the usual pattern. Put the remaining figures in subtitle_text.
+10a. CRITICAL — A ROUTINE DAILY MOVE MAY NOT BE THE SUBJECT of the hook. "오늘 X% 올랐다/내렸다" is not news below index 2.0% / FX 1.0% / commodity 3.0% / rates 10bp / single name 5.0% (absolute). Below those, the hook's subject must be the mechanism, the disagreement, or the consequence to the viewer; the figure may appear later only as EVIDENCE ("…때문에" / "그 결과…"), never as the thing being announced.
+10b. CRITICAL — BUT THESE ARE ALWAYS HEADLINE-WORTHY regardless of how small the daily move is, and when one is present in the research it MUST be the episode's main subject:
+    * LEVEL BREACH — crossing a round psychological line (미 10년물 5%, 유가 100달러, 원/달러 1,400원, 코스피 7000선). A 5bp move that takes the 10-year through 5% is the story; the 5bp is not.
+    * MULTI-YEAR EXTREME — N년래 최고·최저 경신.
+    * PERIOD CUMULATIVE — 주·월·분기 누적이 평소를 크게 넘을 때 (유가, 9월에만 20% 급등).
+    * STREAK — 연속 기록의 시작·중단 (7일 연속 하락).
+    Priority when several compete: level breach > multi-year extreme > period cumulative > streak.
+10c. Even for 10b, the hook leads with WHAT MADE IT HAPPEN or WHAT IT MEANS, not with the bare figure. "국채금리가 5%를 뚫었습니다" is acceptable only if the same scene says why that line matters. Measured 2026-09-16: figure-reciting hooks get views but not subscribers — 구독/1k뷰 0.63 vs 2.12 for causal framing (n=26).
 11. CRITICAL — image_prompt MUST NOT contain any text/words/numbers/company-names/labels to be rendered as text in the image. The image model will literally draw any text you mention. Use visual metaphors only:
     - BAD:  "pie chart labeled '80% of market cap' with company names 'Apple, Microsoft, Amazon'"
     - GOOD: "pie chart with one large highlighted wedge, three small anonymous company building icons stacked beside it"

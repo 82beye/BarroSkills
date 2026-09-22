@@ -37,7 +37,7 @@
  *   node scripts/automation/in-flight-lock.js heartbeat --episode EP-XXXX [--stage S6c]
  */
 
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, linkSync, renameSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { hostname } from 'node:os';
 import { parseArgs } from 'node:util';
@@ -92,16 +92,23 @@ export function isStale(lock) {
   if (lock.__corrupt) return true;
   // PID가 다른 호스트면 PID 검사 신뢰 불가 → heartbeat만 사용.
   const sameHost = lock.host === hostname();
-  if (sameHost && Number.isInteger(lock.pid) && !isPidAlive(lock.pid)) return true;
+  if (sameHost && Number.isInteger(lock.pid)) return !isPidAlive(lock.pid);
   const hb = lock.heartbeat_at || lock.started_at;
   if (!hb) return false;
   const ageMin = (Date.now() - new Date(hb).getTime()) / 60000;
   return ageMin > getHeartbeatTimeoutMinutes();
 }
 
-function writeLock(data) {
+function writeLock(data, exclusive = false) {
   mkdirSync(dirname(LOCK_FILE), { recursive: true });
-  writeFileSync(LOCK_FILE, JSON.stringify(data, null, 2), 'utf-8');
+  const tmp = `${LOCK_FILE}.${process.pid}.tmp`;
+  try {
+    writeFileSync(tmp, JSON.stringify(data, null, 2), { flag: 'wx', mode: 0o600 });
+    if (exclusive) linkSync(tmp, LOCK_FILE);
+    else renameSync(tmp, LOCK_FILE);
+  } finally {
+    if (existsSync(tmp)) unlinkSync(tmp);
+  }
 }
 
 /**
@@ -140,7 +147,7 @@ export function acquireLock(episodeId, stage = null, opts = {}) {
     if (isStale(existing)) {
       if (opts.autoCleanStale) {
         console.warn(`⚠ Stale lock detected (${existing.episode_id}, pid=${existing.pid}) — auto-releasing.`);
-        forceRelease();
+        releaseIfStale();
       } else {
         const why = existing.__corrupt ? 'corrupt'
                   : (Number.isInteger(existing.pid) && !isPidAlive(existing.pid) ? `pid ${existing.pid} dead`
@@ -178,7 +185,14 @@ export function acquireLock(episodeId, stage = null, opts = {}) {
     command: opts.command || process.argv.slice(1).join(' '),
     expected_completion: 'S11 publish or explicit release',
   };
-  writeLock(lock);
+  try { writeLock(lock, true); }
+  catch (error) {
+    if (error.code === 'EEXIST') {
+      error.code = 'ELOCK_HELD';
+      error.message = 'Another producer acquired the in-flight lock concurrently';
+    }
+    throw error;
+  }
   return lock;
 }
 

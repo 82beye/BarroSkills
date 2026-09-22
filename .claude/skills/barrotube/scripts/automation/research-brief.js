@@ -20,11 +20,15 @@
  * 종료코드: 0 = 성공 · 2 = 입력 오류 · 4 = 리서치 실패(폴백 권장)
  */
 import { existsSync, readFileSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { extractEvidenceUrls, verifyEvidenceUrls, findStaleCitations } from './lib/evidence-verify.js';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { spawnSync } from 'node:child_process';
 
 const ROOT = resolve(import.meta.dirname, '../..');
+
+/** 오늘 사건의 근거로 인정할 기사 나이(일). 주말·연휴를 감안해 3일. */
+const STALE_CITATION_DAYS = Number(process.env.BT_STALE_CITATION_DAYS || 3);
 
 const DEFAULT_TIMEOUT_SEC = 600;
 const DEFAULT_MODEL = process.env.BT_RESEARCH_MODEL || 'sonnet';
@@ -51,6 +55,16 @@ function buildPrompt({ slotName, slot, defaults, skeleton, date, inputs, outDir 
   const weekday = new Intl.DateTimeFormat('ko-KR', {
     weekday: 'long', timeZone: 'Asia/Seoul',
   }).format(new Date(`${date}T12:00:00+09:00`));
+  // 앞으로 열흘치 요일표. 모델이 **미래 날짜의 요일을 추측**하기 때문에 필요하다.
+  // 2026-09-14 EP-2026-0154: 전략 문서가 9/16 FOMC 를 "목요일"로 적었고(실제 수요일)
+  // 대본이 그대로 옮겨, 팩트체크 HIGH 4건 중 2건이 이 한 글자에서 나왔다. 재작성 예산을
+  // 요일 오타에 쓰는 동안 진짜 지적은 손도 못 댔다. 날짜 계산은 모델에게 시킬 일이 아니다.
+  const fmtKo = new Intl.DateTimeFormat('ko-KR', { weekday: 'short', timeZone: 'Asia/Seoul' });
+  const calendar = Array.from({ length: 10 }, (_, i) => {
+    const d = new Date(new Date(`${date}T12:00:00+09:00`).getTime() + i * 86400_000);
+    const iso = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(d);
+    return `${iso}(${fmtKo.format(d)})`;
+  }).join(' · ');
   const requiredClosed = slot.market?.require_closed?.join(', ') || '없음';
 
   // 파일 내용은 넣지 않고 경로만 준다 (CLAUDE.md brief 원칙).
@@ -117,6 +131,10 @@ ${slot.timing_caveat}
        A 는 **오늘 일어난 일**이어야 한다. 며칠 전 사건을 오늘의 촉발 요인으로 쓰지 마라.
        각 사건에 날짜(YYYY-MM-DD)를 확인하고, 당일 시황 기사가 지목하는 원인을 최우선으로 써라.
        배경으로 언급할 거면 시점을 밝혀라 — "지난주 X 가 깔아 놓은 판에서 오늘 Y 가…".
+
+   - **요일은 아래 표에서만 가져와라. 계산하지 말고 베껴라.**
+     ${calendar}
+     표에 없는 날짜의 요일은 아예 쓰지 마라 — "9/16 발표" 처럼 날짜만 써라.
        (2026-09-07 EP-0141: 델 실적 09-02·오픈AI 신모델 09-03 을 당일 급등 원인으로 엮어
         대본이 없는 사건을 만들었고, 팩트체크가 4라운드를 소모했다. 실제 원인은 당일 나온
         KB증권 메모리 재고 진단이었고 그날 시황 기사 전체가 그것만 지목했다.)
@@ -240,7 +258,7 @@ function writeFallbackAnalysis({ slotName, slot, skeleton, date, inputs, outDir 
   return true;
 }
 
-function main() {
+async function main() {
   const { values } = parseArgs({
     options: {
       slot: { type: 'string' },
@@ -356,6 +374,40 @@ function main() {
     process.exit(4);
   }
 
+  // ── 인용 URL 실존·날짜 검증 ─────────────────────────────────────────
+  // 리서처가 **기사를 열어보지 않고** 인용하는 사고가 실제로 났다.
+  // 2026-09-16 EP-2026-0157: 「LIG넥스원 +28.88%(2026-09-16)」의 근거로
+  // biz.heraldcorp.com/article/10685491 을 들었는데, 그 기사는 2026-03-03 자
+  // 「이란 사태에 방산주 불기둥…한화에어로 20%·LIG넥스원 30%」로 **반년 전, 정반대
+  // 사건(확전), 다른 수치**였다. 팩트체커가 뒤늦게 잡았지만 그때는 이미 대본이 나온 뒤라
+  // 재작성 3회를 태우고 내용이 통째로 사라진 껍데기가 남았다.
+  //
+  // 같은 검증을 여기서 하면 대본에 토큰을 쓰기 전에 걸러진다. 팩트체크와 같은 모듈을 쓴다.
+  const researchText = readFileSync(researchPath, 'utf-8');
+  const citedUrls = extractEvidenceUrls(researchText);
+  if (citedUrls.length) {
+    const verification = await verifyEvidenceUrls(citedUrls, { timeoutMs: 12_000 });
+    const dead = (verification.results ?? []).filter((v) => v.verdict === 'fabricated');
+    console.log(`\n🔗 인용 URL ${citedUrls.length}건 — 실존 ${verification.alive ?? 0} · 날조 ${dead.length}`);
+    for (const d of dead) console.error(`   ❌ ${d.url} — ${d.reason ?? 'unreachable'}`);
+    if (dead.length) {
+      console.error('\n❌ 리서치가 존재하지 않는 URL 을 인용했습니다 — 대본을 쓰기 전에 멈춥니다.');
+      process.exit(4);
+    }
+    // 실존하더라도 **오늘 기사인지**는 따로 봐야 한다. 위 사고가 정확히 그 경우였다 —
+    // 문제의 URL 은 살아 있었고(alive), 다만 197일 전 기사였다.
+    const stale = await findStaleCitations(citedUrls, date, { maxAgeDays: STALE_CITATION_DAYS });
+    if (stale.length) {
+      console.error(`\n❌ 오늘 사건의 근거로 **오래된 기사**를 인용했습니다 (${STALE_CITATION_DAYS}일 초과):`);
+      for (const c of stale) console.error(`   ${c.date} (${c.staleDays}일 전) ${c.url}`);
+      console.error('\n   같은 사건의 오늘 기사를 찾아 다시 인용하거나, 그 사건을 토픽에서 빼세요.');
+      console.error('   이대로 대본을 쓰면 팩트체크가 뒤늦게 잡고, 재작성이 내용을 통째로 지웁니다');
+      console.error('   (2026-09-16 EP-2026-0157 실측: 재작성 3회 뒤 「배경은 확인이 필요합니다」만 남았다).');
+      process.exit(4);
+    }
+    console.log(`   ✅ 인용 기사 날짜도 ${STALE_CITATION_DAYS}일 이내입니다`);
+  }
+
   let topic;
   try {
     topic = JSON.parse(readFileSync(topicPath, 'utf-8'));
@@ -377,4 +429,4 @@ function main() {
   process.exit(0);
 }
 
-main();
+main().catch((e) => { console.error('❌', e.message); process.exit(4); });

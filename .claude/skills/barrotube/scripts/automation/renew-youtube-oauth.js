@@ -44,7 +44,37 @@ const ENV_PATH = join(ROOT, '.env');
 
 const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
-const SCOPE = 'https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/youtube.upload';
+/**
+ * 기본(최소) 스코프. **여기에 새 스코프를 추가하지 마라.**
+ * 이 스크립트는 크론에서 AppleScript 로 동의 화면을 자동 클릭한다 — 여기 목록을 늘리면
+ * 운영자가 화면을 보지 못한 채 권한이 넓어진다.
+ *
+ * 대신 실제 요청 스코프는 `currentScopes()` 가 **지금 토큰이 이미 가진 것**을 읽어서 만든다.
+ * 넓히지도, 좁히지도 않는다. 2026-09-10 이전에는 이 상수를 그대로 요청해서, 운영자가
+ * 직접 동의해 붙여 둔 yt-analytics.readonly 가 다음 갱신에서 조용히 떨어져 나갔다.
+ */
+const BASE_SCOPE = 'https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/youtube.upload';
+
+/** 저장된 refresh_token 이 실제로 보유한 스코프. 못 읽으면 BASE_SCOPE. */
+async function currentScopes(refreshToken, clientId, clientSecret) {
+  if (!refreshToken) return BASE_SCOPE;
+  try {
+    const r = await fetch(TOKEN_URL, {
+      method: 'POST',
+      body: new URLSearchParams({
+        client_id: clientId, client_secret: clientSecret,
+        refresh_token: refreshToken, grant_type: 'refresh_token',
+      }),
+    });
+    const t = await r.json();
+    if (!t.access_token) return BASE_SCOPE;
+    const info = await (await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${t.access_token}`)).json();
+    const got = String(info.scope || '').trim();
+    return got || BASE_SCOPE;
+  } catch {
+    return BASE_SCOPE;
+  }
+}
 
 /** 동의 화면에서 고를 브랜드 계정. 채널 표시명과 같아야 한다. */
 const BRAND = process.env.BT_YT_BRAND || '바로경제';
@@ -245,7 +275,8 @@ async function main() {
   const authUrl = new URL(AUTH_URL);
   for (const [k, v] of Object.entries({
     client_id: clientId, redirect_uri: redirectUri, response_type: 'code',
-    scope: SCOPE, access_type: 'offline', prompt: 'consent',
+    scope: await currentScopes(prevToken, clientId, clientSecret),
+    access_type: 'offline', prompt: 'consent',
   })) authUrl.searchParams.set(k, v);
 
   console.log(`   콜백: ${redirectUri}`);

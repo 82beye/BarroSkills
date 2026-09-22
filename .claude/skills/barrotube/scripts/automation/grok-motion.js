@@ -43,7 +43,7 @@ import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYAML } from 'yaml';
 import { chromium } from 'playwright-core';
-import { execSync } from 'node:child_process';
+import { verifyGrokClip } from './lib/motion-verify.js';
 
 const SKILL_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const PROFILE_DIR = process.env.BT_GROK_PROFILE
@@ -54,6 +54,20 @@ const IMAGINE_URL = 'https://grok.com/imagine';
  *  2026-08-24 실측: 헤드리스로 /imagine 을 4~5회 연속 호출해 프로필이 차단됨
  *  ("Sorry, you have been blocked"). 0 으로 두면 대기 없음. */
 const CUT_DELAY_MS = Number(process.env.BT_GROK_CUT_DELAY_MS ?? 12000);
+
+/**
+ * 성공이 하나도 없는 채 같은 사유로 연속 실패하면 남은 컷을 포기한다.
+ *
+ * 2026-09-14 EP-2026-0154: 5컷 전부 `locator('input[type="file"]')` 30초 타임아웃으로
+ * 죽었다 — 업로드 입력이 아예 없는 페이지 상태였다. 첫 컷에서 없던 입력이 다섯째 컷에
+ * 생길 리 없는데, 이 파일에는 조기 중단이 없어 5 × (30초 + 12초 대기) 를 통째로 태웠다.
+ * 형제 스크립트(grok-motion-applescript.js)는 이미 같은 규율을 갖고 있다.
+ *
+ * 1컷 실패는 콘텐츠 사유(모더레이션)일 수 있으니 접지 않는다 — 2컷째부터 접는다.
+ */
+const STALL_ABORT_AFTER = Number(process.env.BT_GROK_STALL_ABORT || 2);
+/** 컷 고유 사유가 아닌 것들: 서비스 정체 + 페이지·세션이 죽어 있는 경우. */
+const STALL_PATTERN = /준비되지 않았습니다|내려받지 못했습니다|input\[type="file"\]|Timeout \d+ms exceeded/;
 
 /** 컷당 상한. 실측 생성 30~90초 + 대기. */
 const GEN_TIMEOUT_MS = Number(process.env.BT_GROK_TIMEOUT_MS || 6 * 60 * 1000);
@@ -92,22 +106,6 @@ function loadScenes(baseDir) {
   return scenes;
 }
 
-function verifyClip(p) {
-  const r = sh('ffprobe', ['-v', 'error', '-show_entries',
-    'stream=codec_type,codec_name,width,height', '-show_entries', 'format=duration',
-    '-of', 'default=nw=1', p]);
-  if (r.status !== 0) return { ok: false, why: 'ffprobe 실패' };
-  const out = r.stdout || '';
-  const w = Number(out.match(/^width=(\d+)/m)?.[1] || 0);
-  const h = Number(out.match(/^height=(\d+)/m)?.[1] || 0);
-  const dur = Number(out.match(/^duration=([\d.]+)/m)?.[1] || 0);
-  const hasAudio = /codec_type=audio/.test(out);
-  if (!(h > w)) return { ok: false, why: `세로가 아니다 (${w}x${h})` };
-  if (dur < 4) return { ok: false, why: `길이가 너무 짧다 (${dur}s)` };
-  if (!hasAudio) return { ok: false, why: '오디오 스트림 없음 — Video audio 가 꺼져 있다' };
-  return { ok: true, info: `${w}x${h} ${dur.toFixed(2)}s` };
-}
-
 /**
  * 프로필을 이미 다른 Chrome 이 쓰고 있으면 즉시 실패한다.
  * 겹쳐 열면 SingletonLock 때문에 새 인스턴스가 곧바로 죽고, Playwright 는
@@ -116,10 +114,11 @@ function verifyClip(p) {
  */
 function assertProfileFree() {
   try {
-    const out = execSync(
-      `pgrep -f ${JSON.stringify('user-data-dir=' + PROFILE_DIR)} || true`,
-      { encoding: 'utf8' },
-    ).trim();
+    const processes = sh('ps', ['-axo', 'pid=,command=']);
+    if (processes.status !== 0) throw new Error('Chrome process inspection failed');
+    const out = processes.stdout.split('\n')
+      .filter((line) => line.includes(`--user-data-dir=${PROFILE_DIR}`))
+      .map((line) => line.trim().split(/\s+/)[0]).join('\n');
     if (out) {
       throw new Error(
         `프로필을 다른 Chrome 이 사용 중입니다 (pid ${out.split('\n').join(', ')}): ${PROFILE_DIR}\n` +
@@ -238,7 +237,7 @@ async function renderOne(page, { still, prompt, outPath, knownHashes }) {
   if (!/\.mp4$/i.test(tmp)) throw new Error(`영상이 아니라 ${tmp.split('.').pop()} 를 받았다 — 이미지 모드로 생성됐다`);
   const hash = md5(tmp);
   if (knownHashes.has(hash)) throw new Error('직전 컷과 같은 파일을 받았다 (중복 다운로드)');
-  const v = verifyClip(tmp);
+  const v = verifyGrokClip(tmp);
   if (!v.ok) throw new Error(v.why);
 
   copyFileSync(tmp, outPath);
@@ -271,17 +270,24 @@ async function main() {
     assertProfileFree();
     const ctx = await openContext({ headless: true });
     try {
+      const page = ctx.pages()[0] || await ctx.newPage();
+      await page.goto(IMAGINE_URL, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      await dismissConsent(page);
+      const ready = await page.locator('input[type="file"]').first()
+        .waitFor({ state: 'attached', timeout: 30_000 }).then(() => true, () => false);
+      const composer = await page.locator('[contenteditable="true"], textarea').count();
       const cs = await ctx.cookies('https://grok.com');
-      const ok = cs.some(c => c.name === 'sso' && c.value);
+      const ok = ready && composer > 0 && cs.some(c => c.name === 'sso' && c.value);
       console.log(ok
-        ? `✅ Grok 로그인됨 (sso 확인) — ${PROFILE_DIR}`
-        : `❌ Grok 미로그인 (sso 없음) — ${PROFILE_DIR}`);
+        ? `✅ Grok 세션·작성기·첨부 입력 확인 — ${PROFILE_DIR}`
+        : `❌ Grok 작성기 사용 불가 (로그인·차단·UI 확인 필요) — ${PROFILE_DIR}`);
       if (!ok) {
         console.error('   로그인: node scripts/automation/grok-motion.js --login');
         console.error('   ⚠ 일반 Chrome 으로 같은 프로필에 로그인해도 넘어오지 않는 버그가');
         console.error('     있었다(--use-mock-keychain). 2026-08-24 수정됨.');
       }
-      process.exit(ok ? 0 : 3);
+      process.exitCode = ok ? 0 : 3;
+      return;  // finally가 Chrome을 닫은 뒤 종료한다.
     } finally {
       await ctx.close().catch(() => {});
     }
@@ -359,7 +365,7 @@ async function main() {
   const ctx = await openContext({ headless: headlessResolved });
   const page = ctx.pages()[0] || await ctx.newPage();
 
-  let made = 0; let failed = 0;
+  let made = 0; let failed = 0; let stalls = 0;
   try {
     for (const [i, scene] of wanted.entries()) {
       const id = String(scene.scene_id).padStart(3, '0');
@@ -373,10 +379,18 @@ async function main() {
           still, prompt: motionPromptFor(scene), outPath, knownHashes,
         });
         made += 1;
+        stalls = 0;   // 하나라도 나왔으면 페이지도 서비스도 살아 있다
         console.log(`  ✅ 씬 ${id} → ${info}`);
       } catch (e) {
         failed += 1;
         console.warn(`  ❌ 씬 ${id}: ${e.message}`);
+        if (STALL_PATTERN.test(e.message)) stalls += 1; else stalls = 0;
+        if (made === 0 && stalls >= STALL_ABORT_AFTER) {
+          console.error(`  ⛔ 연속 ${stalls}컷이 같은 사유로 실패했고 성공이 없습니다 — 페이지·세션 문제로 봅니다.`);
+          console.error('     남은 컷을 포기하고 HyperFrames 폴백으로 넘깁니다. 세션 복구: node scripts/automation/grok-motion.js --login');
+          break;
+        }
+        continue;   // 요청이 나가지도 않았다 — 다음 컷까지 쉴 이유가 없다
       }
 
       // 실제로 요청을 보낸 컷 뒤에만 쉰다. 위의 continue 들은 네트워크를 타지 않는다.

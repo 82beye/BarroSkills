@@ -176,3 +176,18 @@ test('오늘 실제로 데스크 산출물이 나왔다면 규격을 지킨다',
     assert.match(fm[1], /headline:\s*\S/, `${f}: headline 이 비었다`);
   }
 });
+
+test('리서치가 죽어도 데스크가 고른 토픽은 살아남는다', () => {
+  // 결정론적 폴백은 "리서치 LLM 이 죽었을 때" 도는 경로다. 그렇다고 데스크까지
+  // 죽은 것은 아닌데, 예전에는 무조건 첫 뉴스 헤드라인을 토픽으로 썼다.
+  // 그 헤드라인은 기사 제목이 아니라 사이트 섹션 문구일 때가 있다
+  // (2026-09-01 kr-close: 데스크가 이란·유가·금 토픽을 뽑아 뒀는데도
+  //  "뉴스로 보는 증시일정" 으로 덮여 EP-2026-0130 이 그대로 대본까지 갔다).
+  const src = read('scripts/automation/research-brief.js');
+  const fb = src.slice(src.indexOf('function writeFallbackAnalysis'));
+  assert.match(fb, /desk-topic-\$\{slotName\}\.json/, '폴백이 슬롯별 desk-topic 을 읽어야 한다');
+  assert.match(fb, /desk\.topic \|\| items\[0\]\?\.title/, '데스크 토픽이 헤드라인보다 앞서야 한다');
+  assert.match(fb, /topic_source/, '어느 출처에서 왔는지 산출물에 남겨야 한다');
+  // 스코프 사고 방지: pick() 은 다른 함수의 지역 변수라 여기서 쓰면 ReferenceError 다.
+  assert.doesNotMatch(fb, /pick\(/, 'writeFallbackAnalysis 안에서는 pick() 을 쓸 수 없다');
+});

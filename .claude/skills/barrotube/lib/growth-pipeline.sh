@@ -5,11 +5,9 @@
 #   [측정] 자체 채널 수집 → [판정] KPI 스코어카드 → [처방] 성장 지시
 #   → (월요일 아침) [회고] 주간 리포트 + 실험 로테이션
 #
-# 설계 원칙: competitor-pipeline.sh 와 동일하게 **항상 exit 0**.
-#   성장 관측은 EP 생산의 보조 입력이지 선행 조건이 아니다. 여기서 실패해도
-#   06:00 us-close / 16:00 kr-close 파이프라인은 그대로 돌아야 한다.
+# 실패는 launchd에 exit 1로 보고한다. 별도 등록된 EP 생산 작업에는 영향이 없다.
 #
-# 무과금 원칙: LLM 0회. YouTube Data API 3 units/run. 텔레그램은 기존 봇 재사용.
+# LLM 0회. YouTube Data API는 알려진 영상 50개당 1조회 + 채널/목록 조회. 기존 봇 재사용.
 #
 # 스케줄: 브리핑 슬롯 20분 전 완료 목표로 하루 2회.
 #   bash lib/install-cron.sh install growth "05:40,15:40"
@@ -22,7 +20,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BARROTUBE_HOME="$(cd "${SCRIPT_DIR}/.." && pwd)"
-cd "$BARROTUBE_HOME" || exit 0
+cd "$BARROTUBE_HOME" || exit 1
 
 # shellcheck source=./guards.sh
 source "${SCRIPT_DIR}/guards.sh"
@@ -42,7 +40,7 @@ run_step() {
   if "$@"; then
     return 0
   fi
-  echo "  ⚠️  ${label} 실패 — 계속 진행"
+  echo "  ⚠️  ${label} 실패 — 성장 루프 중단"
   audit "growth_${label}_fail" "WARN" "date=${DATE}"
   return 1
 }
@@ -53,14 +51,14 @@ echo "🌱 성장 루프 — ${DATE} (${HOUR}시 회차)"
 # 관측·판정·처방 파일 생성은 읽기 전용 성격이고 아무것도 발행하지 않는다.
 # 처방을 실제로 소비하는 것은 auto-pipeline 이며 그쪽 게이트가 살아 있다.
 
-run_step "fetch" node scripts/automation/fetch-channel-stats.js
+run_step "fetch" node scripts/automation/fetch-channel-stats.js || exit 1
 
 KPI_OUT=""
 if [ "${DRY_RUN:-0}" = "1" ]; then
   echo "  [DRY_RUN] node scripts/automation/growth-kpi.js --date ${DATE}"
 else
   KPI_OUT="$(node scripts/automation/growth-kpi.js --date "$DATE" 2>&1)" \
-    || { echo "  ⚠️  kpi 실패 — 계속 진행"; audit "growth_kpi_fail" "WARN" "date=${DATE}"; }
+    || { echo "$KPI_OUT"; audit "growth_kpi_fail" "ERROR" "date=${DATE}"; exit 1; }
   echo "$KPI_OUT" | grep -v '^OVERALL=' || true
 fi
 
@@ -73,13 +71,13 @@ if [ "$HOUR" -lt 12 ]; then
     echo "  [DRY_RUN] node scripts/automation/growth-weekly.js --date ${DATE} --if-due"
   else
     WEEKLY_OUT="$(node scripts/automation/growth-weekly.js --date "$DATE" --if-due 2>&1)" \
-      || { echo "  ⚠️  weekly 실패 — 계속 진행"; audit "growth_weekly_fail" "WARN" "date=${DATE}"; }
+      || { echo "$WEEKLY_OUT"; audit "growth_weekly_fail" "ERROR" "date=${DATE}"; exit 1; }
     echo "$WEEKLY_OUT" | grep -v '^WEEKLY=' || true
     WEEKLY_LINE="$(echo "$WEEKLY_OUT" | grep '^WEEKLY=' | head -1 | cut -d= -f2-)"
   fi
 fi
 
-run_step "directives" node scripts/automation/growth-directives.js --date "$DATE"
+run_step "directives" node scripts/automation/growth-directives.js --date "$DATE" || exit 1
 
 # 알림 정책: 아침 회차는 요약 1건, 오후 회차는 RED 일 때만. 월요일엔 주간 요약 추가.
 OVERALL_LINE="$(echo "$KPI_OUT" | grep '^OVERALL=' | head -1 | cut -d= -f2-)"
@@ -97,5 +95,5 @@ if [ -n "$WEEKLY_LINE" ]; then
 $(tg_escape "$WEEKLY_LINE")"
 fi
 
-echo "✓ 성장 루프 종료 (exit 0 고정)"
+echo "✓ 성장 루프 완료"
 exit 0
