@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "description": "씬 자산 재사용 폴백 정책(SSOT). 이미지 생성 경로가 전부 막혔을 때 기존 에피소드의 마시 씬 스틸·모션 클립을 골라 쓴다. scripts/automation/reuse-scene-assets.js 와 lib/scene-asset-index.js 가 이 파일을 읽는다.",
+  "enabled": true,
+  "policy": {
+    "min_source_age_days": 10,
+    "cooldown_days": 30,
+    "max_per_source_episode": 2,
+    "min_score": 0.24,
+    "role_bonus": 0.05,
+    "palette_bonus": 0.03,
+    "require_current_era": true,
+    "block_palette_conflict": true,
+    "block_caricature": true
+  },
+  "reuse_motion_clips": true,
+  "ledger": "workspace/assets/scene-reuse-ledger.json",
+  "_notes": {
+    "why": "2026-09-22 실측: ChatGPT 주간한도(9/25 해제) · codex imagegen(같은 계정, 같은 한도) · gpt-image-1 크레딧 고갈 · Gemini 402 · Grok 주간한도 소진이 동시에 걸려 EP-2026-0172 가 Phase 7 에서 halt 했다. 생성 경로가 하나도 없는 조합이라 코드로는 풀 수 없다. 반면 채널에는 같은 캐릭터로 구운 스틸 792장·클립 427개가 있다.",
+    "priority": "재사용은 **마지막 폴백**이다. 브라우저 → codex imagegen → 이미지 API 를 모두 시도한 뒤에만 돈다. 순서를 바꾸면 신선한 컷을 굽을 수 있는 날에도 재활용이 나간다.",
+    "min_source_age_days": "이보다 최근에 구운 컷은 시청자가 알아본다. 10일이면 하루 3편 기준 약 30편 뒤라 기억에서 멀다.",
+    "max_per_source_episode": "한 원본 EP 에서 5컷을 다 가져오면 옛 영상 재방송이 된다. 2 로 묶으면 최소 3개 EP 에서 섞인다.",
+    "min_score": "TF-IDF 코사인 하한. 이 아래여도 **멈추지 않고** 쓰지만 WARN 감사와 텔레그램에 '시각 매칭 약함'을 실어 보낸다 — 멈추지 않게 만드는 것이 이 폴백의 목적이다. 0.24 의 근거: 2026-09-22 최근 9편 45컷 실측(가드 전부 적용, 미배정 0) 최소 0.139 · p10 0.214 · p25 0.255 · 중앙 0.394 · 최대 0.682. 0.24 는 하위 약 18% 를 잡는다. 처음 넣은 0.12 는 45컷 중 한 번도 발동하지 않는 죽은 값이었다.",
+    "reuse_motion_clips": "실제 모션이 있는 클립(grok·wan·ltx 출신)만 복사한다. HyperFrames 클립은 스틸에서 로컬로 다시 만들 수 있으므로(무과금·TTS 길이 정확) 복사할 이유가 없다. 판정은 원본 videos/_engines.json 의 engine, 기록이 없으면 AAC 오디오 스트림 유무(HyperFrames 는 설계상 무음).",
+    "require_current_era": "현행 화풍으로 구운 컷만 후보로 본다. 2026-09-22 EP-0172 1차 실측에서 씬 003 이 EP-2026-0050(176자 구세대 템플릿)로 배정돼 평면 미니멀 화풍이 편집일러스트 컷들 사이에 섞였다. 점수는 '무엇을 그렸나'만 보고 '어떻게 그렸나'를 못 본다. 판정은 image-prompt-contract.js 의 BOUNDS.minChars + 캐릭터 시트 문구 — 계약이 바뀌면 판정도 따라온다.",
+    "block_palette_conflict": "bullish 그림을 bearish 대본에 붙이지 않는다. 상승 계단이 하락 대본에 붙으면 시청자가 즉시 알아본다. explainer·cta 는 중립이라 섞여도 된다.",
+    "block_caricature": "공인 캐리커처가 들어간 컷은 재사용하지 않는다. 2026-09-22 EP-0172 2차 실측에서 씬 005 가 실존 인물 캐리커처 컷(EP-2026-0128 s001)으로 배정됐는데 대본은 다른 인물을 말했다 — 인물 오귀속이다. 748컷 중 17개뿐이라 빼도 후보가 줄지 않는다. 판정은 image-prompt-contract.js 의 CARICATURE.clauseRe.",
+    "measured_2026_09_22": "최근 9편을 각각 대상으로 돌려 45컷 전부 배정 성공(미배정 0). 후보 풀은 현행 화풍 443컷 + 캐리커처 17컷 제외. 하루 5컷·쿨다운 30일 기준으로 여유가 있다."
+  }
+}

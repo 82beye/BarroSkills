@@ -267,6 +267,28 @@ if fb:
 else:
     emit('motion_fallback', 'GREEN', '24h 내 모션 폴백 없음')
 
+# 자산 재사용은 정상 운영이 아니라 이미지 생성 쿼터가 마른 증상이다. 텔레그램은 그 순간
+# 한 번만 울리므로, 며칠째 재활용으로 버티고 있다는 사실은 여기서만 보인다.
+# 약한 매칭 컷 수까지 같이 센다 — 그게 시청자가 먼저 알아채는 지점이다.
+reuse = []
+weak_cuts = 0
+for man in sorted((root / 'workspace' / 'episodes').glob('EP-*/platforms/*/40_assets/_reuse.json')):
+    try:
+        if (NOW - datetime.datetime.fromtimestamp(man.stat().st_mtime, datetime.timezone.utc)).days > 7:
+            continue
+        d = json.loads(man.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        continue
+    scenes = d.get('scenes') or []
+    weak = sum(1 for sc in scenes if sc.get('weak'))
+    weak_cuts += weak
+    reuse.append(f"{d.get('episode_id') or man.parents[2].name} {len(scenes)}컷{f'(약함 {weak})' if weak else ''}")
+if reuse:
+    emit('asset_reuse', 'YELLOW',
+         f"7일 내 {len(reuse)}편이 기존 자산으로 발행 — 약한 매칭 {weak_cuts}컷 · " + '; '.join(reuse[:4]))
+else:
+    emit('asset_reuse', 'GREEN', '7일 내 자산 재사용 없음')
+
 # 경보가 도착하지 못하면 다른 모든 검사가 무의미해진다.
 tg = [d for d in by_event('telegram_delivery') if d.get('status') == 'ERROR']
 emit('telegram_delivery', 'YELLOW' if tg else 'GREEN',

@@ -1141,8 +1141,49 @@ SuperGrok 구독 모달이 뜨면 결제·무료 체험 절대 하지 말고 닫
     rm -f "$API_FALLBACK_LOG"
   fi
 
+  # 마지막 폴백 — 기존 마시 자산 재사용 (2026-09-22 추가).
+  #
+  # 앞의 세 경로(브라우저 ChatGPT·codex imagegen·이미지 API)는 전부 **생성**이고,
+  # 셋이 같은 날 동시에 마르는 조합이 실제로 나왔다. 2026-09-22 us-close 실측:
+  #   ChatGPT/codex imagegen : "usage limit … try again at Sep 25th, 2026 7:17 AM" (같은 계정·주간 한도)
+  #   gpt-image-1            : 크레딧 고갈
+  #   Gemini                 : 402 prepayment credits depleted
+  #   Grok                   : 주간 한도 소진
+  # 이 상태에서는 코드로 풀 수 있는 생성 경로가 하나도 없다. 충전이나 한도 해제를
+  # 기다리는 동안 채널이 며칠 비는 것보다, 같은 캐릭터로 이미 구운 컷(2026-09-22 기준
+  # 스틸 792장·클립 427개)에서 대본에 맞는 것을 골라 내보내는 편이 낫다는 판단이다.
+  #
+  # 재사용이 **맨 뒤**인 것이 중요하다. 순서를 올리면 신선한 컷을 구울 수 있는 날에도
+  # 재활용이 나간다. 실제 모션이 있는 클립(grok 출신)은 함께 복사돼 Grok 쿼터 없이
+  # 모션이 실린다 — HyperFrames 클립은 스틸에서 로컬로 다시 만들 수 있으므로 복사하지 않는다.
+  # 정책(연령·쿨다운·원본 EP 당 상한)의 정본은 config/asset-reuse.json 이다.
   if ! media_assets_ready "$MEDIA_BASE" stills; then
-    HALT_DETAIL="브라우저·API 폴백 후에도 씬 자산이 불완전합니다: ${MEDIA_ASSETS_MISSING}"
+    REUSE_ENABLED=$(json_get "${BARROTUBE_HOME}/config/asset-reuse.json" "'1' if d.get('enabled', True) else '0'")
+    if [ "${BT_ASSET_REUSE:-$REUSE_ENABLED}" = "1" ]; then
+      echo "  ♻︎ 자산 재사용 폴백 (생성 호출 0회): ${MEDIA_ASSETS_MISSING}"
+      audit "media_render_asset_reuse" "WARN" "ep=$EP_ID missing=${MEDIA_ASSETS_MISSING}"
+      REUSE_LOG=$(mktemp)
+      run_or_echo node scripts/automation/reuse-scene-assets.js \
+        --script "${MEDIA_BASE}/30_script.md" > "$REUSE_LOG" 2>&1 \
+        || echo "  ⚠ 자산 재사용 폴백도 실패 — 아래 게이트가 판정합니다"
+      cat "$REUSE_LOG"
+      # 운영자에게 **무엇을 재활용했는지**를 알린다. 조용히 나가면 아무도 모르는 사이에
+      # 같은 컷이 반복된다. 재사용은 정상 운영이 아니라 한도 소진의 증상이다.
+      REUSE_LINES=$(grep '♻︎ 씬' "$REUSE_LOG" | sed 's/^ *//' | head -7)
+      if [ -n "$REUSE_LINES" ]; then
+        notify_telegram "♻︎ <b>${EP_ID}</b> 이미지 생성 경로가 전부 막혀 <b>기존 자산을 재사용</b>했습니다\n\n${REUSE_LINES}\n\n한도 해제 전까지 이 상태로 발행됩니다."
+      fi
+      if grep -q '⚠약함' "$REUSE_LOG"; then
+        audit "asset_reuse_weak_match" "WARN" "ep=$EP_ID 시각 매칭이 약한 컷이 섞였다"
+      fi
+      rm -f "$REUSE_LOG"
+    else
+      echo "  ⏭  자산 재사용 폴백 꺼짐 (config/asset-reuse.json enabled=false 또는 BT_ASSET_REUSE=0)"
+    fi
+  fi
+
+  if ! media_assets_ready "$MEDIA_BASE" stills; then
+    HALT_DETAIL="브라우저·API·재사용 폴백 후에도 씬 자산이 불완전합니다: ${MEDIA_ASSETS_MISSING}"
     # 브라우저가 왜 못 만들었는지를 먼저 보여 준다 — 크레딧은 그 다음이다.
     # 브라우저가 정본이고 API 는 폴백이라, 순서가 바뀌면 운영자가 엉뚱한 데를 고친다.
     if [ -n "${BROWSER_FAIL_REASON:-}" ]; then
@@ -1168,6 +1209,20 @@ SuperGrok 구독 모달이 뜨면 결제·무료 체험 절대 하지 말고 닫
 
 🧩 codex 가 로그아웃 상태입니다 — 크레딧 없이 굽는 폴백이 막혔습니다.
    \`codex login\` 으로 ChatGPT 계정에 다시 로그인하세요 (API 키가 아니라 계정 인증입니다)."
+    fi
+    # 생성이 전부 막힌 날에는 재사용이 마지막 줄이다. 그것까지 못 채웠다면 후보가
+    # 마른 것이지 생성이 문제가 아니다 — 충전·재로그인이 아니라 정책을 풀어야 한다.
+    if [ "${BT_ASSET_REUSE:-1}" = "0" ] || [ "${REUSE_ENABLED:-1}" = "0" ]; then
+      HALT_DETAIL="${HALT_DETAIL}
+
+♻︎ 자산 재사용 폴백이 꺼져 있습니다 — 생성이 전부 막힌 날의 마지막 경로가 빠졌습니다.
+   config/asset-reuse.json 의 enabled 또는 BT_ASSET_REUSE 를 확인하세요."
+    else
+      HALT_DETAIL="${HALT_DETAIL}
+
+♻︎ 자산 재사용 폴백도 컷을 못 채웠습니다 — 생성 문제가 아니라 후보가 마른 것입니다.
+   config/asset-reuse.json 의 min_source_age_days / cooldown_days 를 낮추면 후보가 늘어납니다.
+   확인:  node scripts/automation/reuse-scene-assets.js --script ${MEDIA_BASE}/30_script.md --dry-run"
     fi
     halt_for_human "Phase 7 media-render" "$HALT_DETAIL"
   fi

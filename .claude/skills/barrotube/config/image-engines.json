@@ -24,7 +24,8 @@
     "media_render_requires": "브라우저 세션(ChatGPT/Grok 로그인) — 브라우저 도구 없는 headless 실행은 불가. launchd는 Chrome/Playwright가 연결된 Codex 오케스트레이터로 스킬 절차를 수행",
     "quick_global_switch": "전 파이프라인을 OpenAI로 전환하려면 BT_IMAGE_ENGINE=openai 또는 이 파일 global='openai'; 씬만 레거시 API로 되돌리려면 stages.S6c_scene='openai'",
     "codex_requires": "codex CLI + ChatGPT 로그인. API 키 불필요. 브라우저 불필요(무인 실행 가능).",
-    "switched_2026_08_20": "S6c 씬 / S6d 인트로 / S6e 썸네일 전부 media-render → codex. 브라우저 첨부가 무인 실행에서 막혀 EP-0101·0102·0104 가 S6c 에서 죽은 게 직접 계기이고, 썸네일은 Gemini 429(prepayment credits) 로 계속 씬 스틸 폴백으로 새고 있었다. 인트로·아웃트로 '카드'(45_intro.png / 48_outro.png)는 generate-cards.js 가 HyperFrames 로 씬 스틸 위에 한글을 로컬 합성하므로 이미지 엔진을 타지 않는다 — 배경이 되는 씬이 codex 로 바뀌면 카드도 자동으로 따라온다. S6d 의 codex 분기는 generate-intro.js 레거시 아트 경로용."
+    "switched_2026_08_20": "S6c 씬 / S6d 인트로 / S6e 썸네일 전부 media-render → codex. 브라우저 첨부가 무인 실행에서 막혀 EP-0101·0102·0104 가 S6c 에서 죽은 게 직접 계기이고, 썸네일은 Gemini 429(prepayment credits) 로 계속 씬 스틸 폴백으로 새고 있었다. 인트로·아웃트로 '카드'(45_intro.png / 48_outro.png)는 generate-cards.js 가 HyperFrames 로 씬 스틸 위에 한글을 로컬 합성하므로 이미지 엔진을 타지 않는다 — 배경이 되는 씬이 codex 로 바뀌면 카드도 자동으로 따라온다. S6d 의 codex 분기는 generate-intro.js 레거시 아트 경로용.",
+    "when_all_generation_blocked": "생성 경로(브라우저 ChatGPT · codex imagegen · gpt-image-1 · Gemini)가 전부 막히면 auto-pipeline.sh Phase 7 이 마지막으로 **자산 재사용 폴백**을 돈다 — 기존 에피소드의 마시 씬 스틸·모션 클립에서 대본에 맞는 컷을 골라 복사한다. 정책 정본은 config/asset-reuse.json, 구현은 scripts/automation/reuse-scene-assets.js 다. 수동 확인: node scripts/automation/reuse-scene-assets.js --script <30_script.md> --dry-run. 2026-09-22 추가 — 그날 ChatGPT 주간한도(9/25 해제) · gpt-image-1 크레딧 고갈 · Gemini 402 · Grok 소진이 동시에 걸려 EP-2026-0172 가 Phase 7 에서 halt 했다."
   },
   "_image_api_policy": "S6c/S6d/S6e 가 media-render 이면 이미지 API(gpt-image-1·Gemini)를 호출하지 않는다. 전부 브라우저(ChatGPT 이미지 → Grok 영상)로 만든다. API 로 만들려면 produce-episode.js --image-engine 으로 명시해야 한다.",
   "codex_imagegen": {
