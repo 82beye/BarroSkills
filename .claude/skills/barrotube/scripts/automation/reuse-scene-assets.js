@@ -211,12 +211,17 @@ export function reuseSceneAssets({ scriptPath, only = null, dryRun = false, nowM
     }
 
     // 재사용 명세. QA·회고가 "이 편의 어느 컷이 재활용인지"를 한 파일에서 읽는다.
-    writeFileSync(join(base, '40_assets', '_reuse.json'), `${JSON.stringify({
-      version: 1,
-      episode_id: episodeId,
-      reused_at: new Date().toISOString(),
-      reason: 'image generation unavailable (all engines exhausted)',
-      scenes: picks.map((p) => ({
+    //
+    // **기존 항목과 합친다.** --only 로 한 컷만 다시 고르면 통째로 덮어써서 나머지 컷의
+    // 출처가 사라졌다(2026-09-23 EP-2026-0174 실측 — 5컷 중 1컷만 남았다). 그러면
+    // doctor 의 asset_reuse 집계가 줄어들고 운영자가 무엇이 재활용인지 추적할 수 없다.
+    const manifestPath = join(base, '40_assets', '_reuse.json');
+    const prior = existsSync(manifestPath)
+      ? (() => { try { return JSON.parse(readFileSync(manifestPath, 'utf8')).scenes || []; } catch { return []; } })()
+      : [];
+    const bySceneId = new Map(prior.map((s) => [s.scene_id, s]));
+    for (const p of picks) {
+      bySceneId.set(p.sceneId, {
         scene_id: p.sceneId,
         score: p.score,
         weak: p.weak,
@@ -225,7 +230,14 @@ export function reuseSceneAssets({ scriptPath, only = null, dryRun = false, nowM
         source_path: relative(ROOT, p.source.image),
         clip_reused: existsSync(join(videosDir, `scene_${p.sceneId}.mp4`))
           && engines[p.sceneId]?.engine === 'reuse',
-      })),
+      });
+    }
+    writeFileSync(manifestPath, `${JSON.stringify({
+      version: 1,
+      episode_id: episodeId,
+      reused_at: new Date().toISOString(),
+      reason: 'image generation unavailable (all engines exhausted)',
+      scenes: [...bySceneId.values()].sort((a, b) => a.scene_id.localeCompare(b.scene_id)),
       unmatched,
     }, null, 2)}\n`);
 
