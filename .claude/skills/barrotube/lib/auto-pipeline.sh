@@ -100,8 +100,10 @@ run_or_echo() {
 fail_with_alert() {
   local stage="$1"; local detail="$2"
   echo "❌ FAIL at $stage: $detail" >&2
-  audit "auto_pipeline_fail" "ERROR" "slot=$SLOT stage=$stage detail=$detail"
-  notify_telegram "❌ <b>auto-pipeline 실패</b>\nslot: ${SLOT:-adhoc}\nstage: $stage\n$detail\n\n로그: <code>tail -50 ${BARROTUBE_HOME}/logs/cron/${CRON_LOG_NAME}.log</code>"
+  # 에피소드 ID 를 싣는다. 예전 알림에는 slot·stage 만 있어서 어느 회차가 죽었는지
+  # 로그를 파야 알 수 있었다 (2026-09-23 EP-2026-0175 추적에 그대로 걸렸다).
+  audit "auto_pipeline_fail" "ERROR" "slot=$SLOT ep=${EP_ID:-?} stage=$stage detail=$detail"
+  notify_telegram "❌ <b>auto-pipeline 실패</b>\nslot: ${SLOT:-adhoc}\nEP: ${EP_ID:-(에피소드 생성 전)}\nstage: $stage\n$detail\n\n로그: <code>tail -50 ${BARROTUBE_HOME}/logs/cron/${CRON_LOG_NAME}.log</code>"
   exit 1
 }
 
