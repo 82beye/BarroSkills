@@ -8,7 +8,8 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { priorLeadSession } from '../scripts/automation/market-map.js';
 import { EDITIONS } from '../scripts/automation/lib/market-map.js';
@@ -51,4 +52,50 @@ test('크론은 종료코드 10 을 실패가 아니라 「거른 판」으로 �
   const sh = readFileSync(join(ROOT, 'lib', 'market-map-cron.sh'), 'utf-8');
   assert.match(sh, /RC.*-eq 10.*exit 0|if \[ "\$RC" -eq 10 \]; then exit 0; fi/,
     '거른 판이 크론 실패로 잡히면 매 주말 실패 알림이 온다');
+});
+
+test('직전 판은 mtime 이 아니라 날짜로 고른다 — 지난 판을 다시 만들어도 안 흔들린다', () => {
+  // 예전 구현은 mtime 최대값을 직전 판으로 삼았다. 오늘 판을 만드는 중에는 미래 판이
+  // 없어서 맞아떨어졌지만, 지난 판을 백필·수정하면 그 판의 mtime 이 가장 커져서
+  // **자기보다 나중 판**을 직전으로 집는다. 2026-09-23 에 테스트가 이 상태로 깨졌다.
+  const root = mkdtempSync(join(tmpdir(), 'mm-prior-'));
+  try {
+    const put = (date, krDate, ageMs) => {
+      const dir = join(root, date, 'evening');
+      mkdirSync(dir, { recursive: true });
+      const p = join(dir, 'data.json');
+      writeFileSync(p, JSON.stringify({ krSession: { date: krDate } }));
+      const t = (Date.now() - ageMs) / 1000;
+      utimesSync(p, t, t);
+      return p;
+    };
+    // 09-19 를 가장 나중에 만졌지만(mtime 최신) 기준일 09-21 의 직전은 09-20 이다.
+    put('2026-09-18', 'K18', 90_000);
+    put('2026-09-20', 'K20', 60_000);
+    const self = put('2026-09-21', 'K21', 30_000);
+    put('2026-09-19', 'K19', 0);
+    // 기준일보다 나중 판이 있어도 무시해야 한다.
+    put('2026-09-22', 'K22', 10_000);
+
+    const prior = priorLeadSession(root, 'evening', self);
+    assert.equal(prior.date, '2026-09-20', `mtime 에 끌려갔다: ${prior.date}`);
+    assert.equal(prior.session, 'K20');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('selfPath 가 없으면 전체에서 가장 나중 판을 본다', () => {
+  // 운영 호출은 항상 selfPath 를 준다. 없을 때 죽지 않는지만 확인한다.
+  const root = mkdtempSync(join(tmpdir(), 'mm-prior2-'));
+  try {
+    for (const [d, k] of [['2026-09-18', 'K18'], ['2026-09-20', 'K20']]) {
+      mkdirSync(join(root, d, 'evening'), { recursive: true });
+      writeFileSync(join(root, d, 'evening', 'data.json'), JSON.stringify({ krSession: { date: k } }));
+    }
+    const prior = priorLeadSession(root, 'evening', null);
+    assert.equal(prior.date, '2026-09-20');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

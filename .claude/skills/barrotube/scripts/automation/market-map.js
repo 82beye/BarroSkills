@@ -141,16 +141,23 @@ const findPriorKr = (outRoot) => findPrior(outRoot, (d) => (
  */
 export function priorLeadSession(outRoot, edition, selfPath) {
   const { leads } = EDITIONS[edition];
+  // 기준일은 selfPath 의 날짜 폴더다. 예전에는 mtime 최대값을 "직전 판"으로 삼았는데,
+  // 그건 **오늘 판을 만드는 중**이라 미래 판이 없다는 가정에서만 맞는다. 지난 판을
+  // 다시 만들면(백필·수정) 그 판의 mtime 이 가장 커져서 자기보다 나중 판을 직전으로
+  // 집는다. 폴더명이 YYYY-MM-DD 라 사전순 비교가 곧 날짜순이다.
+  const selfDate = typeof selfPath === 'string'
+    ? (selfPath.match(/(\d{4}-\d{2}-\d{2})/) || [])[1] || null
+    : null;
   let best = null;
   for (const dateDir of readdirSync(outRoot, { withFileTypes: true }).filter((e) => e.isDirectory())) {
     const p = join(outRoot, dateDir.name, edition, 'data.json');
     if (!existsSync(p) || p === selfPath) continue;
+    if (selfDate && dateDir.name >= selfDate) continue;
     let d;
     try { d = JSON.parse(readFileSync(p, 'utf-8')); } catch { continue; }
     const session = leads === 'us' ? d.usSession : d.krSession?.date;
     if (!session) continue;
-    const mt = statSync(p).mtimeMs;
-    if (!best || mt > best.mt) best = { session, date: dateDir.name, mt };
+    if (!best || dateDir.name > best.date) best = { session, date: dateDir.name, mt: statSync(p).mtimeMs };
   }
   return best;
 }
