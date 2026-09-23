@@ -186,6 +186,26 @@ export function allSlots() {
 }
 
 /**
+ * "마시가 서서 설명하는" 범용 구도의 중앙 객체.
+ *
+ * 이 채널의 모든 컷은 `standing before a single X in the centre, face readable` 이라
+ * 구도 자체가 이미 발표 장면이다. 그중 X 가 아래처럼 **방향도 주제도 주장하지 않는**
+ * 물건이면, 대본 내용과 정확히 맞지 않아도 어색하지 않다.
+ *
+ * 1차 배정이 비면(신선도 조건 때문에 후보가 말랐을 때) 2차 패스가 이 목록을 앞세워
+ * 회차를 완주시킨다. 없는 것보다 낫고, 엉뚱한 방향을 주장하는 컷보다 낫다.
+ */
+export const GENERIC_OBJECTS = [
+  'chart', 'board', 'panel', 'screen', 'podium', 'lectern', 'microphone',
+  'desk', 'graph', 'easel', 'monitor', 'display',
+];
+
+export function isGenericObject(prompt) {
+  const o = normalizeObject(prompt);
+  return !!o && GENERIC_OBJECTS.some((g) => o.includes(g));
+}
+
+/**
  * 중앙 객체를 정규화해 다양성 계산의 단위로 만든다.
  *
  * `large glowing alarm bell` 과 `bright notification bell` 은 같은 그림이다. 형용사를

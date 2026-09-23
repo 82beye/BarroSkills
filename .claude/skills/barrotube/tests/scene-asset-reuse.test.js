@@ -17,6 +17,7 @@ import {
   palettesConflict,
   DEFAULT_POLICY,
 } from '../scripts/automation/lib/scene-asset-index.js';
+import { isGenericObject, GENERIC_OBJECTS } from '../scripts/automation/lib/scene-slot-taxonomy.js';
 import { isRealMotionClip } from '../scripts/automation/reuse-scene-assets.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -162,9 +163,10 @@ test('한 원본 에피소드에서 max_per_source_episode 를 넘게 가져가�
       sceneId: id, role: 'hook', palette: 'explainer',
       prompt: prompt('explainer', `single object ${id}`, 'floor'),
     }));
+    // 2차 패스를 끄고 1차 필터만 본다 — 완주 보정은 별도 테스트가 검증한다.
     const { picks } = pickReuseSet({
       scenes, candidates, nowMs: NOW,
-      policy: { max_per_source_episode: 2 },
+      policy: { max_per_source_episode: 2, complete_with_generic: false },
     });
 
     assert.equal(picks.length, 2, '상한을 넘겨 배정했다');
@@ -189,7 +191,7 @@ test('min_source_age_days 보다 최근에 구운 컷은 후보에서 빠진다 
     const scenes = [{ sceneId: '001', role: 'hook', palette: 'explainer', prompt: prompt('explainer', 'single balance scale', 'floor') }];
     const { picks, unmatched } = pickReuseSet({
       scenes, candidates, nowMs: NOW,
-      policy: { min_source_age_days: 10 },
+      policy: { min_source_age_days: 10, complete_with_generic: false },
     });
     assert.equal(picks.length, 0);
     assert.deepEqual(unmatched, ['001']);
@@ -197,7 +199,7 @@ test('min_source_age_days 보다 최근에 구운 컷은 후보에서 빠진다 
     // 조건을 풀면 같은 컷이 후보로 돌아온다 — 운영자가 halt 안내대로 풀 수 있어야 한다.
     const loosened = pickReuseSet({
       scenes, candidates, nowMs: NOW,
-      policy: { min_source_age_days: 1 },
+      policy: { min_source_age_days: 1, complete_with_generic: false },
     });
     assert.equal(loosened.picks.length, 1);
   } finally {
@@ -222,12 +224,12 @@ test('원장에 쿨다운 기간 내 기록이 있으면 같은 원본을 다시
       source_scene_id: '001',
       used_at: new Date(NOW - 3 * DAY).toISOString(),
     }];
-    const blocked = pickReuseSet({ scenes, candidates, ledger, nowMs: NOW, policy: { cooldown_days: 30 } });
+    const blocked = pickReuseSet({ scenes, candidates, ledger, nowMs: NOW, policy: { cooldown_days: 30, complete_with_generic: false } });
     assert.deepEqual(blocked.unmatched, ['001'], '쿨다운이 걸리지 않았다');
 
     // 쿨다운이 지난 기록은 막지 않는다.
     const expired = [{ ...ledger[0], used_at: new Date(NOW - 40 * DAY).toISOString() }];
-    const allowed = pickReuseSet({ scenes, candidates, ledger: expired, nowMs: NOW, policy: { cooldown_days: 30 } });
+    const allowed = pickReuseSet({ scenes, candidates, ledger: expired, nowMs: NOW, policy: { cooldown_days: 30, complete_with_generic: false } });
     assert.equal(allowed.picks.length, 1);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -425,4 +427,83 @@ test('재사용 CLI 는 한 컷이라도 못 채우면 0 이 아닌 종료코드
   const source = readFileSync(join(ROOT, 'scripts', 'automation', 'reuse-scene-assets.js'), 'utf8');
   assert.ok(/if \(unmatched\.length\) process\.exit\(1\)/.test(source),
     '미배정이 있어도 종료코드 0 으로 끝난다');
+});
+
+test('1차 후보가 말라도 2차 패스가 회차를 완주시킨다', () => {
+  // 1차가 비면 파이프라인이 Phase 7 에서 서고 회차가 통째로 날아간다. 주제가 덜 맞아도
+  // 내보내는 편이 낫다 — 운영자 요청(2026-09-23).
+  const dir = mkdtempSync(join(tmpdir(), 'reuse-generic-'));
+  try {
+    const src = join(dir, 'EP-2026-0001');
+    makeScript(src, {
+      episodeId: 'EP-2026-0001',
+      scenes: [
+        { sceneId: '001', role: 'hook', prompt: prompt('explainer', 'single labeled chart', 'floor') },
+        { sceneId: '002', role: 'context', prompt: prompt('explainer', 'single rusty anchor', 'harbour') },
+      ],
+    });
+    placeAssets(src, ['001', '002'], { ageDays: 1 });   // 전부 '너무 신선'해서 1차에서 빠진다
+    const candidates = buildIndex(dir, {});
+
+    const scenes = [{
+      sceneId: '001', role: 'hook', palette: 'explainer',
+      prompt: prompt('explainer', 'single glowing microchip', 'circuit skyline'),
+    }];
+
+    // 2차 패스가 꺼져 있으면 예전처럼 미배정으로 남는다.
+    const off = pickReuseSet({
+      scenes, candidates, nowMs: NOW,
+      policy: { min_source_age_days: 10, complete_with_generic: false },
+    });
+    assert.deepEqual(off.unmatched, ['001']);
+
+    // 켜면 반드시 채운다.
+    const on = pickReuseSet({ scenes, candidates, nowMs: NOW, policy: { min_source_age_days: 10 } });
+    assert.deepEqual(on.unmatched, [], '2차 패스가 씬을 못 채웠다');
+    assert.equal(on.picks.length, 1);
+    assert.equal(on.picks[0].filled_generic, true);
+    assert.equal(on.picks[0].weak, true, '2차 배정은 항상 사람이 한 번 봐야 한다');
+    // 범용 구도(chart)를 닻(anchor)보다 앞세운다.
+    assert.equal(on.picks[0].generic_object, true);
+    assert.match(on.picks[0].source.prompt, /chart/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('2차 패스도 화풍·캐리커처·방향 모순은 그대로 막는다', () => {
+  // 완주보다 우선하는 것이 있다 — 저 셋은 "덜 맞는" 문제가 아니라 "틀린" 문제다.
+  const dir = mkdtempSync(join(tmpdir(), 'reuse-generic2-'));
+  try {
+    const src = join(dir, 'EP-2026-0001');
+    const legacy = 'vertical 9:16, cartoon stick figure with a chart, bold line art';
+    const face = `${prompt('explainer', 'single labeled chart', 'floor')} WITH: a flat cartoon caricature of a middle-aged man with dark hair.`;
+    makeScript(src, {
+      episodeId: 'EP-2026-0001',
+      scenes: [
+        { sceneId: '001', role: 'hook', prompt: legacy },
+        { sceneId: '002', role: 'hook', prompt: face },
+        { sceneId: '003', role: 'hook', prompt: prompt('bullish', 'single labeled chart', 'floor') },
+      ],
+    });
+    placeAssets(src, ['001', '002', '003'], { ageDays: 1 });
+    const candidates = buildIndex(dir, {});
+
+    // bearish 대본 — 위 셋은 각각 구세대·캐리커처·방향모순이라 전부 막혀야 한다.
+    const scenes = [{
+      sceneId: '001', role: 'hook', palette: 'bearish',
+      prompt: prompt('bearish', 'single steep price chart', 'floor'),
+    }];
+    const r = pickReuseSet({ scenes, candidates, nowMs: NOW, policy: { min_source_age_days: 10 } });
+    assert.deepEqual(r.unmatched, ['001'], '2차 패스가 안전 조건을 뚫었다');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('범용 구도 어휘는 마스코트가 서서 설명하는 장면을 가리킨다', () => {
+  assert.ok(GENERIC_OBJECTS.includes('chart') && GENERIC_OBJECTS.includes('podium'));
+  assert.equal(isGenericObject('standing before a single labeled chart in the centre'), true);
+  assert.equal(isGenericObject('standing before a tall podium microphone in the centre'), true);
+  assert.equal(isGenericObject('standing before a single rusty anchor in the centre'), false);
 });

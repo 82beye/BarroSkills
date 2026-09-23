@@ -183,7 +183,10 @@ export function reuseSceneAssets({ scriptPath, only = null, dryRun = false, nowM
       && isRealMotionClip(pick.source.video);
 
     const tag = `${pick.source.episodeId} s${pick.source.sceneId}`;
-    console.log(`  ♻︎ 씬 ${pick.sceneId} ← ${tag}  score=${pick.score}${pick.weak ? ' ⚠약함' : ''}${wantClip ? ' +클립' : ''}`);
+    const mark = pick.filled_generic
+      ? (pick.generic_object ? ' 🧩범용구도' : ' 🧩완주배정')
+      : (pick.weak ? ' ⚠약함' : '');
+    console.log(`  ♻︎ 씬 ${pick.sceneId} ← ${tag}  score=${pick.score}${mark}${wantClip ? ' +클립' : ''}`);
 
     // dry-run 도 **복사될 개수**를 세야 한다. 세지 않으면 요약이 "클립 0개" 로 나와
     // 운영자가 모션 없이 나간다고 잘못 읽는다.
@@ -230,6 +233,8 @@ export function reuseSceneAssets({ scriptPath, only = null, dryRun = false, nowM
         source_path: relative(ROOT, p.source.image),
         clip_reused: existsSync(join(videosDir, `scene_${p.sceneId}.mp4`))
           && engines[p.sceneId]?.engine === 'reuse',
+        filled_generic: !!p.filled_generic,
+        generic_object: !!p.generic_object,
       });
     }
     writeFileSync(manifestPath, `${JSON.stringify({
@@ -290,8 +295,14 @@ function main() {
     dryRun: !!values['dry-run'],
   });
 
-  const weak = picks.filter((p) => p.weak).length;
-  console.log(`\n✅ 스틸 ${picks.length}컷 재사용 (클립 ${copiedClips}개 동반)${weak ? `, 시각 매칭 약함 ${weak}컷` : ''}`);
+  const generic = picks.filter((p) => p.filled_generic).length;
+  const weak = picks.filter((p) => p.weak && !p.filled_generic).length;
+  console.log(`\n✅ 스틸 ${picks.length}컷 재사용 (클립 ${copiedClips}개 동반)`
+    + `${weak ? `, 시각 매칭 약함 ${weak}컷` : ''}`
+    + `${generic ? `, 완주용 범용 배정 ${generic}컷` : ''}`);
+  if (generic) {
+    console.log('   🧩 1차 후보가 말라 신선도 조건을 풀고 채웠다 — 주제가 덜 맞을 수 있으니 렌더 전 확인하세요.');
+  }
 
   // 한 컷이라도 못 채웠으면 실패다. 호출한 파이프라인이 게이트로 다시 판정하지만,
   // 종료코드가 0 이면 로그만 보는 운영자가 성공으로 읽는다.

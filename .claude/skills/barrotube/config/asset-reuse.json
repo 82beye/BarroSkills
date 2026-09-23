@@ -11,7 +11,8 @@
     "palette_bonus": 0.03,
     "require_current_era": true,
     "block_palette_conflict": true,
-    "block_caricature": true
+    "block_caricature": true,
+    "complete_with_generic": true
   },
   "reuse_motion_clips": true,
   "ledger": "workspace/assets/scene-reuse-ledger.json",
@@ -25,7 +26,8 @@
     "require_current_era": "현행 화풍으로 구운 컷만 후보로 본다. 2026-09-22 EP-0172 1차 실측에서 씬 003 이 EP-2026-0050(176자 구세대 템플릿)로 배정돼 평면 미니멀 화풍이 편집일러스트 컷들 사이에 섞였다. 점수는 '무엇을 그렸나'만 보고 '어떻게 그렸나'를 못 본다. 판정은 image-prompt-contract.js 의 BOUNDS.minChars + 캐릭터 시트 문구 — 계약이 바뀌면 판정도 따라온다.",
     "block_palette_conflict": "bullish 그림을 bearish 대본에 붙이지 않는다. 상승 계단이 하락 대본에 붙으면 시청자가 즉시 알아본다. explainer·cta 는 중립이라 섞여도 된다.",
     "block_caricature": "공인 캐리커처가 들어간 컷은 재사용하지 않는다. 2026-09-22 EP-0172 2차 실측에서 씬 005 가 실존 인물 캐리커처 컷(EP-2026-0128 s001)으로 배정됐는데 대본은 다른 인물을 말했다 — 인물 오귀속이다. 748컷 중 17개뿐이라 빼도 후보가 줄지 않는다. 판정은 image-prompt-contract.js 의 CARICATURE.clauseRe.",
-    "measured_2026_09_22": "최근 9편을 각각 대상으로 돌려 45컷 전부 배정 성공(미배정 0). 후보 풀은 현행 화풍 443컷 + 캐리커처 17컷 제외. 하루 5컷·쿨다운 30일 기준으로 여유가 있다."
+    "measured_2026_09_22": "최근 9편을 각각 대상으로 돌려 45컷 전부 배정 성공(미배정 0). 후보 풀은 현행 화풍 443컷 + 캐리커처 17컷 제외. 하루 5컷·쿨다운 30일 기준으로 여유가 있다.",
+    "complete_with_generic": "1차에서 못 채운 씬을 2차 패스로 반드시 채워 회차를 완주시킨다. 1차가 비는 이유는 대개 신선도 조건(min_source_age_days·cooldown·max_per_source_episode)이고, 거기서 멈추면 파이프라인이 Phase 7 에서 서서 회차가 통째로 날아간다. 2차는 **신선도만** 풀고 '마시가 서서 설명하는' 범용 구도(차트·보드·패널·연단)를 우선 배정한다. 화풍 세대·캐리커처·방향 모순은 2차에서도 막는다 — 그 셋은 '덜 맞는' 문제가 아니라 '틀린' 문제라 완주보다 우선한다. 2차 배정분은 항상 weak 로 표시해 사람이 한 번 본다. 2026-09-23 운영자 요청."
   },
   "library": {
     "manifest": "workspace/assets/scene-library.json",

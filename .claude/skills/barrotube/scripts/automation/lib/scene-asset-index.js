@@ -29,6 +29,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { parse as parseYAML } from 'yaml';
 import { BOUNDS, CARICATURE } from './image-prompt-contract.js';
+import { isGenericObject } from './scene-slot-taxonomy.js';
 
 /** 자산 경로 규칙. image-engines.json 의 media_render.*_out 과 같은 레이아웃이다. */
 const IMAGES_REL = join('40_assets', 'images');
@@ -299,6 +300,14 @@ export const DEFAULT_POLICY = {
   block_palette_conflict: true,
   /** 공인 캐리커처가 들어간 컷은 재사용하지 않는다 (인물 오귀속 방지). */
   block_caricature: true,
+  /**
+   * 1차에서 못 채운 씬을 2차 패스로 반드시 채운다.
+   *
+   * 끄면 예전처럼 미배정이 남고 파이프라인이 Phase 7 에서 멈춘다. 켜면 신선도 조건
+   * (연령·쿨다운)만 풀어 "마시가 서서 설명하는" 범용 구도를 우선 배정한다 —
+   * 안전 조건(화풍 세대·캐리커처·방향 모순)은 2차에서도 그대로다.
+   */
+  complete_with_generic: true,
 };
 
 /**
@@ -399,6 +408,52 @@ export function pickReuseSet({ scenes, candidates, policy = {}, ledger = [], now
       score: Number(hit.score.toFixed(4)),
       weak: hit.score < pol.min_score,
     });
+  }
+
+  // ── 2차 패스 — 회차를 완주시킨다 ────────────────────────────────
+  //
+  // 1차가 비는 이유는 대개 신선도 조건이다(min_source_age_days·cooldown 으로 후보가
+  // 말랐거나, 한 원본 EP 상한에 걸렸거나). 거기서 멈추면 파이프라인이 Phase 7 에서
+  // 서고 회차가 통째로 날아간다. 그럴 바에는 주제가 덜 맞아도 내보내는 편이 낫다.
+  //
+  // **푸는 것은 신선도뿐이다.** 화풍 세대·캐리커처·방향 모순은 2차에서도 막는다 —
+  // 그 셋은 "덜 맞는" 문제가 아니라 "틀린" 문제라서 완주보다 우선한다.
+  if (pol.complete_with_generic && unmatched.length) {
+    const relaxed = candidates.filter((c) => {
+      if (pol.require_current_era && !isCurrentEra(c.prompt)) return false;
+      if (pol.block_caricature && hasCaricature(c.prompt)) return false;
+      return !takenAsset.has(c.image);
+    });
+    const vec2 = buildVectorizer([...relaxed.map((c) => c.prompt), ...scenes.map((s) => s.prompt)]);
+
+    for (const sceneId of [...unmatched]) {
+      const scene = scenes.find((s) => s.sceneId === sceneId);
+      if (!scene) continue;
+      const qv = vec2(scene.prompt);
+      const ranked = relaxed
+        .filter((c) => !takenAsset.has(c.image))
+        .filter((c) => !(pol.block_palette_conflict && palettesConflict(scene.palette, c.palette)))
+        .map((cand) => ({
+          cand,
+          score: cosine(qv, vec2(cand.prompt)),
+          // "마시가 서서 설명하는" 범용 구도를 앞세운다. 주제가 안 맞아도 어색하지 않다.
+          generic: isGenericObject(cand.prompt),
+        }))
+        .sort((a, b) => (b.generic - a.generic) || (b.score - a.score));
+
+      const hit = ranked[0];
+      if (!hit) continue;
+      takenAsset.add(hit.cand.image);
+      picks.push({
+        sceneId,
+        source: hit.cand,
+        score: Number(hit.score.toFixed(4)),
+        weak: true,                 // 2차 배정은 항상 사람이 한 번 본다
+        filled_generic: true,
+        generic_object: hit.generic,
+      });
+      unmatched.splice(unmatched.indexOf(sceneId), 1);
+    }
   }
 
   picks.sort((a, b) => a.sceneId.localeCompare(b.sceneId));
