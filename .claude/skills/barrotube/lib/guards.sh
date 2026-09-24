@@ -62,6 +62,13 @@ load_bt_env
 # nvm 버전이 올라가는 순간 죽은 경로가 된다 (v24.11.1 → v26 이면 끝).
 # 여기서 한 번 더 찾아 두면 plist 가 낡아도 스크립트는 계속 돈다.
 # ─────────────────────────────────────────────────
+# Google 로 가는 IPv6 경로가 죽어 있는 환경이 있다 (2026-09-23 실측: curl -6 은
+# 실패하고 curl -4 만 200). Node 는 Happy Eyeballs 로 IPv4 로 떨어져야 하는데
+# 간헐적으로 실패해 fetch 가 EHOSTUNREACH(AggregateError)로 죽는다. 그날 omnibus 는
+# Phase 1 에서 yahoo_finance 를, Phase 12 에서 업로드를 그렇게 잃었다 — 렌더까지
+# 끝난 회차가 마지막 한 걸음에서 날아갔다. IPv4 를 먼저 보게 해 그 창을 없앤다.
+export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--dns-result-order=ipv4first"
+
 ensure_node_on_path() {
   command -v node >/dev/null 2>&1 && return 0
 
