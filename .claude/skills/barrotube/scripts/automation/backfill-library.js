@@ -29,7 +29,7 @@ import { stringify as stringifyYAML, parse as parseYAML } from 'yaml';
 
 import { synthesizeScene, pickObjects, parseSlot } from './lib/backfill-prompt.js';
 import { slotGrade, slotTarget } from './lib/scene-slot-taxonomy.js';
-import { generateImageCodex } from './lib/image-engines/codex-imagegen.js';
+import { generateImageCodex, sheetPath } from './lib/image-engines/codex-imagegen.js';
 import { checkImage, contactSheet, dHash, FAIL, WARN } from './lib/image-quality.js';
 import { buildIndex, isCurrentEra, hasCaricature } from './lib/scene-asset-index.js';
 import { LIBRARY_ROOT } from './reuse-scene-assets.js';
@@ -130,6 +130,27 @@ export function evaluateGuards({ now, routines, ledger, inFlight, pendingRender,
   return { blocks, remaining, slots };
 }
 
+/**
+ * 채널과 캐릭터 시트를 정한다. 시트가 없으면 **굽지 않는다.**
+ *
+ * 2026-09-25 실측 사고: 채널 값을 코드에 'barro-economy' 로 박아 넣었는데 시트 파일명
+ * 규칙은 'econ-daily' 만 '바로경제' 로 바꿔 준다. sheetPath 가 null 을 돌려주자 어댑터가
+ * **시트 이미지와 CHARACTER_LOCK 을 둘 다 조용히 빼고** 프롬프트만 보냈다. 19회 호출
+ * 전부가 참조 없이 구워졌고 로그 어디에도 흔적이 없었다(codex 세션 기록으로만 확인됨).
+ * 정규 회차는 대본의 channel_id(econ-daily)를 넘겨서 같은 날에도 정상이었다.
+ * 채널은 routines.json 의 defaults.channel 이 정본이다 — 파이프라인과 같은 값을 쓴다.
+ */
+export function resolveSheet(routines, lookup = sheetPath) {
+  const channel = routines?.defaults?.channel;
+  if (!channel) throw new Error('config/routines.json 에 defaults.channel 이 없습니다');
+  const sheet = lookup(channel);
+  if (!sheet) {
+    throw new Error(`채널 ${channel} 의 캐릭터 시트를 찾지 못했습니다 (workspace/docs/*_캐릭터시트.png). ` +
+      '시트 없이 구우면 캐릭터가 드리프트하므로 멈춥니다.');
+  }
+  return { channel, sheet };
+}
+
 /** 규칙 4 — A→B→C→R, 같은 등급 안에서는 부족분 큰 쪽, 같으면 up 먼저. */
 export function orderShortfall(manifest, { overrides = {} } = {}) {
   const rows = [];
@@ -151,8 +172,24 @@ export function orderShortfall(manifest, { overrides = {} } = {}) {
     || a.slot.localeCompare(b.slot));
 }
 
+/**
+ * 주제별로 이미 라이브러리에 있는 객체. 실행을 건너 겹침을 막는 데 쓴다.
+ *
+ * 한 실행 안의 중복만 막으면 부족하다. 일일 상한(5컷) 때문에 백필은 원래 여러 날에
+ * 나눠 돌고, 그러면 어제 metals/up 에 구운 ingot 을 오늘 metals/neutral 이 또 받는다
+ * (2026-09-25 실측 — 실행을 셋으로 나눴더니 그렇게 됐다).
+ */
+export function themeObjects(manifest) {
+  const out = {};
+  for (const [slot, s] of Object.entries(manifest.slots || {})) {
+    const theme = slot.split('/')[0];
+    for (const a of s.assets || []) if (a.object) (out[theme] ||= new Set()).add(a.object);
+  }
+  return out;
+}
+
 /** 상한까지 컷 단위로 펼친다. 한 슬롯이 여러 컷 부족하면 그만큼 연속으로 잡는다. */
-export function buildWorkOrder(rows, { limit, avoid = [] }) {
+export function buildWorkOrder(rows, { limit, avoid = [], themeUsed = {} }) {
   const order = [];
   /**
    * 이번 지시서에서 이미 쓴 객체. 주제별로 누적한다 — metals/up 과 metals/neutral 이
@@ -165,7 +202,14 @@ export function buildWorkOrder(rows, { limit, avoid = [] }) {
     const need = Math.min(row.short, limit - order.length);
     const { theme } = parseSlot(row.slot);
     const taken = takenByTheme.get(theme) || [];
-    const objects = pickObjects(row.slot, { used: row.used, avoid: [...avoid, ...taken], count: need });
+    let objects;
+    try {
+      // 먼저 주제 전체에서 안 쓴 객체를 찾는다.
+      objects = pickObjects(row.slot, { used: row.used, avoid: [...avoid, ...taken, ...(themeUsed[theme] || [])], count: need });
+    } catch {
+      // 주제 어휘가 동나면 슬롯 기준으로만 피한다 — 겹침이 멈춤보다 낫다.
+      objects = pickObjects(row.slot, { used: row.used, avoid: [...avoid, ...taken], count: need });
+    }
     takenByTheme.set(theme, [...taken, ...objects.map((o) => o.noun)]);
     for (const o of objects) {
       order.push({ ...synthesizeScene(row.slot, o), grade: row.grade, shortfall: row.short, have: row.count, target: row.target });
@@ -262,10 +306,10 @@ function readBatchScript(batchDir) {
   }
 }
 
-function writeBatchScript(batchDir, batch, scenes) {
+function writeBatchScript(batchDir, batch, scenes, channel) {
   const meta = {
     episode_id: `LIB-${batch}`,
-    channel_id: 'barro-economy',
+    channel_id: channel,
     format: 'library',
     generated_by: 'backfill-library.js',
     note: '백필 라이브러리 배치. 발행되지 않는다 — 재사용 폴백이 고를 수 있게 대본 형태로 둔 것뿐이다.',
@@ -286,8 +330,11 @@ async function main() {
     },
   });
 
+  // sheetPath 는 작업 디렉터리 기준으로 시트를 찾는다. 어디서 실행해도 같게 루트로 옮긴다.
+  process.chdir(ROOT);
   const cfg = loadJSON(CONFIG_PATH, {});
   const bf = cfg.backfill || {};
+  const routines = loadJSON(join(ROOT, 'config', 'routines.json'), { slots: {} });
   const manifest = loadJSON(MANIFEST);
   if (!manifest) {
     console.error('❌ workspace/assets/scene-library.json 이 없습니다. 먼저 classify-scene-assets.js 를 돌리세요.');
@@ -306,7 +353,7 @@ async function main() {
 
   const guards = evaluateGuards({
     now,
-    routines: loadJSON(join(ROOT, 'config', 'routines.json'), { slots: {} }),
+    routines,
     ledger: asLedgerEntries(loadJSON(join(ROOT, cfg.ledger || 'workspace/assets/scene-reuse-ledger.json'), [])),
     inFlight: runningPipelines(),
     pendingRender: episodesPendingRender(Number(bf.pending_render_window_days ?? 7)),
@@ -333,7 +380,9 @@ async function main() {
   }
 
   const limit = Math.max(1, guards.remaining || cap);
-  const order = buildWorkOrder(rows, { limit: values['dry-run'] ? Math.min(totalShort, 50) : limit, avoid });
+  const order = buildWorkOrder(rows, {
+    limit: values['dry-run'] ? Math.min(totalShort, 50) : limit, avoid, themeUsed: themeObjects(manifest),
+  });
   printOrder(order, { remaining: guards.remaining, cap });
 
   if (guards.blocks.length) {
@@ -355,6 +404,9 @@ async function main() {
   }
 
   // ── 생성 ───────────────────────────────────────────────────────────────
+  const { channel, sheet } = resolveSheet(routines);
+  console.log(`\n   🧬 캐릭터 시트: ${relative(ROOT, sheet)} (채널 ${channel})`);
+  console.log(`   🔑 codex 설정 폴더: ${process.env.CODEX_HOME || '~/.codex'}`);
   const batch = today();
   const batchDir = join(LIBRARY_ROOT, batch);
   const imgDir = join(batchDir, '40_assets', 'images');
@@ -386,7 +438,7 @@ async function main() {
     process.stdout.write(`   [${sceneId}] ${item.slot} · ${item.object} … `);
 
     try {
-      generateImageCodex({ prompt: item.prompt, outPath, channel: 'barro-economy' });
+      generateImageCodex({ prompt: item.prompt, outPath, channel });
     } catch (err) {
       const msg = String(err.message || err);
       if (QUOTA_SIGNAL.test(msg)) {
@@ -426,12 +478,21 @@ async function main() {
   }
 
   if (accepted.length) {
-    writeBatchScript(batchDir, batch, [...existing, ...accepted]);
-    const sheetPaths = accepted.map((s) => join(imgDir, `scene_${s.scene_id}.png`));
-    const sheet = join(batchDir, '60_qa_frames.png');
-    await contactSheet(sheetPaths, sheet, { cols: Math.min(4, sheetPaths.length) });
+    writeBatchScript(batchDir, batch, [...existing, ...accepted], channel);
+    /**
+     * 콘택트시트는 **첫 칸에 캐릭터 시트**를 두고 **배치 전체 컷**을 담는다.
+     *
+     * 2026-09-25 교훈: 시트 없이 구운 14컷을 "미튼 손·볼터치·머리카락" 문구로만 검수해
+     * 통과시켰는데, 시트 옆에 놓자 팔다리가 전부 검은 막대였다. 체크리스트는 적힌 것만
+     * 보고, 시트는 적히지 않은 것까지 보여 준다. 그 실행분만 담으면 나눠 구운 배치를 한눈에
+     * 못 보므로 배치 전체를 다시 그린다.
+     */
+    const batchPngs = readdirSync(imgDir).filter((f) => /^scene_\d{3}\.png$/.test(f)).sort()
+      .map((f) => join(imgDir, f));
+    const qaSheet = join(batchDir, '60_qa_frames.png');
+    await contactSheet([sheet, ...batchPngs], qaSheet, { cols: Math.min(5, batchPngs.length + 1) });
     console.log(`\n   ✅ ${accepted.length}컷 채택 · ${rejected.length}컷 버림`);
-    console.log(`   콘택트시트: ${relative(ROOT, sheet)} — 캐릭터 규격은 눈으로 봐야 합니다`);
+    console.log(`   콘택트시트: ${relative(ROOT, qaSheet)} — 첫 칸이 캐릭터 시트입니다. 나란히 놓고 보세요`);
     try {
       execSync(`node ${join(__dirname, 'classify-scene-assets.js')}`, { cwd: ROOT, stdio: 'inherit' });
     } catch { console.warn('   ⚠ 재분류 실패 — 수동으로 classify-scene-assets.js 를 돌리세요.'); }

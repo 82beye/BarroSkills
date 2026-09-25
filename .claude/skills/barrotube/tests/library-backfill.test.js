@@ -312,3 +312,60 @@ test('씬 번호는 개수가 아니라 최대 번호 다음에서 이어진다'
   await png(dir, 'scene_014.png');
   assert.equal(nextSceneSeq(scenes, dir), 14);
 });
+
+test('백필은 파이프라인과 같은 채널의 캐릭터 시트를 쓴다', async () => {
+  // 2026-09-25 사고: 채널을 'barro-economy' 로 박아 시트를 못 찾았고, 어댑터가 시트와
+  // CHARACTER_LOCK 을 조용히 빼서 19회 호출이 전부 참조 없이 구워졌다.
+  const { resolveSheet } = await import('../scripts/automation/backfill-library.js');
+  const seen = [];
+  const lookup = (c) => { seen.push(c); return c === 'econ-daily' ? '/x/바로경제_캐릭터시트.png' : null; };
+  const r = resolveSheet({ defaults: { channel: 'econ-daily' } }, lookup);
+  assert.equal(r.channel, 'econ-daily');
+  assert.equal(r.sheet, '/x/바로경제_캐릭터시트.png');
+  assert.deepEqual(seen, ['econ-daily'], '정본(defaults.channel) 말고 다른 값을 찾으면 안 된다');
+});
+
+test('시트를 못 찾으면 굽지 않고 멈춘다', async () => {
+  const { resolveSheet } = await import('../scripts/automation/backfill-library.js');
+  assert.throws(() => resolveSheet({ defaults: { channel: 'nope' } }, () => null), /캐릭터 시트를 찾지 못했습니다/);
+  assert.throws(() => resolveSheet({ defaults: {} }, () => '/x.png'), /defaults\.channel/);
+});
+
+test('정본 routines.json 의 채널로 실제 시트 경로가 풀린다', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { sheetPath } = await import('../scripts/automation/lib/image-engines/codex-imagegen.js');
+  const routines = JSON.parse(readFileSync(new URL('../config/routines.json', import.meta.url), 'utf8'));
+  // 시트 파일명 규칙이 이 채널을 알아야 한다 — 모르면 경로가 '<채널>_캐릭터시트.png' 로 떨어진다.
+  const prev = process.cwd();
+  process.chdir(new URL('..', import.meta.url).pathname);
+  try {
+    const p = sheetPath(routines.defaults.channel);
+    if (p) assert.match(p, /바로경제_캐릭터시트\.png$/);
+  } finally {
+    process.chdir(prev);
+  }
+});
+
+test('실행을 건너 같은 주제 안에서 객체를 겹치지 않는다', async () => {
+  // 상한 5컷 때문에 백필은 여러 날에 나눠 돈다. 어제 metals/up 에 구운 ingot 을
+  // 오늘 metals/neutral 이 또 받으면 팔레트만 다른 같은 그림이 된다.
+  const { themeObjects } = await import('../scripts/automation/backfill-library.js');
+  const m = { slots: {
+    'metals/up': { grade: 'C', target: 2, count: 2, assets: [{ object: 'ingot' }, { object: 'crucible' }] },
+    'metals/neutral': { grade: 'C', target: 2, count: 1, assets: [{ object: 'anvil' }] },
+  } };
+  const order = buildWorkOrder(orderShortfall(m), { limit: 1, themeUsed: themeObjects(m) });
+  assert.equal(order.length, 1);
+  assert.ok(!['ingot', 'crucible', 'anvil'].includes(order[0].object), `겹침: ${order[0].object}`);
+});
+
+test('주제 어휘가 동나도 멈추지 않고 슬롯 기준으로 고른다', async () => {
+  const { themeObjects } = await import('../scripts/automation/backfill-library.js');
+  const all = THEME_SCENES.metals.objects.map((o) => ({ object: o.noun }));
+  const m = { slots: {
+    'metals/up': { grade: 'C', target: 5, count: 5, assets: all },
+    'metals/neutral': { grade: 'C', target: 2, count: 0, assets: [] },
+  } };
+  const order = buildWorkOrder(orderShortfall(m), { limit: 2, themeUsed: themeObjects(m) });
+  assert.equal(order.length, 2, '어휘가 동났다고 빈 지시서를 내면 안 된다');
+});
