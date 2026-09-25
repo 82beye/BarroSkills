@@ -33,10 +33,11 @@
     "manifest": "workspace/assets/scene-library.json",
     "obsidian_vault": "~/youtube-co/obsidian-vault/BarroTube",
     "obsidian_dir": "06-Assets",
-    "_notes": "슬롯 분류 결과의 기계 정본은 manifest 다. 옵시디언 문서는 그 렌더일 뿐이고 손으로 고치면 다음 렌더에서 사라진다. 운영자 의도는 아래 backfill.slot_overrides 에 적는다 — 정본은 항상 코드 옆이다. 자유 메모는 <obsidian_dir>/notes.md 에 두고 렌더가 건드리지 않는다."
+    "_notes": "슬롯 분류 결과의 기계 정본은 manifest 다. 옵시디언 문서는 그 렌더일 뿐이고 손으로 고치면 다음 렌더에서 사라진다. 운영자 의도는 아래 backfill.slot_overrides 에 적는다 — 정본은 항상 코드 옆이다. 자유 메모는 <obsidian_dir>/notes.md 에 두고 렌더가 건드리지 않는다. 백필 산출물은 library.root 아래 날짜 배치 폴더에 에피소드 형태(30_script.md + 40_assets/images)로 쌓인다 — workspace/episodes 에 두면 발행 대조·보드·youtube-state 가 미업로드 회차로 착각한다.",
+    "root": "workspace/assets/library"
   },
   "backfill": {
-    "enabled": false,
+    "enabled": true,
     "daily_cap": 5,
     "require_no_fallback_today": true,
     "grade_order": [
@@ -47,7 +48,8 @@
     ],
     "prefer_direction": "up",
     "slot_overrides": {},
-    "_notes": "Phase 3 에서 켠다. enabled=false 인 동안에는 분류·가시성(Phase 1)만 돈다. daily_cap 5 는 에피소드가 쓰는 15컷의 1/3 이하로 잡은 추정치이고 2주 관측 후 조정이 필요하다 — ChatGPT 는 남은 주간 한도를 노출하지 않는다. prefer_direction=up 의 근거: 2026-09-22 슬롯 분류에서 부족 11슬롯 중 6슬롯이 up 이었다(rates/up 2/4 · labor/up 0/3 · energy/up 1/3 · earnings/up 1/3 · fx/up 2/3 · metals/up 0/2). slot_overrides 는 {\"<slot>\": {\"hold\": true}} 형태로 특정 슬롯을 백필에서 제외한다.",
-    "_saturation_note": "포화 슬롯에는 백필하지 않는다. 수량이 아니라 쏠림이 문제이므로 더 구워도 해결되지 않는다 — 작가 프롬프트 쪽 문제다."
+    "_notes": "2026-09-25 Phase 3 구현과 함께 켰다(scripts/automation/backfill-library.js). pending_render_window_days 는 \"렌더가 덜 끝난 회차\" 가드의 관측 창이다 — 초기 회차 30여 편이 대본만 남고 버려져 있어 창이 없으면 가드가 영구히 켜진다. daily_cap 5 는 에피소드가 쓰는 15컷의 1/3 이하로 잡은 추정치이고 2주 관측 후 조정이 필요하다 — ChatGPT 는 남은 주간 한도를 노출하지 않는다. prefer_direction=up 의 근거: 2026-09-22 슬롯 분류에서 부족 11슬롯 중 6슬롯이 up 이었다(rates/up 2/4 · labor/up 0/3 · energy/up 1/3 · earnings/up 1/3 · fx/up 2/3 · metals/up 0/2). slot_overrides 는 {\"<slot>\": {\"hold\": true}} 형태로 특정 슬롯을 백필에서 제외한다.",
+    "_saturation_note": "포화 슬롯에는 백필하지 않는다. 수량이 아니라 쏠림이 문제이므로 더 구워도 해결되지 않는다 — 작가 프롬프트 쪽 문제다.",
+    "pending_render_window_days": 7
   }
 }

@@ -31,11 +31,18 @@ import {
   pickReuseSet,
   DEFAULT_POLICY,
 } from './lib/scene-asset-index.js';
+import { checkMany as checkManyImages } from './lib/image-quality.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..', '..');
 const CONFIG_PATH = join(ROOT, 'config', 'asset-reuse.json');
+const QA_CACHE = join(ROOT, 'workspace', 'assets', 'image-qa-cache.json');
 const EPISODES_ROOT = join(ROOT, 'workspace', 'episodes');
+/**
+ * 백필 라이브러리의 위치. classify-scene-assets.js 도 여기서 가져간다 — 경로를 두 벌
+ * 두면 한쪽만 고쳐져 분류가 보는 자산과 재사용이 보는 자산이 갈린다.
+ */
+export const LIBRARY_ROOT = join(ROOT, 'workspace', 'assets', 'library');
 
 function loadConfig() {
   if (!existsSync(CONFIG_PATH)) {
@@ -110,7 +117,7 @@ function provenanceText(pick, scene) {
   ].join('\n');
 }
 
-export function reuseSceneAssets({ scriptPath, only = null, dryRun = false, nowMs = Date.now() }) {
+export async function reuseSceneAssets({ scriptPath, only = null, dryRun = false, nowMs = Date.now() }) {
   const cfg = loadConfig();
   if (cfg.enabled === false) {
     throw new Error('config/asset-reuse.json 에서 enabled=false — 재사용 폴백이 꺼져 있습니다');
@@ -142,7 +149,25 @@ export function reuseSceneAssets({ scriptPath, only = null, dryRun = false, nowM
   }
 
   const episodeId = (readFileSync(scriptAbs, 'utf8').match(/episode_id:\s*(\S+)/) || [, ''])[1];
-  const candidates = buildIndex(EPISODES_ROOT, { excludeEpisodeIds: [episodeId].filter(Boolean) });
+  const rawCandidates = buildIndex(EPISODES_ROOT, {
+    excludeEpisodeIds: [episodeId].filter(Boolean),
+    libraryRoot: LIBRARY_ROOT,
+  });
+
+  /**
+   * 픽셀 QA 로 불량 원본을 후보에서 뺀다.
+   *
+   * 왜 필요한가: 폴백은 '무엇을 그렸나'만 보고 골랐다. 그래서 규격을 벗어난 원본을
+   * 그대로 새 회차로 옮겼다 — 2026-09-25 실측에서 EP-2026-0178 이 EP-2026-0093·0094
+   * 의 2:3(1024x1536) 컷을, EP-2026-0175 가 720x1280 컷을 받았다. 불량을 세탁해
+   * 최신 회차로 내보내는 경로였다. 여기서 끊는다.
+   */
+  const { results: qa } = await checkManyImages(rawCandidates.map((c) => c.image), { cachePath: QA_CACHE });
+  const candidates = rawCandidates.filter((c) => (qa.get(c.image)?.verdict ?? 'PASS') !== 'FAIL');
+  const droppedByQa = rawCandidates.length - candidates.length;
+  if (droppedByQa) {
+    console.log(`  🔍 픽셀 QA 로 ${droppedByQa}컷 제외 — 규격 이탈·평면·노출 파탄`);
+  }
   console.log(`📚 재사용 인덱스: ${candidates.length}컷 (클립 보유 ${candidates.filter((c) => c.video).length})`);
 
   const ledger = loadLedger(cfg);
@@ -274,7 +299,7 @@ export function reuseSceneAssets({ scriptPath, only = null, dryRun = false, nowM
   return { picks, unmatched, copiedClips };
 }
 
-function main() {
+async function main() {
   const { values } = parseArgs({
     options: {
       script: { type: 'string' },
@@ -289,7 +314,7 @@ function main() {
   }
 
   console.log('♻︎  씬 자산 재사용 폴백 — 이미지 생성 호출 0회');
-  const { picks, unmatched, copiedClips } = reuseSceneAssets({
+  const { picks, unmatched, copiedClips } = await reuseSceneAssets({
     scriptPath: values.script,
     only: values.only || null,
     dryRun: !!values['dry-run'],
@@ -310,10 +335,8 @@ function main() {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  try {
-    main();
-  } catch (e) {
+  main().catch((e) => {
     console.error(`❌ ${e.message}`);
     process.exit(1);
-  }
+  });
 }

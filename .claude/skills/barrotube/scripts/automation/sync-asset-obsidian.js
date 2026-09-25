@@ -28,6 +28,62 @@ const ROOT = resolve(__dirname, '..', '..');
 const GENERATED = '<!-- 자동 생성 — 손으로 고치지 마세요. 메모는 notes.md 에. -->';
 /** 렌더가 소유하는 파일. 이 목록 밖의 파일은 지우지도 덮지도 않는다. */
 const OWNED = ['MOC-assets.md', 'coverage-checklist.md', 'gaps.md', 'retired.md'];
+const QA_CACHE = join(ROOT, 'workspace', 'assets', 'image-qa-cache.json');
+
+/**
+ * 픽셀 QA 요약을 읽는다.
+ *
+ * 캐시는 재사용 폴백·QA 리포트·백필이 돌면서 채운다. 여기서 다시 재지 않는 이유는
+ * 옵시디언 동기화가 doctor 직후에 매일 도는 가벼운 단계라서다 — 460여 컷을 디코딩하면
+ * 그 성질이 깨진다. 캐시가 비어 있으면 "아직 안 쟀다"고 적고 넘어간다.
+ */
+function readQaSummary() {
+  if (!existsSync(QA_CACHE)) return null;
+  let cache;
+  try { cache = JSON.parse(readFileSync(QA_CACHE, 'utf8')); } catch { return null; }
+  const sum = { PASS: 0, WARN: 0, FAIL: 0, codes: {}, worst: [] };
+  for (const [key, v] of Object.entries(cache)) {
+    sum[v.verdict] = (sum[v.verdict] || 0) + 1;
+    for (const c of v.codes || []) sum.codes[c] = (sum.codes[c] || 0) + 1;
+    if (v.verdict === 'FAIL' && sum.worst.length < 12) {
+      const path = key.split('|')[0];
+      const m = path.match(/(EP-\d{4}-\d{4}|LIB-[\d-]+)[\s\S]*?scene_(\d{3})/);
+      sum.worst.push({ where: m ? `${m[1]} s${m[2]}` : path.split('/').slice(-1)[0], codes: (v.codes || []).join(', '), size: `${v.width}x${v.height}` });
+    }
+  }
+  sum.total = sum.PASS + sum.WARN + sum.FAIL;
+  return sum.total ? sum : null;
+}
+
+/** 픽셀 QA 절. 체크리스트 맨 아래에 붙는다. */
+function renderQaSection() {
+  const qa = readQaSummary();
+  if (!qa) return ['## 🔍 이미지 픽셀 QA', '', '(아직 측정 전 — 재사용 폴백이나 QA 리포트가 한 번 돌면 채워집니다)', ''];
+  const out = ['## 🔍 이미지 픽셀 QA', '',
+    `> 측정 **${qa.total}컷** · PASS ${qa.PASS} · WARN ${qa.WARN} · FAIL ${qa.FAIL}`, '',
+    '비율·해상도·평면·노출을 봅니다. **캐릭터 규격(미튼 손·캡슐 몸통)은 여기서 못 잡습니다** — 그림을 봐야 하고, 그 방어선은 배치 폴더의 `60_qa_frames.png` 육안 검수입니다.', ''];
+  const codes = Object.entries(qa.codes).sort((a, b) => b[1] - a[1]);
+  if (codes.length) {
+    out.push('| 코드 | 건수 | 뜻 |', '|---|---|---|');
+    const MEAN = {
+      ASPECT_OFF_SPEC: '9:16 이 아님 — 렌더에서 레터박스가 생깁니다',
+      TOO_SMALL: '가로 800px 미만 — 렌더가 끊겼을 수 있습니다',
+      FLAT_IMAGE: '단색·평면 — 생성 실패로 봅니다',
+      EXPOSURE_BROKEN: '새까맣거나 새하얀 렌더',
+      EXPOSURE_OUTLIER: '휘도가 코퍼스 p1~p99 밖 — 화풍이 튈 수 있습니다',
+      NEAR_DUPLICATE: '기존 컷과 사실상 같은 그림',
+      UNREADABLE: '디코딩 실패 — 파일이 깨졌습니다',
+    };
+    for (const [c, n] of codes) out.push(`| \`${c}\` | ${n} | ${MEAN[c] || '—'} |`);
+    out.push('');
+  }
+  if (qa.worst.length) {
+    out.push('### 불합격 컷', '', '| 위치 | 해상도 | 사유 |', '|---|---|---|');
+    for (const w of qa.worst) out.push(`| ${w.where} | ${w.size} | ${w.codes} |`);
+    out.push('', '이 컷들은 재사용 폴백 후보에서 자동으로 빠집니다 — 불량이 새 회차로 옮겨 가지 않습니다.', '');
+  }
+  return out;
+}
 
 function expandHome(p) {
   return p.startsWith('~') ? join(homedir(), p.slice(1)) : p;
@@ -100,6 +156,8 @@ export function renderChecklist(lib) {
     for (const [slot, s] of rows) out.push(slotLine(slot, s));
     out.push('');
   }
+
+  out.push(...renderQaSection());
 
   if (t.unclassified > 0) {
     out.push('## 미분류', '',

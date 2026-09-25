@@ -48,6 +48,14 @@ export const CHARACTER_LOCK = [
   '- Feet are rounded shoe-shapes. Limbs are thin sticks.',
   '- Head-to-body width ratio must match the sheet (body roughly 0.6x the head width).',
   '- Full body visible, standing on the floor, NOT sitting on or straddling any object.',
+  // 2026-09-25 실측: 백필 14컷 중 4컷이 시트에 없는 요소를 붙였다 — 주황 머리술 2컷
+  // (scene_003·012), 몸통 주황 채색 2컷(scene_002·009). 시트는 "no nose or ears" 만
+  // 적고 머리카락·표면색을 말하지 않아 모델이 빈칸을 채웠다. 픽셀 QA 는 넷 다
+  // 통과시켰다(비율·노출은 정상이므로). 없는 것을 금지하지 않으면 생긴다.
+  '- The head and body surfaces are PLAIN WHITE. No hair, tuft, crest, fringe,',
+  '  headwear or antenna of any kind on the head.',
+  '- The ONLY coloured marks on the character are the two orange blush cheeks.',
+  '  Never tint, shade or clothe the torso in orange or any other colour.',
 ].join('\n');
 
 /**

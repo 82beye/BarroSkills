@@ -20,7 +20,7 @@ import { parseArgs } from 'node:util';
 import { dirname, join, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildIndex, isCurrentEra, hasCaricature } from './lib/scene-asset-index.js';
-import { isRealMotionClip } from './reuse-scene-assets.js';
+import { isRealMotionClip, LIBRARY_ROOT } from './reuse-scene-assets.js';
 import {
   assignSlot, buildThemeScorer, normalizeObject, saturationOf,
   allSlots, slotTarget, slotGrade,
@@ -111,7 +111,7 @@ export function buildLibrary(entries, { now = null, probeClip = isRealMotionClip
 function main() {
   const { values } = parseArgs({ options: { json: { type: 'boolean' } } });
 
-  const entries = buildIndex(EPISODES, {});
+  const entries = buildIndex(EPISODES, { libraryRoot: LIBRARY_ROOT });
   const lib = buildLibrary(entries);
 
   mkdirSync(dirname(LIBRARY_PATH), { recursive: true });

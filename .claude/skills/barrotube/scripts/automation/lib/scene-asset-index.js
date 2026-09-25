@@ -41,7 +41,7 @@ const VIDEOS_REL = join('40_assets', 'videos');
  * 대본에만 있고 파일이 없는 씬은 버린다 — 인덱스는 "지금 복사할 수 있는 것"의 목록이고,
  * 없는 파일을 후보로 올리면 고른 뒤에 복사가 실패한다.
  */
-export function indexScriptDir(scriptPath) {
+export function indexScriptDir(scriptPath, { origin = 'episode' } = {}) {
   if (!existsSync(scriptPath)) return [];
   const raw = readFileSync(scriptPath, 'utf8');
   const fm = raw.match(/^---\n([\s\S]*?)\n---/);
@@ -69,6 +69,11 @@ export function indexScriptDir(scriptPath) {
 
     const video = join(base, VIDEOS_REL, `scene_${sceneId}.mp4`);
     out.push({
+      /**
+       * 자산의 출처. 'episode' 는 발행 경로를 탄 컷이고 'library' 는 백필로 구워 둔
+       * 컷이다. 신선도 규칙이 이 값으로 갈린다 — pickReuseSet 주석 참조.
+       */
+      origin,
       episodeId: String(meta.episode_id ?? ''),
       channelId: String(meta.channel_id ?? ''),
       format: String(meta.format ?? ''),
@@ -136,8 +141,9 @@ export function readTargetScenes(scriptPath) {
 /**
  * 에피소드 루트 전체를 인덱싱한다. v1(에피소드 직하)·v2(platforms/<platform>/) 레이아웃을 모두 본다.
  */
-export function buildIndex(episodesRoot, { excludeEpisodeIds = [] } = {}) {
-  if (!existsSync(episodesRoot)) return [];
+export function buildIndex(episodesRoot, { excludeEpisodeIds = [], libraryRoot = null } = {}) {
+  const entriesFromLibrary = libraryRoot ? indexLibrary(libraryRoot) : [];
+  if (!existsSync(episodesRoot)) return entriesFromLibrary;
   const skip = new Set(excludeEpisodeIds);
   const entries = [];
 
@@ -162,7 +168,36 @@ export function buildIndex(episodesRoot, { excludeEpisodeIds = [] } = {}) {
     }
     for (const s of scripts) entries.push(...indexScriptDir(s));
   }
-  return entries;
+  return [...entries, ...entriesFromLibrary];
+}
+
+/**
+ * 백필 라이브러리를 인덱싱한다.
+ *
+ * 왜 workspace/episodes 밖에 두는가: 거기에 두면 20곳 넘는 스크립트가 라이브러리를
+ * 에피소드로 착각한다 — 발행 대조(publish_reconciliation)·보드·youtube-state 동기화가
+ * "업로드 안 된 회차"로 잡아 매일 가짜 경보를 낸다. buildIndex 의 `/^EP-/` 필터도
+ * 어차피 걸러내므로 별도 루트를 명시로 받는 편이 정직하다.
+ *
+ * 디렉터리는 배치(날짜) 단위다. 슬롯 단위로 묶지 않는 이유는 max_per_source_episode
+ * 가 "한 출처에서 몇 컷까지"를 재기 때문이다 — 슬롯 단위면 한 슬롯을 통째로 가져가고,
+ * 날짜 단위면 여러 날에서 섞인다.
+ */
+export function indexLibrary(libraryRoot) {
+  if (!existsSync(libraryRoot)) return [];
+  const out = [];
+  for (const batch of readdirSync(libraryRoot)) {
+    const dir = join(libraryRoot, batch);
+    let stat;
+    try {
+      stat = statSync(dir);
+    } catch {
+      continue;
+    }
+    if (!stat.isDirectory()) continue;
+    out.push(...indexScriptDir(join(dir, '30_script.md'), { origin: 'library' }));
+  }
+  return out;
 }
 
 /** 프롬프트를 비교용 토큰으로 만든다. palette 태그는 별도 facet 이라 본문에서 뺀다. */
@@ -352,7 +387,16 @@ export function pickReuseSet({ scenes, candidates, policy = {}, ledger = [], now
   }
 
   const pool = candidates.filter((c) => {
-    if (nowMs - c.mtimeMs < pol.min_source_age_days * dayMs) return false;
+    /**
+     * 신선도(min_source_age_days)는 **발행된 컷**에만 적용한다.
+     *
+     * 규칙의 근거는 "시청자가 최근 컷을 알아본다"였다. 백필 라이브러리 컷은 발행
+     * 경로를 탄 적이 없어 본 사람이 없다 — 여기에 10일을 걸면 빈 슬롯을 채우려고
+     * 구운 컷이 정확히 그 슬롯이 필요한 날에 후보에서 빠진다. 백필의 목적을 스스로
+     * 무효화하는 조건이라 출처로 가른다. 쓴 뒤의 쿨다운은 그대로 적용된다 — 한 번
+     * 발행에 실리면 그때부터는 본 사람이 생긴다.
+     */
+    if (c.origin !== 'library' && nowMs - c.mtimeMs < pol.min_source_age_days * dayMs) return false;
     if (cooled.has(`${c.sceneDir}#${c.sceneId}`)) return false;
     if (pol.require_current_era && !isCurrentEra(c.prompt)) return false;
     if (pol.block_caricature && hasCaricature(c.prompt)) return false;

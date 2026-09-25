@@ -159,14 +159,20 @@ test('gap 과 target 이 등급에서 일관되게 나온다', () => {
   for (const t of Object.keys(THEME_TERMS)) assert.ok(THEME_GRADE[t], `${t} 등급 없음`);
 });
 
-test('정책 정본 config 에 library·backfill 블록이 있고 백필은 꺼져 있다', () => {
+test('정책 정본 config 에 library·backfill 블록이 있고 상한이 생산을 굶기지 않는다', () => {
   const cfg = JSON.parse(readFileSync(join(ROOT, 'config', 'asset-reuse.json'), 'utf8'));
   assert.ok(cfg.library?.manifest && cfg.library?.obsidian_vault && cfg.library?.obsidian_dir);
-  // Phase 3 전까지는 꺼져 있어야 한다. 켜진 채로 병합되면 쿼터를 먹기 시작한다.
-  assert.equal(cfg.backfill.enabled, false);
+  assert.ok(cfg.library?.root, '백필 산출물 위치가 정본에 있어야 한다');
+
+  // 2026-09-25 Phase 3 구현으로 enabled 는 true 가 됐다. 이 테스트가 지키는 것은
+  // "꺼져 있음"이 아니라 **생산을 굶기지 않는 안전값들**이다 — enabled 를 켜는 순간
+  // 이쪽이 유일한 방어선이 된다.
   assert.equal(cfg.backfill.require_no_fallback_today, true);
   assert.equal(cfg.backfill.prefer_direction, 'up');
-  assert.ok(cfg.backfill.daily_cap > 0 && cfg.backfill.daily_cap <= 5);
+  assert.ok(cfg.backfill.daily_cap > 0 && cfg.backfill.daily_cap <= 5,
+    '일일 상한은 에피소드 15컷의 1/3 이하여야 한다');
+  assert.ok(cfg.backfill.pending_render_window_days > 0,
+    '렌더 대기 가드의 관측 창이 없으면 버려진 초기 회차가 백필을 영구히 막는다');
 });
 
 test('옵시디언 렌더는 생성 표시를 달고 notes.md 를 소유하지 않는다', async () => {
