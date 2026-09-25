@@ -37,12 +37,30 @@ const QA_CACHE = join(ROOT, 'workspace', 'assets', 'image-qa-cache.json');
  * 옵시디언 동기화가 doctor 직후에 매일 도는 가벼운 단계라서다 — 460여 컷을 디코딩하면
  * 그 성질이 깨진다. 캐시가 비어 있으면 "아직 안 쟀다"고 적고 넘어간다.
  */
-function readQaSummary() {
+function readQaSummary(lib) {
   if (!existsSync(QA_CACHE)) return null;
   let cache;
   try { cache = JSON.parse(readFileSync(QA_CACHE, 'utf8')); } catch { return null; }
+
+  /**
+   * **라이브러리 모집단만 센다.**
+   *
+   * 캐시는 인덱스 전체(790컷)를 담는데 그중 300여 컷은 구세대 화풍이라 이미 폐기됐다.
+   * 그걸 같이 세면 "FAIL 281" 처럼 보여 운영자가 없는 위기를 쫓는다 — 폐기된 컷의
+   * 품질은 아무 데도 쓰이지 않으므로 문제가 아니다. 명세에 실린 자산만 본다.
+   */
+  const inLibrary = new Set();
+  for (const s of Object.values(lib.slots || {})) {
+    for (const a of s.assets || []) if (a.image) inLibrary.add(a.image);
+  }
+  const belongs = (path) => {
+    for (const rel of inLibrary) if (path.endsWith(rel)) return true;
+    return false;
+  };
+
   const sum = { PASS: 0, WARN: 0, FAIL: 0, codes: {}, worst: [] };
   for (const [key, v] of Object.entries(cache)) {
+    if (!belongs(key.split('|')[0])) continue;
     sum[v.verdict] = (sum[v.verdict] || 0) + 1;
     for (const c of v.codes || []) sum.codes[c] = (sum.codes[c] || 0) + 1;
     if (v.verdict === 'FAIL' && sum.worst.length < 12) {
@@ -56,11 +74,13 @@ function readQaSummary() {
 }
 
 /** 픽셀 QA 절. 체크리스트 맨 아래에 붙는다. */
-function renderQaSection() {
-  const qa = readQaSummary();
+function renderQaSection(lib) {
+  const qa = readQaSummary(lib);
   if (!qa) return ['## 🔍 이미지 픽셀 QA', '', '(아직 측정 전 — 재사용 폴백이나 QA 리포트가 한 번 돌면 채워집니다)', ''];
   const out = ['## 🔍 이미지 픽셀 QA', '',
-    `> 측정 **${qa.total}컷** · PASS ${qa.PASS} · WARN ${qa.WARN} · FAIL ${qa.FAIL}`, '',
+    `> 라이브러리 **${qa.total}컷** 측정 · PASS ${qa.PASS} · WARN ${qa.WARN} · FAIL ${qa.FAIL}`,
+    '',
+    '폐기된 구세대 컷은 세지 않습니다 — 어디에도 쓰이지 않으므로 품질이 문제가 되지 않습니다.', '',
     '비율·해상도·평면·노출을 봅니다. **캐릭터 규격(미튼 손·캡슐 몸통)은 여기서 못 잡습니다** — 그림을 봐야 하고, 그 방어선은 배치 폴더의 `60_qa_frames.png` 육안 검수입니다.', ''];
   const codes = Object.entries(qa.codes).sort((a, b) => b[1] - a[1]);
   if (codes.length) {
@@ -80,6 +100,7 @@ function renderQaSection() {
   if (qa.worst.length) {
     out.push('### 불합격 컷', '', '| 위치 | 해상도 | 사유 |', '|---|---|---|');
     for (const w of qa.worst) out.push(`| ${w.where} | ${w.size} | ${w.codes} |`);
+    if (qa.FAIL > qa.worst.length) out.push(`| … | | 외 ${qa.FAIL - qa.worst.length}컷 |`);
     out.push('', '이 컷들은 재사용 폴백 후보에서 자동으로 빠집니다 — 불량이 새 회차로 옮겨 가지 않습니다.', '');
   }
   return out;
@@ -157,7 +178,7 @@ export function renderChecklist(lib) {
     out.push('');
   }
 
-  out.push(...renderQaSection());
+  out.push(...renderQaSection(lib));
 
   if (t.unclassified > 0) {
     out.push('## 미분류', '',
