@@ -38,7 +38,22 @@ const SCRIPT = `function run(argv) {
     ws[0].tabs.push(tab);
     return JSON.stringify({windowId: ws[0].id(), tabId: tab.id()});
   }
-  var target = chrome.windows.byId(argv[2]).tabs.byId(argv[3]);
+  // 창 id 로 바로 집으면 그 창이 닫히거나 순서가 바뀌었을 때 -1728 로 죽는다.
+  // 9창 94탭 환경에서 실제로 났다(2026-09-25 마켓맵 커뮤니티 게시). 탭 id 는 창이
+  // 바뀌어도 유지되므로, 실패하면 전체 창을 훑어 같은 탭을 다시 찾는다.
+  var target = null;
+  try { target = chrome.windows.byId(argv[2]).tabs.byId(argv[3]); target.url(); }
+  catch (e) {
+    target = null;
+    var all = chrome.windows();
+    for (var i = 0; i < all.length && !target; i++) {
+      var ts = all[i].tabs();
+      for (var j = 0; j < ts.length; j++) {
+        if (String(ts[j].id()) === String(argv[3])) { target = ts[j]; break; }
+      }
+    }
+    if (!target) throw new Error('탭을 찾지 못했습니다 (id=' + argv[3] + ') — 창이 닫혔을 수 있습니다');
+  }
   if (action === 'eval') return target.execute({javascript: value});
   if (action === 'url') return target.url();
   if (action === 'navigate') { target.url = value; return 'ok'; }
@@ -46,7 +61,14 @@ const SCRIPT = `function run(argv) {
   throw new Error('알 수 없는 action: ' + action);
 }`;
 
-function run(action, ids, value = '') {
+/**
+ * -1728 = "대상체를 가져올 수 없습니다". 창·탭 참조가 실행 중 무효해졌다는 뜻이고,
+ * 사람이 창을 닫거나 Chrome 이 창 순서를 바꾸면 난다. 일시적이라 다시 부르면 대개 풀린다 —
+ * 2026-09-25 마켓맵 커뮤니티 게시가 이걸로 죽었고 재시도가 없어 그날 게시가 통째로 빠졌다.
+ */
+const STALE_OBJECT = /\(-1728\)/;
+
+function run(action, ids, value = '', { attempt = 1 } = {}) {
   try {
     return execFileSync('osascript', ['-l', 'JavaScript', '-e', SCRIPT,
       String(chromePid()), action, ids?.windowId ?? '', ids?.tabId ?? '', value], {
@@ -55,10 +77,18 @@ function run(action, ids, value = '') {
   } catch (e) {
     const stderr = String(e.stderr || '');
     const denied = /(?:JavaScript|자바스크립트).*(?:disabled|꺼져)|\(-1743\)/is.test(stderr);
+
+    // 권한 문제는 다시 불러도 같다 — 재시도하지 않는다.
+    if (!denied && STALE_OBJECT.test(stderr) && attempt < 3) {
+      execFileSync('sleep', ['1']);
+      return run(action, ids, value, { attempt: attempt + 1 });
+    }
+
     const err = new Error(denied
       ? 'Chrome 자동화 권한 필요 — 보기 > 개발자용 > "Apple 이벤트의 JavaScript 허용" 과 macOS 자동화 권한을 확인하세요'
       : (stderr.trim().slice(-500) || `Chrome Apple Events 실패 (${e.code || e.status})`));
     if (denied) err.code = 'BROWSER_PERMISSION';
+    if (STALE_OBJECT.test(stderr)) err.code = 'CHROME_STALE_OBJECT';
     throw err;
   }
 }
