@@ -26,6 +26,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { competitorAgenda, formatAgenda } from './lib/competitor-agenda.js';
+import { classifyTitle, TYPE_LABEL } from './lib/title-types.js';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const INTEL_DIR = join(ROOT, 'workspace', 'intel', 'competitors');
@@ -84,7 +85,12 @@ export function titleDirectives(features) {
   const rows = (features ?? []).filter((f) => NAME[f.feature] && f.n_with >= 10);
   const pos = rows.filter((f) => f.direction === 'positive' && SAFE_POSITIVE.has(f.feature))
     .sort((a, b) => b.lift - a.lift).slice(0, 2);
-  const neg = rows.filter((f) => f.direction === 'negative').sort((a, b) => a.lift - b.lift).slice(0, 2);
+  // title_short 는 '피하기' 로 처방하지 않는다(2026-09-26). 이 lift 는 삼프로TV 같은 **롱폼** 경쟁
+  // 채널에서 잰 값인데, 우리 쇼츠 채널에서는 같은 제목 방식 11편의 길이↔48h 조회 상관이
+  // r = -0.01 이었다. 처방만 남아 제목이 32자 → 40자로 길어지는 압력이 됐다.
+  const NEG_EXCLUDED = new Set(['title_short']);
+  const neg = rows.filter((f) => f.direction === 'negative' && !NEG_EXCLUDED.has(f.feature))
+    .sort((a, b) => a.lift - b.lift).slice(0, 2);
   return [
     ...pos.map((f) => `- 쓰기: ${NAME[f.feature]} (경쟁 lift ${f.lift}×)`),
     ...neg.map((f) => `- 피하기: ${NAME[f.feature]} (lift ${f.lift}×)`),
@@ -130,7 +136,9 @@ export function buildDirective({ date, slot, analysis, kpi, experiment, policy, 
     const th = policy.index_move_thresholds ?? {};
     lines.push('## 제목 규칙 (채널 정책 · 경쟁 처방보다 우선)');
     lines.push('- **제목은 "왜"를 말해야 한다.** 통념과 어긋난 것, 반대로 움직인 것, 숨은 원인 중 하나를');
-    lines.push('  제목 안에서 주장하라 (예: "…인데도 …", "진짜 이유는 …", "금리 아니라 …").');
+    // 예시에서 「진짜 이유는 …」을 뺐다(2026-09-26). 모델이 예시를 그대로 따라 09-16 이후
+    // 15편 중 9편이 같은 틀이 됐고, 드물게 쓰던 때 중앙값 약 1,170 이 기본값이 된 뒤 549 가 됐다.
+    lines.push('  제목 안에서 주장하라 (예: "…인데도 …", "…는 왜 …?", "금리 아니라 …", "…한 이유").');
     lines.push('  실측: 이 구조가 있으면 구독/1k뷰 2.12, 없으면 0.63 (26편, 3.4배).');
     lines.push(`- **일상 등락률을 제목의 주어로 쓰지 마라.** "오늘 X% 올랐다/내렸다"는 지수 ${th.index_pct}% ·`);
     lines.push(`  환율 ${th.fx_pct}% · 원자재 ${th.commodity_pct}% · 금리 ${th.rate_bp}bp · 개별종목 ${th.single_name_pct}% 미만이면 뉴스가 아니다.`);
@@ -163,7 +171,17 @@ export function buildDirective({ date, slot, analysis, kpi, experiment, policy, 
   // 4) 우리 채널 신호 (KPI 스코어카드에서)
   if (kpi) {
     const reds = (kpi.kpis ?? []).filter((k) => k.grade === 'RED').map((k) => `- 🔴 ${k.label}: ${k.display}`);
-    const tops = (kpi.top_videos ?? []).slice(0, 2).map((v) => `- 잘된 것: "${cut(v.title, 40)}" (${v.vpd}/일)`);
+    // 유형이 다른 것만 두 개 올린다(2026-09-26). 09-25 지시문은 「진짜 이유」 제목 두 개를 나란히
+    // 올렸고, 공식을 쓰면 예시로 뽑히고 예시로 뽑히면 또 쓰이는 순환이 됐다.
+    const seenTypes = new Set();
+    const tops = [];
+    for (const v of kpi.top_videos ?? []) {
+      const type = classifyTitle(v.title).primary;
+      if (seenTypes.has(type)) continue;
+      seenTypes.add(type);
+      tops.push(`- 잘된 것 (${TYPE_LABEL[type]}): "${cut(v.title, 40)}" (${v.vpd}/일)`);
+      if (tops.length === 2) break;
+    }
     if (reds.length || tops.length) {
       lines.push('## 우리 채널 신호');
       lines.push(...reds, ...tops);

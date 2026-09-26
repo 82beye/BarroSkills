@@ -23,6 +23,10 @@ import {
 } from './lib/public-figures.js';
 import { recordCost } from './lib/cost-tracker.js';
 import { callClaudeCode, callCodex, resolveChain, runEngineChain } from './lib/text-engine.js';
+import { findHeadlineCollision, recentTitles, selectTitle } from './lib/title-select.js';
+import { classifyTitle, TYPE_LABEL } from './lib/title-types.js';
+
+export { headlineNumberTokens, findHeadlineCollision } from './lib/title-select.js';
 
 // 스킬 루트 기준 경로. resolve('config/…') 는 CWD 의존이라
 // launchd 처럼 CWD 가 다른 실행 환경에서 조용히 깨진다.
@@ -55,7 +59,7 @@ function buildSystemPrompt(format, seriesInfo, publicFiguresInfo = null) {
   const th = cp?.index_move_thresholds ?? {};
   const causalRule = cp?.title_requires_causal_clause
     ? ` · 제목은 반드시 "왜"를 말한다 — 통념과 어긋난 것/반대로 움직인 것/숨은 원인 중 하나를 제목 안에서 주장하라`
-      + ` (예: "…인데도 …", "진짜 이유는 …", "금리 아니라 …")`
+      + ` (예: "…인데도 …", "…는 왜 …?", "금리 아니라 …", "…한 이유")`
       + ` · **일상 등락률**(오늘 X% 올랐다/내렸다)을 제목의 주어로 쓰지 마라 — 지수 ${th.index_pct}%·환율 ${th.fx_pct}%·원자재 ${th.commodity_pct}%·금리 ${th.rate_bp}bp·개별종목 ${th.single_name_pct}% 미만은 뉴스가 아니다`
       + ` · 단, 레벨 돌파(금리 5%·유가 100달러·환율 1,400원 같은 라운드 넘버 돌파/붕괴)·N년래 최고최저·기간 누적 급등·연속기록은 등락폭과 무관하게 **반드시 제목의 메인**이다. 여럿이면 레벨돌파 > N년래최고 > 기간누적 > 연속기록 순`
       + ` · 시황 라벨([美마감]·[속보] 등)로 시작하지 마라 — 그 자리에 "왜"가 들어가야 한다`
@@ -86,6 +90,7 @@ OUTPUT: Single JSON only. No markdown, no code fences.
 SCHEMA:
 {
   "title": "${titleHint}",
+  "title_candidates": [{"type": "company|account|question|contrast|causal", "title": "title 규칙을 지킨 후보"}],
   "summary": "150자 이내 한 줄 요약",
   "description": "${isShorts ? '첫 100자에 secondary keywords, 말미에 해시태그' : '첫 100자에 시리즈 컨텍스트 + primary keyword, 중간에 본편 핵심 3가지, 다음 편 예고, 말미에 해시태그'}",
   "tags": ["18~25개, 합산 500자 이내, primary + secondary + related"],
@@ -99,6 +104,19 @@ SCHEMA:
     "reels": {"caption": "2200자 이내", "hashtags": ["#...", "..."]}
   }
 }
+
+TITLE CANDIDATES (필수):
+- title_candidates 에 **서로 다른 유형**의 후보 5개를 쓴다. 유형마다 하나씩:
+  · company  — 움직임을 만든 종목·기업을 앞에 세운다 (종목이 이 회차의 핵심일 때만. 아니면 다른 유형을 하나 더)
+  · account  — 시청자의 계좌·내 돈에 닿는 각도 ("지수는 올랐는데 내 계좌는 …")
+  · question — "왜 …?" / "어떻게 …?" 로 끝나는 물음. 답은 영상이 준다
+  · contrast — 반대로 움직인 것을 세운다 ("A는 올랐는데 B는 내렸다")
+  · causal   — 원인을 주장한다 ("…한 이유", "… 때문")
+- 다섯 개 모두 위 title 규칙을 지킨다. 기록·레벨 돌파는 후보의 **재료**로 쓰되 그것만으로 제목을 세우지 마라
+  (기록만 앞세운 제목은 채널 조회 중앙값 275 로 가장 약했다).
+- "진짜 이유" 틀은 [최근 제목]에 이미 있으면 쓰지 마라. 없을 때도 다섯 개 중 최대 하나.
+- [최근 제목]이 쓴 수치(%·달러·원·bp)를 다시 쓰지 말고, 바로 앞 제목과 같은 유형으로 열지 마라.
+- title 에는 다섯 개 중 네가 가장 강하다고 보는 것을 그대로 옮긴다. 최종 선택은 코드가 규칙·최근 제목과의 겹침을 보고 한다.
 
 RULES:
 - 클릭베이트/과장 금지
@@ -383,6 +401,22 @@ async function main() {
 
   const systemPrompt = buildSystemPrompt(format, seriesInfo, publicFiguresInfo);
 
+  // 최근 제목(3일) — 채널 인덱스 + 이미 업로드된 로컬 회차. 같은 날 두 번째 회차가 첫 회차를
+  // 못 보고 같은 수치를 또 쓰는 일을 막는다(인덱스 동기화가 늦게 돌 수 있다).
+  const videosIdxPath = join(SKILL_ROOT, 'workspace', 'growth', 'channel', 'videos.json');
+  let videosIndex = null;
+  try { if (existsSync(videosIdxPath)) videosIndex = JSON.parse(readFileSync(videosIdxPath, 'utf-8')); } catch {}
+  const recent = recentTitles({
+    videosIndex,
+    episodesRoot: join(SKILL_ROOT, 'workspace', 'episodes'),
+    excludeEpisode: fm.episode_id,
+    now: new Date(),
+  });
+  const recentBlock = recent.length
+    ? ['[최근 제목 — 3일, 최신순. 이 수치와 이 틀을 피하라]',
+       ...recent.slice(0, 8).map((r) => `- ${r.title}  (${TYPE_LABEL[classifyTitle(r.title).primary]})`), ''].join('\n')
+    : '';
+
   const userPrompt = [
     `[EPISODE]`, fm.episode_id, `Channel: ${fm.channel_id}`, `Format: ${format}`,
     seriesInfo ? `Series: ${seriesInfo.series_id} ep ${seriesInfo.series_episode}/${seriesInfo.series_total}` : '',
@@ -402,6 +436,7 @@ async function main() {
     `대본 narration 의 한글 수사 표기를 그대로 옮기지 마라. 태그에도 한글 수사 숫자를 넣지 마라.`,
     '',
     refs ? `[NEWS REFERENCES]\n${refs}\n` : '',
+    recentBlock,
     growthDirectives ? `[GROWTH DIRECTIVES]\n제목 작성 시 아래 '제목 패키징' 지시와, '이번 주 실험' 중 적용 대상이 제목(메타데이터)인 것을 반영하라.\n표기 규칙·공인 인물 SEO 정책·클릭베이트 금지 규칙과 충돌하면 그쪽이 항상 우선이다:\n${growthDirectives}\n` : '',
     `[TASK]`,
     `위 에피소드의 YouTube${format.startsWith('shorts') ? '/TikTok/Reels' : ''} 배포 메타데이터를 JSON으로 작성하라.`,
@@ -437,6 +472,40 @@ async function main() {
   }
 
   const meta = safeParse(raw);
+
+  // 제목 후보 선택 — 규칙 위반은 거르고, 최근과 같은 유형·같은 수치는 피한다.
+  // 옛 형식(title 하나)만 와도 그 한 개를 후보로 판정한다.
+  {
+    const cands = [
+      ...(Array.isArray(meta.title_candidates) ? meta.title_candidates : []),
+      ...(meta.title ? [{ title: meta.title, type: 'model_pick' }] : []),
+    ].filter((c) => c && typeof c.title === 'string' && c.title.trim());
+    const pick = selectTitle(cands, {
+      recent,
+      shorts: format.startsWith('shorts'),
+      requireWhy: !!loadContentPolicy()?.title_requires_causal_clause,
+      seriesBadge: seriesInfo ? `[${seriesInfo.series_name} ${seriesInfo.series_episode}/${seriesInfo.series_total}]` : null,
+      figure: figurePrimaryCandidates[0] || null,
+    });
+    if (pick) {
+      meta.title = pick.chosen.title;
+      meta.title_selection = {
+        chosen_index: pick.chosen.index,
+        chosen_type: pick.chosen.type,
+        chosen_hard: pick.chosen.hard,
+        fallback: pick.fallback,
+        recent_titles: recent.length,
+        candidates: pick.judged.map((j) => ({
+          title: j.title, llm_type: j.llm_type, type: j.type, hard: j.hard, soft: j.soft, penalty: j.penalty,
+        })),
+      };
+      console.log(`   🏷  제목 후보 ${pick.judged.length}개 → ${TYPE_LABEL[pick.chosen.type]}${pick.fallback ? ' (⚠ 규칙을 다 지킨 후보 없음 — 차선)' : ''}`);
+      for (const j of pick.judged) {
+        console.log(`      ${j === pick.chosen ? '▶' : ' '} [${TYPE_LABEL[j.type]}] ${j.title}${j.hard.length ? '  ✗ ' + j.hard.join(',') : ''}${j.soft.length ? '  · ' + j.soft.join(',') : ''}`);
+      }
+    }
+    delete meta.title_candidates;
+  }
 
   // 필수 필드 주입/보정
   meta.episode_id = fm.episode_id;
@@ -552,9 +621,9 @@ async function main() {
 
   // EXP-02-distinct-headline: 최근 3일 제목과 같은 수치를 또 쓰면 표시해 둔다.
   try {
-    const idxPath = join(resolve(import.meta.dirname, '../..'), 'workspace', 'growth', 'channel', 'videos.json');
-    if (existsSync(idxPath) && meta.title) {
-      const hit = findHeadlineCollision(meta.title, JSON.parse(readFileSync(idxPath, 'utf-8')), new Date());
+    if (meta.title) {
+      const merged = { videos: Object.fromEntries(recent.map((r, i) => [i, { title: r.title, publishedAt: new Date(r.at).toISOString() }])) };
+      const hit = findHeadlineCollision(meta.title, merged, new Date(Date.now() + 86400_000), { days: 4 });
       if (hit) {
         meta.headline_conflict = { shared: hit.shared, with: hit.title, published_at: hit.publishedAt };
         console.warn(`   ⚠ 제목 수치 충돌: ${hit.shared.join(', ')} — 최근 회차 「${String(hit.title).slice(0, 40)}」 와 겹친다`);
@@ -573,35 +642,7 @@ async function main() {
   console.log(`   Tags: ${meta.tags?.length || 0}개`);
 }
 
-/**
- * 최근 회차가 이미 쓴 수치를 제목에 또 박았는지 본다.
- *
- * 2026-09-14 실측(48h 조회, 2026-09-01~09-11): 3일 안에 같은 수치를 제목에 반복한
- * 두 번째 영상은 -68%(고용·코스피 1.64%) · -64%(코스피 4.61%) · -32%(브렌트유 100달러)
- * 였다. 반대로 같은 사건을 다른 각도·다른 수치로 연 회차는 +67% · +48% 였다.
- * 하루 두 편(us-close·kr-close)을 돌리는 채널이라 이 충돌이 구조적으로 생긴다.
- *
- * 막지는 않는다 — 제목 하나 때문에 게시를 멈추면 손실이 더 크다. 표시만 남겨
- * 거부창에서 사람이 판단하게 하고, 주간 회고가 EXP-02 를 실측할 근거로 쓴다.
- */
-const NUM_TOKEN = /\d+(?:[.,]\d+)?\s*(?:%|퍼센트|달러|원|bp|배|선|조|억|만|포인트)/g;
-
-export function headlineNumberTokens(title) {
-  return new Set((String(title || '').match(NUM_TOKEN) || []).map((t) => t.replace(/\s+/g, '')));
-}
-
-export function findHeadlineCollision(title, videosIndex, now, { days = 3 } = {}) {
-  const mine = headlineNumberTokens(title);
-  if (!mine.size) return null;
-  const cutoff = now.getTime() - days * 86400_000;
-  for (const v of Object.values(videosIndex?.videos ?? {})) {
-    const t = Date.parse(v?.publishedAt ?? '');
-    if (!Number.isFinite(t) || t < cutoff || t > now.getTime()) continue;
-    const shared = [...headlineNumberTokens(v.title)].filter((x) => mine.has(x));
-    if (shared.length) return { title: v.title, publishedAt: v.publishedAt, shared };
-  }
-  return null;
-}
+// headlineNumberTokens · findHeadlineCollision 은 lib/title-select.js 로 옮겼다 (위에서 다시 내보낸다).
 
 // 직접 실행일 때만 main. resolvePublishAt 을 테스트에서 import 할 수 있게 한다.
 // (build-distribution.js:159 와 같은 관례. node 가 argv[1] 을 절대경로로 해석하므로

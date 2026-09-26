@@ -310,7 +310,14 @@ wait_telegram_reject_window() {
   deadline=$(python3 -c 'import datetime,sys; print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(minutes=int(sys.argv[1]))).isoformat())' "$minutes") || return 1
   printf '%s\n' "$deadline" > "$open_file"
 
-  if ! notify_telegram "🟡 <b>${ep}</b> reject window 시작 (${minutes}분)\n취소하려면 <code>/reject ${ep}</code>" 1; then
+  # 제목을 함께 보낸다 — 무엇을 판단할지 모르는 거부창은 형식일 뿐이다(2026-09-26).
+  # 줄바꿈은 실제 개행으로 넣는다. 예전 문구의 "\n" 은 큰따옴표 안이라 글자 그대로 전송됐다.
+  local title_lines msg
+  title_lines=$(node "${BARROTUBE_HOME}/scripts/automation/title-summary.js" --episode "$ep" 2>/dev/null) || title_lines=""
+  msg="🟡 <b>${ep}</b> reject window 시작 (${minutes}분)"
+  [ -n "$title_lines" ] && msg+=$'\n'"$title_lines"
+  msg+=$'\n'"취소하려면 <code>/reject ${ep}</code>"
+  if ! notify_telegram "$msg" 1; then
     printf '%s\n' 'notification_failed' > "$open_file"
     return 1
   fi
