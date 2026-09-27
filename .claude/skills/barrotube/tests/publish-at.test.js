@@ -230,8 +230,8 @@ test('세 슬롯이 하루 3편 구조로 정렬돼 있다', () => {
   assert.equal(s['us-close'].publish_at, '08:00');
   assert.equal(s.omnibus.publish_at, '12:00');
   assert.equal(s['kr-close'].publish_at, '18:00');
-  assert.match(s.omnibus.cron, /Mon-Thu,Sat,Sun 10:00/, '금요일은 realestate 가 그 자리를 쓴다');
-  assert.equal(s['kr-close'].cron, '16:00', '주말에도 18시 회차가 나가야 하루 3편이 된다');
+  assert.equal(s.omnibus.cron, 'Mon-Thu 10:00', '금요일은 realestate 가 그 자리를 쓰고, 주말에는 점심 회차가 없다');
+  assert.equal(s['kr-close'].cron, 'Mon-Fri 16:00', '주말은 us-close 1편만 (2026-09-28)');
   // 금요일 점심은 부동산 편이 같은 자리를 쓴다.
   assert.equal(s.realestate.publish_at, '12:00');
   assert.match(s.realestate.cron, /Fri/);

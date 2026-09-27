@@ -422,13 +422,17 @@ test('market snapshot resolves weekends and exchange holidays without a calendar
   const quotes = (date) => required.map((symbol) => ({ symbol, traded_at: `${date}T16:00:00-04:00` }));
 
   assert.equal(resolveContentMode('us-close', '2026-08-08', quotes('2026-08-07'), required).content_mode, 'closed_market_issue');
-  assert.equal(resolveContentMode('us-close', '2026-08-09', quotes('2026-08-07'), required).content_mode, 'sunday_preopen');
+  // 일요일 us-close 는 한 주 결산 — 월요일이 이번 주 준비를 맡으므로 다음 주 전망을 두 번 내지 않는다(2026-09-28).
+  assert.equal(resolveContentMode('us-close', '2026-08-09', quotes('2026-08-07'), required).content_mode, 'weekly_recap');
+  // 다른 슬롯의 일요일은 그대로 sunday_preopen (지금은 주말에 돌지 않지만 수동 실행·휴장 대비).
+  assert.equal(resolveContentMode('kr-close', '2026-08-09', [], ['KOSPI']).content_mode, 'sunday_preopen');
   assert.equal(resolveContentMode('us-close', '2026-08-11', quotes('2026-08-10'), required).content_mode, 'market_close');
   assert.equal(resolveContentMode('us-close', '2026-09-08', quotes('2026-09-04'), required).content_mode, 'closed_market_issue');
 
   // 월요일 06:00 KST 는 직전 세션이 일요일 — 새 종가가 없다. 금요일 종가는 토요일 편이 이미 썼다.
   // 여기서 market_close 로 새면 대본이 이틀 묵은 수치를 "오늘"이라 쓴다 (EP-2026-0096).
-  assert.equal(resolveContentMode('us-close', '2026-08-17', quotes('2026-08-14'), required).content_mode, 'closed_market_issue');
+  // 그래서 월요일은 이번 주 준비 — 주말 이슈가 이번 주에 미칠 영향 + 이번 주 일정 (2026-09-28 운영자 요청).
+  assert.equal(resolveContentMode('us-close', '2026-08-17', quotes('2026-08-14'), required).content_mode, 'weekly_preview');
   assert.equal(resolveContentMode('us-close', '2026-08-18', quotes('2026-08-17'), required).content_mode, 'market_close');
   assert.equal(resolveContentMode('kr-close', '2026-08-17', [
     { symbol: 'KOSPI', traded_at: '2026-08-14T18:59:00+09:00' },
@@ -559,10 +563,11 @@ test('하루 3편 — 생성 06·10·16시, 공개 08·12·18시', () => {
   assert.equal(s['us-close'].cron, '06:00');
   assert.equal(s['us-close'].publish_at, '08:00');
   assert.equal(s.omnibus.publish_at, '12:00');
-  assert.equal(s['kr-close'].cron, '16:00', '주말에도 18시 회차가 나가야 하루 3편이 성립한다');
+  // 주말은 us-close 1편만 (2026-09-28 운영자 결정) — 토·일은 한국장이 없어 16시 회차에 새 정보가 없다.
+  assert.equal(s['kr-close'].cron, 'Mon-Fri 16:00');
   assert.equal(s['kr-close'].publish_at, '18:00');
   // 금요일 10:00 은 realestate 가 쓰므로 omnibus 는 그날을 빼야 한다 — 겹치면 락에서 뒤쪽이 죽는다.
-  assert.match(s.omnibus.cron, /Mon-Thu,Sat,Sun 10:00/);
+  assert.equal(s.omnibus.cron, 'Mon-Thu 10:00', '주말 점심 회차는 없다');
   assert.match(s.realestate.cron, /Fri 10:00/);
   assert.equal(s.realestate.publish_at, '12:00');
 });
@@ -897,4 +902,20 @@ test('중복으로 걸린 스틸은 재생성 전에 지운다', () => {
   assert.match(window, /duplicate bytes/, 'top-up 루프가 중복 표기를 읽어야 한다');
   assert.match(window, /rm -f "\$\{MEDIA_BASE\}\/40_assets\/images\/scene_\$\{NEXT_SCENE\}\.png"/,
     '중복 스틸을 지우고 다시 만들어야 한다');
+});
+
+test('us-close 주말·월요일 모드 — 리서치·파이프라인·설정이 같은 이름을 쓴다 (2026-09-28)', () => {
+  const research = readFileSync(join(ROOT, 'scripts/automation/research-brief.js'), 'utf8');
+  const pipeline = readFileSync(join(ROOT, 'lib/auto-pipeline.sh'), 'utf8');
+  const cfg = JSON.parse(readFileSync(join(ROOT, 'config/routines.json'), 'utf8'));
+  for (const mode of ['weekly_recap', 'weekly_preview']) {
+    assert.ok(research.includes(`${mode}(`), `리서치 프롬프트에 ${mode} 정의`);
+    assert.ok(pipeline.includes(`${mode})`), `파이프라인이 ${mode} 토픽 접두어를 단다`);
+    assert.ok(cfg.slots['us-close'].closed_market_policy.includes(mode), `us-close 정책에 ${mode}`);
+  }
+  assert.match(research, /주말\(토·일\)에 나온 뉴스를 반드시 검색/, '월요일은 주말 이슈를 확인한다');
+  assert.match(research, /이번 주 주요 일정/, '월요일은 이번 주 일정을 정리한다');
+  assert.match(pipeline, /us-close:1\) CONTENT_MODE="weekly_preview"/);
+  assert.match(pipeline, /us-close:7\) CONTENT_MODE="weekly_recap"/);
+  assert.equal(cfg.publishing_cadence.weekend, 1);
 });

@@ -89,7 +89,7 @@ test('config/growth.json — KPI 정의와 실험 백로그가 유효하다', ()
     assert.ok(Number.isFinite(k.green) && Number.isFinite(k.yellow), `${id} 임계`);
     assert.ok(k.label, `${id} 라벨`);
   }
-  assert.ok(cfg.kpis.publish_consistency_7d.planned_per_week === 13, 'us7+kr5+re1');
+  assert.ok(cfg.kpis.publish_consistency_7d.planned_per_week === 17, 'us7+kr5+omni4+re1 (2026-09-28 주말 1편)');
   const ids = cfg.experiments.backlog.map((b) => b.id);
   assert.equal(new Set(ids).size, ids.length, '실험 id 중복 금지');
   assert.ok(cfg.experiments.backlog.every((b) => b.directive));

@@ -35,8 +35,8 @@
   "kpis": {
     "publish_consistency_7d": {
       "label": "발행 일관성(7d)",
-      "planned_per_week": 13,
-      "_comment": "us-close 7 + kr-close 5 + realestate 1 = 주 13편. 2026-09-14 실측 주의 — 총량 13편은 포화점(2편/일) 근처라 타당하지만 **배치가 요철이었다**: 금요일만 3편이고 토·일은 1편씩이었다 (2026-09-14 realestate 를 토요일 공개로 떼어 해소). 3편일은 2편일 대비 채널 총 조회가 1239 vs 1249 로 같아서 셋째 편이 낭비된다. 이 지표를 올리려고 발행을 더 늘리면 video_hit_rate_7d·views_48h_index_7d 가 내려간다 — 두 지표가 반대를 가리키므로 views_per_publish_7d 로 어느 쪽이 옳은지 판정하라. 자세한 근거는 routines.json 의 _schedule_note_2026_09_14.",
+      "planned_per_week": 17,
+      "_comment": "2026-09-28 기준 주 17편 = us-close 7(매일) + kr-close 5(월~금) + 점심 omnibus 4(월~목) + realestate 1(금). 09-16~09-27 하루 3편 기간(주 21편)에도 이 값은 13 에 머물러 있어 일관성 지표가 실제 편성과 달랐다. 이하 2026-09-14 기록: us-close 7 + kr-close 5 + realestate 1 = 주 13편. 2026-09-14 실측 주의 — 총량 13편은 포화점(2편/일) 근처라 타당하지만 **배치가 요철이었다**: 금요일만 3편이고 토·일은 1편씩이었다 (2026-09-14 realestate 를 토요일 공개로 떼어 해소). 3편일은 2편일 대비 채널 총 조회가 1239 vs 1249 로 같아서 셋째 편이 낭비된다. 이 지표를 올리려고 발행을 더 늘리면 video_hit_rate_7d·views_48h_index_7d 가 내려간다 — 두 지표가 반대를 가리키므로 views_per_publish_7d 로 어느 쪽이 옳은지 판정하라. 자세한 근거는 routines.json 의 _schedule_note_2026_09_14.",
       "green": 1.0,
       "yellow": 0.85,
       "direction": "gte",

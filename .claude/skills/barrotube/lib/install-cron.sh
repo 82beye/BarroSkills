@@ -99,7 +99,7 @@ cmd_install() {
       # 두 슬롯은 --slot 인자가 달라 라벨을 나눠야 한다 (배열로 합칠 수 없다).
       #
       # 발행 빈도 — 평일 2편 / 주말 1편:
-      #   us-close  매일 06:00   토=금요일 미국장 마감, 일=sunday_preopen
+      #   us-close  매일 06:00   토=금요일 미국장 마감, 일=한 주 결산, 월=이번 주 준비
       #   kr-close  Mon-Fri 16:00  토·일은 한국장이 없어 돌리지 않는다
       #     bash install-cron.sh install kr-close "Mon-Fri 16:00"
       script_path="${BARROTUBE_HOME}/lib/auto-pipeline.sh"

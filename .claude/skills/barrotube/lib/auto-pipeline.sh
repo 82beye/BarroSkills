@@ -411,9 +411,12 @@ if [ -z "$RESUME_EP" ] && [ -z "$FORCE_TOPIC" ]; then
     [ -f "$MODE_FILE" ] && CONTENT_MODE=$(json_get "$MODE_FILE" "d.get('content_mode','')")
   fi
   if [ -z "$CONTENT_MODE" ]; then
-    case "$(date +%u)" in
-      6) CONTENT_MODE="closed_market_issue" ;;
-      7) CONTENT_MODE="sunday_preopen" ;;
+    # us-close 는 일=한 주 결산 · 월=이번 주 준비 (2026-09-28 운영자 결정 — config/routines.json).
+    case "$SLOT:$(date +%u)" in
+      us-close:7) CONTENT_MODE="weekly_recap" ;;
+      us-close:1) CONTENT_MODE="weekly_preview" ;;
+      *:6) CONTENT_MODE="closed_market_issue" ;;
+      *:7) CONTENT_MODE="sunday_preopen" ;;
     esac
   fi
 
@@ -423,6 +426,12 @@ if [ -z "$RESUME_EP" ] && [ -z "$FORCE_TOPIC" ]; then
       ;;
     sunday_preopen)
       case "$TOPIC" in "다음 장 전 이슈 정리:"*) ;; *) TOPIC="다음 장 전 이슈 정리: $TOPIC" ;; esac
+      ;;
+    weekly_recap)
+      case "$TOPIC" in "한 주 결산:"*) ;; *) TOPIC="한 주 결산: $TOPIC" ;; esac
+      ;;
+    weekly_preview)
+      case "$TOPIC" in "이번 주 준비:"*) ;; *) TOPIC="이번 주 준비: $TOPIC" ;; esac
       ;;
   esac
   if [ -n "$CONTENT_MODE" ] && [ "$CONTENT_MODE" != "market_close" ]; then

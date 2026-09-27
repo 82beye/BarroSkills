@@ -103,7 +103,9 @@ ${slot.timing_caveat}
 
 ## 휴장일·주말 대체 규칙 (위 앵글과 ${skeleton.length}컷 구조보다 우선)
 - 필수 마감 지수: ${requiredClosed}
-- 시세 스냅샷의 content_mode를 우선 따른다: 토요일은 closed_market_issue, 일요일은 sunday_preopen이다. 평일에는 필수 지수 거래일(traded_at)에 신규 종가가 없으면 closed_market_issue다.
+- 시세 스냅샷의 content_mode를 우선 따른다: us-close 는 일요일 weekly_recap(한 주 결산)·월요일 weekly_preview(이번 주 준비)이고, 그 밖의 슬롯은 토요일 closed_market_issue·일요일 sunday_preopen 이다. 평일에는 필수 지수 거래일(traded_at)에 신규 종가가 없으면 closed_market_issue다.
+- weekly_recap(한 주 결산): 월~금 시장을 움직인 핵심 흐름 하나를 골라 왜 그렇게 움직였는지와 한 주 누적 변화를 말한다. 당일 등락률은 없다.
+- weekly_preview(이번 주 준비): ① 주말(토·일)에 나온 뉴스를 반드시 검색해 확인하고, 그중 이번 주 시장에 영향을 줄 수 있는 이슈를 골라 무엇이 어떤 경로로(금리·환율·유가·업종) 영향을 주는지 설명한다 ② 이번 주 주요 일정(FOMC·CPI·고용·실적 발표·국채 입찰·정책 발표)과 한국장 개장 전 체크포인트를 정리한다. 주말 이슈가 약하면 일정 중심으로 간다. 주말에 없던 이슈를 있는 것처럼 만들지 마라.
 - ${slot.closed_market_policy}
 - 대체 모드에서는 없는 당일 등락률을 만들지 말고, 아래 ${skeleton.length}컷 구조의 숫자 요구도 최신 이슈·영향·다음 개장 관전 포인트로 바꿔라.
 
@@ -153,7 +155,7 @@ ${slot.timing_caveat}
    {
      "topic": "<선정된 토픽 한 문장. 대본 생성의 입력이 된다>",
      "angle": "<이 토픽을 어떤 각도로 풀지>",
-    "content_mode": "market_close|closed_market_issue|sunday_preopen",
+    "content_mode": "market_close|closed_market_issue|sunday_preopen|weekly_recap|weekly_preview",
      "key_numbers": ["<대본에 반드시 들어갈 수치>", "..."],
      "candidates": [{"topic":"...","why":"..."}, ...],
      "social_searched": true|false,
@@ -228,7 +230,9 @@ function writeFallbackAnalysis({ slotName, slot, skeleton, date, inputs, outDir 
 
   const weekday = new Date(`${date}T12:00:00+09:00`).getUTCDay();
   const contentMode = market.content_mode
-    || (weekday === 6 ? 'closed_market_issue' : weekday === 0 ? 'sunday_preopen' : 'market_close');
+    || (slotName === 'us-close' && weekday === 0 ? 'weekly_recap'
+      : slotName === 'us-close' && weekday === 1 ? 'weekly_preview'
+        : weekday === 6 ? 'closed_market_issue' : weekday === 0 ? 'sunday_preopen' : 'market_close');
   const quoteLines = quotes.length
     ? quotes.map((q) => `- ${q.name || q.symbol}: ${q.price_text ?? q.price ?? '값 없음'} (${q.change_pct == null ? '변동률 없음' : `${q.change_pct}%`}, ${q.traded_at || '거래시각 없음'})`).join('\n')
     : '- 시세 스냅샷 없음 — 수치 단정 금지';
