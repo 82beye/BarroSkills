@@ -307,10 +307,15 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       }
       console.log(`🎨 Generating ${targets.length}${onlyScenes ? `/${meta.scenes.length}` : ''} images...`);
 
+      // 앞 씬의 바이트 복사본은 다시 굽는다 — 있다고 건너뛰면 게이트가 또 멈춘다(2026-09-26 EP-2026-0184).
+      const { duplicateStills } = await import('./lib/duplicate-stills.js');
+      const dupStills = duplicateStills(outDir, meta.scenes.map((sc) => sc.scene_id));
+      for (const id of dupStills) console.log(`  ♻︎ Scene ${id} 는 앞 씬과 같은 바이트다 — 다시 굽는다`);
+
       for (const scene of targets) {
         const outPath = join(outDir, `scene_${scene.scene_id}.png`);
         // --scene 으로 콕 집었으면 이미 있어도 다시 굽는다 — 그게 이 옵션을 쓰는 이유다
-        if (existsSync(outPath) && !opts.force && !onlyScenes) {
+        if (existsSync(outPath) && !opts.force && !onlyScenes && !dupStills.has(String(scene.scene_id).padStart(3, '0'))) {
           console.log(`  ⏭  Scene ${scene.scene_id} exists (use --force to regen)`);
           continue;
         }

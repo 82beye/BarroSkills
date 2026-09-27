@@ -32,6 +32,7 @@ import {
   DEFAULT_POLICY,
 } from './lib/scene-asset-index.js';
 import { checkMany as checkManyImages } from './lib/image-quality.js';
+import { duplicateStills } from './lib/duplicate-stills.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..', '..');
@@ -133,9 +134,16 @@ export async function reuseSceneAssets({ scriptPath, only = null, dryRun = false
 
   // 이미 정상 스틸이 있는 씬은 건드리지 않는다 — 파이프라인 전체가 top-up 방식이고,
   // 생성에 성공한 신선한 컷을 재활용으로 덮으면 품질이 거꾸로 간다.
+  // 앞 씬의 바이트 복사본은 "있는" 스틸이 아니다 — 게이트가 중복으로 판정해 여기를 불렀다.
+  // 건너뛰면 아무것도 채우지 못하고 회차가 멈춘다(2026-09-26 EP-2026-0184).
+  const dupStills = duplicateStills(imagesDir, allScenes.map((s) => s.sceneId));
   const scenes = allScenes.filter((s) => {
     if (onlySet && !onlySet.has(s.sceneId)) return false;
     const existing = join(imagesDir, `scene_${s.sceneId}.png`);
+    if (dupStills.has(s.sceneId)) {
+      console.log(`  ♻︎ 씬 ${s.sceneId}: 앞 씬과 같은 바이트다 — 재사용 컷으로 바꾼다`);
+      return true;
+    }
     if (existsSync(existing) && statSync(existing).size > 0) {
       console.log(`  ⏭  씬 ${s.sceneId}: 스틸이 이미 있다 — 건너뜀`);
       return false;
