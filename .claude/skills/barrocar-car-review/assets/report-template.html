@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<!--
+  BarroCar 중고차 진단 의견서 템플릿 v3
+  {{ }} 를 실제 내용으로 바꿔 쓴다. 필수 영역은 유지하고, 미확인 내용을 임의로 채우지 않는다.
+
+  판정 색: .v-good(계약 진행) / .v-cond(대안 우선) / .v-bad(구매 금지) / .v-pending(심사 미완료)
+  등급 색: .g-pass(녹) / .g-warn(황) / .g-stop(적)
+  판정 배지: <span class="b b-pass|b-fail|b-warn|b-none|b-rank|b-rank2">통과</span>
+             — 표의 .ctr 셀에는 맨텍스트를 쓰지 말고 반드시 배지를 쓴다
+  근거 등급: <span class="ev">{{근거등급}}</span>
+
+  ※ 「신뢰 패널」(심사 커버리지 + 근거 등급 집계 + 데이터 출처)은 생략 금지.
+     이 문서가 무엇을 얼마나 보았는지를 보여주는 블록이고, 판정보다 먼저 읽힌다.
+-->
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{차명 트림}} 진단 의견서 — BarroCar</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Nanum+Myeongjo:wght@400;700;800&family=Noto+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+  /* ── BarroCar 진단 의견서 · 디자인 토큰 ──────────────────────────
+     팔레트: 한국 공문서의 미색 상질지 · 먹 · 주인(朱印)
+     단일 테마 — 인쇄 산출물이자 「서류」 은유에 전면 커밋한다      */
+  :root{
+    --paper:#FAF9F4; --panel:#F1EFE7; --panel-2:#F6F4EC;
+    --ink:#16150E; --ink-2:#57544A; --ink-3:#8A8578;
+    --rule:#22201A; --hair:#C6C2B3;
+    --verify:#1C3D5A; --verify-soft:#E7EDF3;
+    --seal:#9E1B2F; --seal-soft:#F8E7E9;
+    --pass:#14603A; --pass-soft:#E5EFE8;
+    --warn:#7E5300; --warn-soft:#F8EEDA;
+    --display:"Nanum Myeongjo",Batang,"바탕",serif;
+    --body:"Noto Sans KR","Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+    --mono:"IBM Plex Mono","SFMono-Regular",Menlo,Consolas,monospace;
+    --sp:16px;
+  }
+  *{box-sizing:border-box;}
+  html{-webkit-text-size-adjust:100%;}
+  body{
+    margin:0; padding:18px 12px 64px; background:#D9D7CE; color:var(--ink);
+    font-family:var(--body); font-size:13px; line-height:1.62; letter-spacing:-0.005em;
+    font-variant-numeric:tabular-nums;
+  }
+  .sheet{max-width:860px; margin:0 auto; background:var(--paper);
+    border:1px solid var(--rule); box-shadow:0 1px 0 #B9B7AE, 0 14px 34px -18px rgba(20,18,10,.45);}
+  .pad{padding:0 18px 30px;}
+
+  /* ── 마스트헤드 ───────────────────────────────────────────── */
+  .brandbar{background:var(--verify); color:#EEF1F0; padding:8px 18px;
+    display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;}
+  .logo{font:800 15px/1 var(--display); letter-spacing:.18em;}
+  .logo em{font-style:normal; opacity:.62; font-weight:400; letter-spacing:.06em; font-size:11px; margin-left:9px;}
+  .brandbar .eng{font:500 10px/1.5 var(--mono); letter-spacing:.09em; opacity:.82; text-align:right;}
+
+  .dochead{padding:20px 18px 15px; border-bottom:2px solid var(--rule);}
+  .kicker{font:600 10px/1 var(--mono); letter-spacing:.2em; color:var(--seal); margin-bottom:9px;}
+  .doctitle{font-family:var(--display); font-size:29px; font-weight:800; line-height:1.22;
+    margin:0 0 6px; letter-spacing:.01em; text-wrap:balance;}
+  .docsub{font-size:13px; color:var(--ink-2); margin:0; line-height:1.55;}
+  .docsub b{color:var(--ink); font-weight:600;}
+
+  .metagrid{display:grid; grid-template-columns:repeat(4,1fr);
+    border-bottom:1px solid var(--rule); background:var(--panel-2);}
+  .mg{padding:9px 12px; border-right:1px solid var(--hair);}
+  .mg:last-child{border-right:none;}
+  .mg-k{display:block; font:500 9px/1.4 var(--mono); letter-spacing:.13em;
+    color:var(--ink-3); text-transform:uppercase; margin-bottom:2px;}
+  .mg-v{display:block; font-size:11.5px; font-weight:600; line-height:1.45;}
+  .mg-v .sm{font:400 10px/1.4 var(--mono); color:var(--ink-2); display:block;}
+
+  /* ── 판정 ──────────────────────────────────────────────────── */
+  .verdict{display:grid; grid-template-columns:1.55fr 1fr; border-bottom:2px solid var(--rule);}
+  .verdict > div{padding:20px 16px; text-align:center;}
+  .verdict > div:first-child{border-right:1px solid var(--hair); background:var(--panel-2);}
+  .vlabel{font:600 9.5px/1 var(--mono); letter-spacing:.17em; color:var(--ink-2); margin-bottom:9px;}
+  .vbig{font-family:var(--display); font-size:27px; font-weight:800; line-height:1.24; letter-spacing:.01em;}
+  .v-good{color:var(--pass);} .v-cond{color:var(--seal); font-size:22px;} .v-bad{color:var(--seal);} .v-pending{color:var(--warn);}
+  .vnote{font-size:11px; color:var(--ink-2); margin-top:8px; line-height:1.6;}
+
+  a.lnk{color:var(--verify); text-decoration:underline; text-underline-offset:2px;
+    text-decoration-thickness:1px; text-decoration-color:#9FB4C6;}
+  a.lnk:visited{color:#5A4470;}
+  a.lnk:hover{text-decoration-color:var(--verify);}
+  a.lnk:focus-visible{outline:2px solid var(--verify); outline-offset:2px;}
+  .vbig a.lnk{color:inherit; text-decoration-thickness:2px; text-decoration-color:currentColor;}
+
+  /* ── 검토 소견 ─────────────────────────────────────────────── */
+  .master{background:#FCF7E9; border-bottom:2px solid var(--rule); padding:17px 18px;
+    box-shadow:inset 4px 0 0 var(--seal);}
+  .master .mlabel{font:600 9.5px/1 var(--mono); letter-spacing:.17em; color:var(--seal); margin-bottom:9px;}
+  .master p{margin:0; font-size:13.5px; line-height:1.85;}
+  .master b{font-weight:700;}
+
+  /* ── 심사 커버리지 · 근거 등급 (신뢰 패널) ──────────────────── */
+  .trust{border-bottom:2px solid var(--rule); background:var(--panel-2); padding:16px 18px 18px;}
+  .trust-h{display:flex; align-items:baseline; justify-content:space-between; gap:10px;
+    flex-wrap:wrap; margin-bottom:13px;}
+  .trust-h h3{font:700 12px/1.3 var(--body); margin:0; letter-spacing:-.01em;}
+  .trust-h .sub{font:400 10px/1.5 var(--mono); color:var(--ink-2);}
+
+  .funnel{display:grid; gap:7px;}
+  .fn{display:grid; grid-template-columns:130px 1fr; gap:11px; align-items:center;}
+  .fn-k{font:500 10px/1.4 var(--mono); color:var(--ink-2); text-align:right;}
+  .fn-bar{display:flex; height:21px; border:1px solid var(--rule); background:var(--paper); overflow:hidden;}
+  .fn-a,.fn-b{display:flex; align-items:center; justify-content:center; padding:0; min-width:0; flex-shrink:0; white-space:nowrap; overflow:hidden;
+    font:600 10px/1 var(--mono); letter-spacing:.02em;}
+  .fn-a{background:var(--verify); color:#F1F4F6;}
+  .fn-b{background:repeating-linear-gradient(135deg,#E4E1D6 0 4px,#EDEBE2 4px 8px); color:var(--ink-3);}
+  .fn-note{font:400 10px/1.6 var(--mono); color:var(--ink-3); margin:10px 0 0; text-align:right;}
+
+  .evgrid{display:grid; grid-template-columns:repeat(5,1fr); border:1px solid var(--rule);
+    background:var(--paper); margin-top:15px;}
+  .ev-c{padding:10px 9px; border-right:1px solid var(--hair);}
+  .ev-c:last-child{border-right:none;}
+  .ev-c.is-un{background:var(--warn-soft);}
+  .ev-t{font:600 9.5px/1 var(--mono); letter-spacing:.06em; color:var(--ink-2); margin-bottom:5px;}
+  .ev-n{font:700 21px/1 var(--mono); color:var(--verify); display:block; margin-bottom:4px;}
+  .ev-c.is-un .ev-n{color:var(--warn);}
+  .ev-d{font-size:10px; line-height:1.5; color:var(--ink-2);}
+
+  .srcline{margin-top:13px; padding-top:11px; border-top:1px solid var(--hair);
+    font:400 10px/1.75 var(--mono); color:var(--ink-2);}
+  .srcline b{color:var(--ink); font-weight:600;}
+
+  /* ── 등급 요약 바 ──────────────────────────────────────────── */
+  .gradebar{display:grid; grid-template-columns:repeat(4,1fr); border-bottom:2px solid var(--rule);}
+  .gradebar > div{padding:13px 10px; text-align:center; border-right:1px solid var(--hair);}
+  .gradebar > div:last-child{border-right:none;}
+  .glabel{font:500 9px/1.4 var(--mono); letter-spacing:.13em; color:var(--ink-3);
+    text-transform:uppercase; display:block; margin-bottom:5px;}
+  .gval{font-family:var(--display); font-size:19px; font-weight:800; display:block; line-height:1.1;}
+  .gsub{font:400 9.5px/1.5 var(--mono); color:var(--ink-2); display:block; margin-top:4px;}
+  .g-pass{color:var(--pass);} .g-warn{color:var(--warn);} .g-stop{color:var(--seal);}
+
+  /* ── 섹션 ──────────────────────────────────────────────────── */
+  section{margin-top:26px;}
+  h2{font:600 13.5px/1.5 var(--body); margin:0; padding:8px 11px; letter-spacing:-.01em;
+    background:var(--panel); border:1px solid var(--rule); border-bottom:none;
+    display:flex; align-items:baseline; gap:8px;}
+  h2 .num{font-family:var(--display); font-size:17px; font-weight:800;
+    color:var(--verify); flex:0 0 auto; line-height:1;}
+
+  table{width:100%; border-collapse:collapse; border:1px solid var(--rule); font-size:12px;
+    background:var(--paper);}
+  th,td{border:1px solid var(--hair); padding:7px 9px; text-align:left; vertical-align:top;}
+  th{background:var(--panel); font-weight:600; white-space:nowrap; font-size:11px;
+    letter-spacing:.01em;}
+  td.num,th.num{text-align:right; font-family:var(--mono); font-size:11.5px; white-space:nowrap;}
+  th.num{font-family:var(--body);}
+  td.ctr,th.ctr{text-align:center;}
+  tbody tr.total{background:var(--verify-soft);}
+  tbody tr.total td{font-weight:600;}
+  .k{background:var(--panel); font-weight:600; width:28%; white-space:nowrap; font-size:11.5px;}
+  tbody tr:hover{background:#FDFCF6;}
+  tbody tr.total:hover{background:#DEE7EF;}
+  .tcap{font:600 11px/1.5 var(--body); margin:14px 0 5px; padding-left:2px;}
+  .tcap .dim{font-weight:400;}
+
+  /* ── 판정 배지 ─────────────────────────────────────────────── */
+  .b{display:inline-block; min-width:3.4em; padding:2px 7px; border-radius:2px;
+    font:600 10px/1.55 var(--mono); letter-spacing:.02em; white-space:nowrap;}
+  .b-pass{background:var(--pass-soft); color:var(--pass); border:1px solid #B4D2BF;}
+  .b-fail{background:var(--seal-soft); color:var(--seal); border:1px solid #E2B6BC;}
+  .b-warn{background:var(--warn-soft); color:var(--warn); border:1px solid #DFCCA1;}
+  .b-none{background:var(--panel); color:var(--ink-3); border:1px solid var(--hair);}
+  .b-rank{background:var(--verify); color:#F1F4F6; border:1px solid var(--verify);}
+  .b-rank2{background:var(--verify-soft); color:var(--verify); border:1px solid #A9BFD1;}
+
+  .ok{color:var(--pass); font-weight:700;}
+  .warn{color:var(--warn); font-weight:700;}
+  .bad{color:var(--seal); font-weight:700;}
+  .dim{color:var(--ink-2);}
+  .ev{color:var(--ink-3); font:400 9.5px/1.5 var(--mono); white-space:nowrap;}
+
+  .note{border:1px solid var(--rule); border-top:none; padding:11px 12px; font-size:12px;
+    background:var(--panel-2);}
+  .note p{margin:0 0 8px; line-height:1.72;} .note p:last-child{margin-bottom:0;}
+  .note.alert{background:#FDF3F3; box-shadow:inset 4px 0 0 var(--seal);}
+
+  /* ── 체크리스트 ────────────────────────────────────────────── */
+  .checklist{border:1px solid var(--rule); border-top:none; background:var(--paper);}
+  .chk{display:flex; gap:11px; padding:9px 12px; border-bottom:1px dotted var(--hair);
+    align-items:flex-start;}
+  .chk:last-child{border-bottom:none;}
+  .box{flex:0 0 auto; width:14px; height:14px; border:1.5px solid var(--rule);
+    margin-top:2px; background:var(--paper);}
+  .chk .t{flex:1; font-size:12px;}
+  .chk .t b{display:block; font-weight:700; margin-bottom:2px;}
+  .chk .t span{color:var(--ink-2); font-size:11.5px; line-height:1.65;}
+  .chk.crit{background:#FDF6F6;}
+  .chk.crit .box{border-color:var(--seal); border-width:2px;}
+  .chk.crit .t b{color:var(--seal);}
+  .legend{font:400 10.5px/1.7 var(--mono); color:var(--ink-2); padding:8px 11px;
+    border:1px solid var(--rule); border-top:none; background:var(--panel);}
+
+  /* ── 최종 의견 ─────────────────────────────────────────────── */
+  .final{border:1px solid var(--rule); border-top:none; padding:17px 15px; background:var(--panel-2);}
+  .final h3{font-family:var(--display); font-size:19px; font-weight:800; margin:0 0 11px;
+    line-height:1.3; text-wrap:balance;}
+  .final p{margin:0 0 11px; font-size:12.5px; line-height:1.78;} .final p:last-child{margin-bottom:0;}
+  .cond{border-top:1px solid var(--hair); margin-top:14px; padding-top:12px;}
+  .cond > b{display:block; font-size:12px; margin-bottom:7px; letter-spacing:-.01em;}
+  .cond ol{margin:0; padding-left:20px; font-size:12.5px;}
+  .cond li{margin-bottom:7px; line-height:1.72;} .cond li:last-child{margin-bottom:0;}
+
+  .sign{display:flex; justify-content:flex-end; align-items:center; gap:18px;
+    margin-top:22px; padding-top:14px; border-top:1px solid var(--hair);}
+  .signtxt{text-align:right; font:400 11px/1.8 var(--mono); color:var(--ink-2);}
+  .signtxt b{color:var(--ink); font:600 12px/1.7 var(--body);}
+  .seal{flex:0 0 auto; width:66px; height:66px; border:2.5px solid var(--seal); border-radius:50%;
+    color:var(--seal); display:flex; flex-direction:column; align-items:center; justify-content:center;
+    font-family:var(--display); font-size:13px; font-weight:800; line-height:1.25;
+    transform:rotate(-7deg); opacity:.9;}
+
+  /* ── 검증 · 유의사항 ───────────────────────────────────────── */
+  .verifybox{margin-top:26px; border:1px solid var(--rule); background:var(--verify-soft);}
+  .verifybox .vh{background:var(--verify); color:#EEF1F0; padding:7px 12px;
+    font:600 9.5px/1.5 var(--mono); letter-spacing:.15em;}
+  .verifybox dl{margin:0; padding:12px; display:grid; grid-template-columns:auto 1fr;
+    gap:5px 14px; font:400 10.5px/1.65 var(--mono); color:var(--ink-2);}
+  .verifybox dt{color:var(--ink-3); letter-spacing:.04em; white-space:nowrap;}
+  .verifybox dd{margin:0; color:var(--ink); word-break:break-all;}
+
+  .fineprint{margin-top:22px; border-top:2px solid var(--rule); padding-top:12px;
+    font-size:10.5px; line-height:1.8; color:var(--ink-2);}
+  .fineprint > b{color:var(--ink); font:600 11px/1.6 var(--body);}
+  .fineprint ol{margin:6px 0 0; padding-left:18px;}
+  .fineprint li{margin-bottom:5px;}
+  .fineprint b{color:var(--ink);}
+
+  .scroll{overflow-x:auto; -webkit-overflow-scrolling:touch;}
+
+  @media (max-width:660px){
+    body{padding:10px 6px 40px; font-size:12.5px;}
+    .pad{padding:0 12px 22px;} .dochead{padding:16px 12px 13px;} .brandbar{padding:7px 12px;}
+    .master,.trust{padding:14px 12px;}
+    .doctitle{font-size:22px;} .vbig{font-size:21px;} .v-cond{font-size:17px;}
+    .verdict{grid-template-columns:1fr;}
+    .verdict > div:first-child{border-right:none; border-bottom:1px solid var(--hair);}
+    .metagrid,.gradebar{grid-template-columns:repeat(2,1fr);}
+    .metagrid .mg:nth-child(2),.gradebar > div:nth-child(2){border-right:none;}
+    .metagrid .mg:nth-child(-n+2),.gradebar > div:nth-child(-n+2){border-bottom:1px solid var(--hair);}
+    .evgrid{grid-template-columns:repeat(2,1fr);}
+    .ev-c{border-bottom:1px solid var(--hair);}
+    .ev-c:nth-child(2n){border-right:none;}
+    .fn{grid-template-columns:1fr; gap:3px;} .fn-k{text-align:left;}
+    .scroll table{min-width:620px;}
+    .verifybox dl{grid-template-columns:1fr; gap:1px 0;}
+    .verifybox dt{margin-top:7px;}
+  }
+  @media print{
+    body{background:#fff; padding:0; font-size:10.5pt;}
+    .sheet{border:none; max-width:none; box-shadow:none;}
+    section,.chk,.trust,.verifybox{break-inside:avoid;}
+    .brandbar,.verdict > div:first-child,.verifybox .vh{-webkit-print-color-adjust:exact; print-color-adjust:exact;}
+    tbody tr:hover{background:transparent;}
+  }
+  @media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important;}}
+</style>
+</head>
+<body>
+<div class="sheet">
+
+  <div class="brandbar">
+    <div class="logo">BARROCAR<em>중고차 자료 검토</em></div>
+    <div class="eng">DOCUMENT REVIEW · 판정 규격 F1–F5 / S1–S8<br>구매 검토용 비공식 의견서</div>
+  </div>
+
+  <div class="dochead">
+    <div class="kicker">USED VEHICLE PURCHASE DIAGNOSTIC OPINION</div>
+    <h1 class="doctitle">중고차 구매 진단 의견서</h1>
+    <p class="docsub"><b>{{차명 · 트림 · 좌석}}</b><br>
+      {{수집 범위·실제 심사 수·미완료 수}} · 광고 <a class="lnk" href="{{해당 플랫폼의 상세 URL}}" target="_blank" rel="noopener">{{광고ID}}</a></p>
+  </div>
+
+  <div class="metagrid">
+    <div class="mg"><span class="mg-k">Document No.</span><span class="mg-v">{{BC-YYYY-MMDD-XXX}}<span class="sm">{{개정 이력}}</span></span></div>
+    <div class="mg"><span class="mg-k">발급 일시</span><span class="mg-v">{{YYYY. MM. DD.}}<span class="sm">데이터 수집 {{HH:MM}} KST</span></span></div>
+    <div class="mg"><span class="mg-k">대상 차량</span><span class="mg-v">{{차량번호}}<span class="sm">{{VIN}}</span></span></div>
+    <div class="mg"><span class="mg-k">검토 범위</span><span class="mg-v">서류 기준 · 실차 미점검<span class="sm">서류 확인 {{n}}대 / 미확인 {{n}}대</span></span></div>
+  </div>
+
+  <div class="trust">
+    <div class="trust-h">
+      <h3>심사 커버리지 — 무엇을 얼마나 보았는가</h3>
+      <div class="sub">각 막대는 그 단계에 <b>투입된 물량 전체</b>를 100%로 놓는다</div>
+    </div>
+    <div class="funnel">
+      <!-- 단계마다 한 줄. width 는 그 단계 투입량 대비 실제 비율로 계산해 넣는다 -->
+      <div class="fn"><div class="fn-k">{{매물 수집 n건}}</div><div class="fn-bar"><div class="fn-a" style="width:{{a}}%">{{n대 조건 부합}}</div><div class="fn-b" style="width:{{b}}%">{{n대 조건 밖}}</div></div></div>
+      <div class="fn"><div class="fn-k">{{조건 부합 n대}}</div><div class="fn-bar"><div class="fn-a" style="width:{{a}}%">{{n대 통과}}</div><div class="fn-b" style="width:{{b}}%">{{탈락 n대 / 보류 n대 / 미심사 n대}}</div></div></div>
+      <div class="fn"><div class="fn-k">{{게이트 생존 n대}}</div><div class="fn-bar"><div class="fn-a" style="width:{{a}}%">{{n대 유효 후보}}</div><div class="fn-b" style="width:{{b}}%">{{n대 보류·제외}}</div></div></div>
+      <div class="fn"><div class="fn-k">{{유효 후보 n대}}</div><div class="fn-bar"><div class="fn-a" style="width:{{a}}%">{{1대 1순위}}</div><div class="fn-b" style="width:{{b}}%">{{n대 차순위}}</div></div></div>
+    </div>
+    <p class="fn-note">{{실제 수집 플랫폼·조회 범위·확정 중복·미해결 중복·리스 제외 여부}}</p>
+
+    <div class="trust-h" style="margin:19px 0 0;">
+      <h3>근거 등급 집계 — 이 의견서가 무엇에 기대고 있는가</h3>
+      <div class="sub">본문 등급 토큰 <b data-count-total>{{정수 합계}}</b>건 — 독립 증거 수와 다름</div>
+    </div>
+    <div class="evgrid">
+      <div class="ev-c"><div class="ev-t">[기록]</div><span class="ev-n" data-count-grade="기록">{{정수 건수}}</span><div class="ev-d">성능·상태점검기록부, 보험이력, 등록 제원에서 <b>직접 확인</b></div></div>
+      <div class="ev-c"><div class="ev-t">[제원]·[리뷰]</div><span class="ev-n" data-count-grade="제원 리뷰">{{정수 건수}}</span><div class="ev-d">제조사 제원 및 공개된 오너 실사용 리뷰</div></div>
+      <div class="ev-c"><div class="ev-t">[추정]</div><span class="ev-n" data-count-grade="추정">{{정수 건수}}</span><div class="ev-d">문서에서 추론했으나 <b>확정은 아님</b></div></div>
+      <div class="ev-c"><div class="ev-t">[판매자]</div><span class="ev-n" data-count-grade="판매자">{{정수 건수}}</span><div class="ev-d">딜러 광고 문구. <b>검증되지 않음</b></div></div>
+      <div class="ev-c is-un"><div class="ev-t">[미확인]</div><span class="ev-n" data-count-grade="미확인">{{정수 건수}}</span><div class="ev-d">확인 불가. <b>실차·진단기 필요</b> — 필수 확인 전 판정 미발행</div></div>
+    </div>
+    <div class="srcline">
+      <b>데이터 출처</b> — {{성능·상태점검기록부(발급일) · 보험이력 · 진단 · 등록 제원 · 권리관계}}<br>
+      <b>수집 방식·원문 위치</b> — {{실제로 사용한 API·캡처·판매자 자료와 출처 폴더 링크}}
+    </div>
+  </div>
+
+  <div class="verdict">
+    <div>
+      <div class="vlabel">종합 판정</div>
+      <div class="vbig v-pending">{{완료 시 3분법 판정 / 미완료 시 최종 판정 미발행}}</div>
+      <div class="vnote">{{확인 근거와 다음 행동 — 근거 없는 숫자는 넣지 않는다}}</div>
+    </div>
+    <div>
+      <div class="vlabel">가격 판정</div>
+      <div class="vbig v-pending">{{저평가 / 적정 / 고평가 / 판정 유보}}</div>
+      <div class="vnote">{{비교 근거}}</div>
+    </div>
+  </div>
+
+  <div class="master">
+    <div class="mlabel">검토 소견</div>
+    <p>{{3~5문장. 결론·확인 근거·미확인 사항·다음 행동. 추정은 추정으로 명시한다}}</p>
+  </div>
+
+  <div class="gradebar">
+    <div><span class="glabel">차체 구조</span><span class="gval g-warn">{{확인된 등급 또는 미확인}}</span><span class="gsub">{{근거 한 줄}}</span></div>
+    <div><span class="glabel">파워트레인</span><span class="gval g-warn">{{확인된 등급 또는 미확인}}</span><span class="gsub">{{근거 한 줄}}</span></div>
+    <div><span class="glabel">이력 투명성</span><span class="gval g-warn">{{주의}}</span><span class="gsub">{{근거 한 줄}}</span></div>
+    <div><span class="glabel">미확인 리스크</span><span class="gval g-warn">{{n건}}</span><span class="gsub">전량 체크리스트 이관</span></div>
+  </div>
+
+  <div class="pad">
+
+  <section>
+    <h2><span class="num">①</span>검토 대상 차량</h2>
+    <table><tbody>
+      <tr><td class="k">매물 / 차량ID</td><td>광고 <a class="lnk" href="{{해당 플랫폼의 상세 URL}}" target="_blank" rel="noopener">{{광고ID}}</a> / 차량 {{차량ID}}</td></tr>
+      <tr><td class="k">차명 / 등급</td><td>{{ }} <span class="ev">{{근거등급}}</span></td></tr>
+      <tr><td class="k">원동기 형식</td><td>{{ }} <span class="ev">{{근거등급}}</span></td></tr>
+      <tr><td class="k">최초등록 / 주행거리</td><td>{{ }} · 연평균 {{ }} <span class="ev">{{근거등급}}</span></td></tr>
+      <tr><td class="k">좌석 / 연료 / 색상</td><td>{{ }} <span class="ev">{{근거등급}}</span></td></tr>
+      <tr><td class="k">차량가</td><td><b>{{ }}</b> <span class="dim">{{내역}}</span></td></tr>
+      <tr><td class="k">판매처</td><td>{{ }} <span class="dim">{{환불·보증·탁송 조건}}</span> <span class="ev">{{근거등급}}</span></td></tr>
+      <tr><td class="k">권리관계</td><td >압류 {{n}}건 · 저당 {{n}}건 <span class="ev">{{근거등급}}</span></td></tr>
+      <tr><td class="k">사용 목적</td><td>{{구매자 조건 — 탑승 인원, 용도, 보유 예정 기간}}</td></tr>
+    </tbody></table>
+    <div class="note"><p><b>탐색 범위.</b> {{수집 방법과 결과}}</p></div>
+  </section>
+
+  <section>
+    <h2><span class="num">②</span>소거 게이트 판정</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>매물</th><th class="num">가격</th><th class="num">주행</th><th class="ctr">F1</th><th class="ctr">F2</th><th class="ctr">F3</th><th class="ctr">F4</th><th class="ctr">F5</th><th class="ctr">사고</th><th class="ctr">자차공백</th><th class="ctr">판정</th></tr></thead>
+      <tbody>
+        <tr class="total"><td>{{플랫폼·본건 광고 링크}}</td><td class="num">{{호가}}</td><td class="num">{{주행}}</td><td class="ctr"><span class="b b-warn">{{F1 결과}}</span></td><td class="ctr"><span class="b b-warn">{{F2 결과}}</span></td><td class="ctr"><span class="b b-warn">{{F3 결과}}</span></td><td class="ctr"><span class="b b-warn">{{F4 결과}}</span></td><td class="ctr"><span class="b b-warn">{{F5 결과}}</span></td><td class="ctr"><span class="b b-warn">{{확인된 사고 건수}}</span></td><td class="ctr"><span class="b b-warn">{{확인된 공백}}</span></td><td class="ctr"><span class="b b-warn">{{판정 또는 심사 미완료}}</span></td></tr>
+      </tbody>
+    </table></div>
+    <div class="note alert"><p><b>탈락 사유.</b> {{한 줄씩}}</p></div>
+    <div class="scroll"><table>
+      <thead><tr><th colspan="3">본건 소프트 게이트 S1~S8 전항목</th></tr>
+      <tr><th>게이트</th><th class="ctr">판정</th><th>근거</th></tr></thead>
+      <tbody>
+<tr><td>S1 소유 이력</td><td class="ctr"><span class="b b-warn">{{결과}}</span></td><td>{{근거}} <span class="ev">{{근거등급}}</span></td></tr>
+<tr><td>S2 주행거리</td><td class="ctr"><span class="b b-warn">{{결과}}</span></td><td>{{근거}} <span class="ev">{{근거등급}}</span></td></tr>
+<tr><td>S3 사고 규모</td><td class="ctr"><span class="b b-warn">{{결과}}</span></td><td>{{근거}} <span class="ev">{{근거등급}}</span></td></tr>
+<tr><td>S4 플랫폼 진단</td><td class="ctr"><span class="b b-warn">{{결과}}</span></td><td>{{근거}} <span class="ev">{{근거등급}}</span></td></tr>
+<tr><td>S5 자차담보 공백</td><td class="ctr"><span class="b b-warn">{{결과}}</span></td><td>{{근거}} <span class="ev">{{근거등급}}</span></td></tr>
+<tr><td>S6 리콜</td><td class="ctr"><span class="b b-warn">{{결과}}</span></td><td>{{근거}} <span class="ev">{{근거등급}}</span></td></tr>
+<tr><td>S7 판매자</td><td class="ctr"><span class="b b-warn">{{결과}}</span></td><td>{{근거}} <span class="ev">{{근거등급}}</span></td></tr>
+<tr><td>S8 가격</td><td class="ctr"><span class="b b-warn">{{결과}}</span></td><td>{{근거}} <span class="ev">{{근거등급}}</span></td></tr>
+</tbody>
+    </table></div>
+    <div class="note"><p><b>본건 게이트 상세.</b> {{F3·F4 미확인 처리 근거 포함}}</p></div>
+  </section>
+
+  <section>
+    <h2><span class="num">③</span>사고 이력 판독</h2>
+    <table><tbody><tr><td class="k">{{ }}</td><td>{{ }} <span class="ev">{{근거등급}}</span></td></tr></tbody></table>
+    <div class="note"><p><b>판독 의견.</b> {{ }}</p></div>
+  </section>
+
+  <section>
+    <h2><span class="num">④</span>보험이력 재구성</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>발생일</th><th class="ctr">구분</th><th class="num">총액</th><th class="num">부품</th><th class="num">공임</th><th class="num">도장</th><th>판독</th></tr></thead>
+      <tbody>
+        <tr><td>{{ }}</td><td class="ctr">{{내차/타차}}</td><td class="num">{{총수리비}}</td><td class="num">{{부품}}</td><td class="num">{{공임}}</td><td class="num">{{도장}}</td><td>{{판독·보험금 지급액}}</td></tr>
+        <tr class="total"><td colspan="2">내차피해 합계 ({{n}}건)</td><td class="num">{{ }}</td><td class="num" colspan="4">{{내차/타차 각각 요약과 합계·건수 대조}}</td></tr>
+      </tbody>
+    </table></div>
+    <div class="note"><p><b>금액 구성 판독.</b> {{부품/공임/도장 비율로 사고 성격 해석. 대조 불가면 [미확인] 명시}}</p></div>
+  </section>
+
+  <section>
+    <h2><span class="num">⑤</span>이력 검증</h2>
+    <table><tbody>
+      <tr><td class="k">주행거리 정합성</td><td >{{기록부 vs 광고}} <span class="ev">{{근거등급}}</span></td></tr>
+      <tr><td class="k">성능기록부 발급일</td><td>{{ }} <span class="ev">{{근거등급}}</span></td></tr>
+      <tr><td class="k">매연 측정치</td><td>{{ }} <span class="ev">{{근거등급}}</span></td></tr>
+      <tr><td class="k">세부 점검 결과</td><td>{{원동기·변속기·동력전달·조향·제동·전기·연료}} <span class="ev">{{근거등급}}</span></td></tr>
+      <tr><td class="k">특수 사고이력</td><td >전손 · 침수 · 도난 {{ }} <span class="ev">{{근거등급}}</span></td></tr>
+      <tr><td class="k">용도 이력</td><td>{{렌트·영업·관용}} <span class="ev">{{근거등급}}</span></td></tr>
+      <tr><td class="k">소유주 변경</td><td>{{n회 + 날짜}} <span class="dim">(매매업자 이전 포함 가능)</span> <span class="ev">{{근거등급}}</span></td></tr>
+      <tr><td class="k">자차담보 공백</td><td class="warn">{{기간 또는 없음}} <span class="ev">{{근거등급}}</span></td></tr>
+      <tr><td class="k">리콜</td><td>{{ }} <span class="ev">{{근거등급}}</span></td></tr>
+    </tbody></table>
+    <div class="note"><p>{{소유 변경 날짜 간격 판독 — 업자 이전 여부}}</p></div>
+  </section>
+
+  <section>
+    <h2><span class="num">⑥</span>시세 평가</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>비교 매물</th><th class="num">호가</th><th class="num">본건 대비</th><th>조건 차이</th></tr></thead>
+      <tbody>
+        <tr><td>{{ }}</td><td class="num">{{ }}</td><td class="num">{{ }}</td><td>{{n개월 늦게 등록 / n km 덜 주행}}</td></tr>
+        <tr class="total"><td><b>본건</b></td><td class="num">{{ }}</td><td class="num">기준</td><td>{{ }}</td></tr>
+      </tbody>
+    </table></div>
+    <div class="note">
+      <p>{{감가 적정성 판단. 비교군 3대 미만이면 "판정 유보"}}</p>
+      <p class="dim">※ 광고 호가이며 실거래가가 아니다. 연식·주행거리·옵션 차이가 있어 가격 차이 전부를 사고 감가로 볼 수 없다.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">⑦</span>예상 정비비</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>항목</th><th class="ctr">발생 가능성</th><th class="num">예상 비용</th></tr></thead>
+      <tbody>
+        <tr><td>{{ }}</td><td class="ctr"><span class="b b-none">{{지출 상태}}</span></td><td class="num">{{ }}</td></tr>
+        <tr><td>{{ }}</td><td class="ctr"><span class="b b-warn">리스크</span></td><td class="num">{{ }}</td></tr>
+        <tr class="total"><td colspan="2"><b>{{n}}년 총 보유비용 (차값 포함)</b></td><td class="num"><b>{{ }}</b></td></tr>
+      </tbody>
+    </table></div>
+    <div class="note"><p>{{후보 간 비용 비교. 자동차세는 차종·용도·배기량·차령·보유기간별 공식 세율과 산식을 명시}}</p></div>
+  </section>
+
+  <section>
+    <h2><span class="num">⑧</span>대안 매물 검토</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>매물</th><th class="num">가격</th><th>판정 근거</th><th class="ctr">순위</th></tr></thead>
+      <tbody>
+        <tr class="total"><td>{{본건}}</td><td class="num">{{ }}</td><td>{{ }}</td><td class="ctr"><span class="b b-warn">{{적격 순위 또는 미완료}}</span></td></tr>
+        <tr><td>{{후보}}</td><td class="num">{{ }}</td><td>{{ }}</td><td class="ctr"><span class="b b-warn">{{적격 순위 또는 미완료}}</span></td></tr>
+      </tbody>
+    </table></div>
+    <div class="note"><p><b>1순위 선정 이유 — 무엇을 맞바꾸는가.</b> {{가격 차액 ↔ 주행거리·트림·이력}}</p></div>
+  </section>
+
+  <section>
+    <h2><span class="num">⑨</span>계약 전 확인 사항</h2>
+    <div class="checklist">
+      <div class="chk crit"><div class="box"></div><div class="t"><b>{{계약 중단 사유가 되는 항목}}</b><span>{{왜 중요한지 한 줄}}</span></div></div>
+      <div class="chk"><div class="box"></div><div class="t"><b>{{일반 확인 항목}}</b><span>{{ }}</span></div></div>
+    </div>
+    <div class="legend">붉은 테두리 항목은 결과에 따라 계약을 중단해야 하는 항목이다. {{동행검수 표준 항목에 포함되지 않는 것 안내}}</div>
+  </section>
+
+  <section>
+    <h2><span class="num">⑩</span>최종 의견</h2>
+    <div class="final">
+      <h3>{{판정}}</h3>
+      <p><b>게이트 결과.</b> {{ }}</p>
+      <p><b>긍정 요소.</b> {{ }}</p>
+      <p><b>부정 요소 및 미확인 사항.</b> {{ }}</p>
+      <div class="cond"><b>{{이럴 때는 계약을 중단하라}}</b><ol><li>{{ }}</li></ol></div>
+      <div class="cond"><b>차선책 — 본건을 놓쳤을 때</b><ol><li>{{대안 ID를 링크로 지목}}</li></ol></div>
+      <div class="cond"><b>검색 조건 — 새 매물이 뜰 때 이 필터로 거른다</b><ol><li>{{ }}</li></ol></div>
+      <p style="margin-top:13px;"><b>진행 방식.</b> {{검수 순서, 환불 제도 활용법}}</p>
+    </div>
+
+    <div class="sign">
+      <div class="signtxt">
+        {{작성일}}<br>
+        <b>판정 기준: BarroCar 중고차 소거법</b><br>
+        검토 범위: 제공 자료 기준 · 실차 미점검<br>
+        스크리닝: {{수집 n건 → 실제 심사 n대 → 보류 n대}}
+      </div>
+      <div class="seal">검토<br>의견</div>
+    </div>
+  </section>
+
+  <div class="verifybox">
+    <div class="vh">문서 검증 · DOCUMENT VERIFICATION</div>
+    <dl>
+      <dt>문서번호</dt><dd>{{BC-YYYY-MMDD-XXX}}</dd>
+      <dt>생성</dt><dd>자료 검토 + 일부 항목 자동 요약 — 하드 게이트 F1–F5 / 소프트 게이트 S1–S8</dd>
+      <dt>생성 일시</dt><dd>{{YYYY-MM-DD HH:MM KST}}</dd>
+      <dt>대상 차량</dt><dd>{{차량번호 · VIN · 원동기}}</dd>
+      <dt>심사 대상</dt><dd>{{수집 n건 → 실제 조회 n대 · 원문 폴더 링크}}</dd>
+      <dt>개정 이력</dt><dd>{{R1 → R2 사유}}</dd>
+      <dt>유효 범위</dt><dd>수집 시점의 매물 상태 기준. 매물은 판매·가격 조정·광고 종료로 <b>수시로 변한다</b>. 계약 전 재조회할 것</dd>
+    </dl>
+  </div>
+
+  <div class="fineprint">
+    <b>유의사항</b>
+    <ol>
+      <li>본 문서는 자동차관리법 제58조에 따른 자동차성능·상태점검기록부가 아니며, 법적 효력이나 보증 책임이 없는 <b>구매 검토용 참고 의견서</b>이다.</li>
+      <li>판단 근거는 공개된 매물·성능점검·보험이력·진단 자료에 한하며, <b>실차 점검·시운전·진단기 검사는 실시하지 않았다.</b></li>
+      <li>범퍼·유리·휠·타이어·램프는 교환하여도 사고로 표기되지 않으며, 보험사에 접수하지 않은 수리는 담보 가입 여부와 무관하게 보험이력에서 빠질 수 있다. 따라서 <b>서류상 이력의 부재가 무사고를 보증하지 않는다.</b></li>
+      <li>정비비 및 시세 추정치는 작성 시점 기준 통상 범위이며 실제 견적·거래가와 다를 수 있다. 비교 매물 가격은 광고 호가다.</li>
+      <li>차대번호, 리콜 이행 여부, <b>승차정원</b>, 정비 이력은 자동차등록원부 및 제조사 공식 서비스센터를 통해 직접 검증할 것을 권고한다.</li>
+      <li>최종 구매 결정과 그에 따른 책임은 구매자 본인에게 있다.</li>
+    </ol>
+  </div>
+
+  </div>
+</div>
+</body>
+</html>
