@@ -1,18 +1,20 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
-import { existsSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
+import test, { after } from 'node:test';
+import { existsSync, writeFileSync, unlinkSync, mkdirSync, mkdtempSync, copyFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { hostname } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
+import { pathToFileURL } from 'node:url';
 
-import { isStale, releaseIfStale, getCurrentLock } from '../scripts/automation/in-flight-lock.js';
-
-const ROOT = resolve(import.meta.dirname, '..');
+const ROOT = mkdtempSync(join(tmpdir(), 'bt-flight-test-'));
+mkdirSync(join(ROOT, 'scripts/automation'), { recursive: true });
+writeFileSync(join(ROOT, 'package.json'), '{"type":"module"}');
+copyFileSync(resolve(import.meta.dirname, '../scripts/automation/in-flight-lock.js'), join(ROOT, 'scripts/automation/in-flight-lock.js'));
+const { isStale, releaseIfStale, getCurrentLock } = await import(pathToFileURL(join(ROOT, 'scripts/automation/in-flight-lock.js')));
+after(() => rmSync(ROOT, { recursive: true, force: true }));
 const LOCK_FILE = join(ROOT, 'workspace', '.in-flight.json');
 
 /**
- * 이 테스트는 **실제 락 파일 경로**를 쓴다 (모듈이 상수로 들고 있어 주입이 안 된다).
- * 그래서 돌기 전에 락이 있으면 통째로 건너뛴다 — 테스트가 돌아가는 파이프라인의
- * 락을 지우면 두 에피소드가 동시에 돌 수 있고, 그건 이 락이 막으려던 사고다.
+ * 모듈을 임시 skill root에서 불러 실제 운영 락을 읽거나 변경하지 않는다.
  */
 function liveLockPresent() {
   return existsSync(LOCK_FILE);

@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "description": "씬 자산 재사용 폴백 정책(SSOT). 이미지 생성 경로가 전부 막혔을 때 기존 에피소드의 마시 씬 스틸·모션 클립을 골라 쓴다. scripts/automation/reuse-scene-assets.js 와 lib/scene-asset-index.js 가 이 파일을 읽는다.",
+  "enabled": true,
+  "policy": {
+    "min_source_age_days": 10,
+    "cooldown_days": 30,
+    "max_per_source_episode": 2,
+    "min_score": 0.24,
+    "role_bonus": 0.05,
+    "palette_bonus": 0.03,
+    "require_current_era": true,
+    "block_palette_conflict": true,
+    "block_caricature": true,
+    "complete_with_generic": true
+  },
+  "reuse_motion_clips": true,
+  "ledger": "workspace/assets/scene-reuse-ledger.json",
+  "_notes": {
+    "why": "2026-09-22 실측: ChatGPT 주간한도(9/25 해제) · codex imagegen(같은 계정, 같은 한도) · gpt-image-1 크레딧 고갈 · Gemini 402 · Grok 주간한도 소진이 동시에 걸려 EP-2026-0172 가 Phase 7 에서 halt 했다. 생성 경로가 하나도 없는 조합이라 코드로는 풀 수 없다. 반면 채널에는 같은 캐릭터로 구운 스틸 792장·클립 427개가 있다.",
+    "priority": "재사용은 **마지막 폴백**이다. 브라우저 → codex imagegen → 이미지 API 를 모두 시도한 뒤에만 돈다. 순서를 바꾸면 신선한 컷을 굽을 수 있는 날에도 재활용이 나간다.",
+    "min_source_age_days": "이보다 최근에 구운 컷은 시청자가 알아본다. 10일이면 하루 3편 기준 약 30편 뒤라 기억에서 멀다.",
+    "max_per_source_episode": "한 원본 EP 에서 5컷을 다 가져오면 옛 영상 재방송이 된다. 2 로 묶으면 최소 3개 EP 에서 섞인다.",
+    "min_score": "TF-IDF 코사인 하한. 이 아래여도 **멈추지 않고** 쓰지만 WARN 감사와 텔레그램에 '시각 매칭 약함'을 실어 보낸다 — 멈추지 않게 만드는 것이 이 폴백의 목적이다. 0.24 의 근거: 2026-09-22 최근 9편 45컷 실측(가드 전부 적용, 미배정 0) 최소 0.139 · p10 0.214 · p25 0.255 · 중앙 0.394 · 최대 0.682. 0.24 는 하위 약 18% 를 잡는다. 처음 넣은 0.12 는 45컷 중 한 번도 발동하지 않는 죽은 값이었다.",
+    "reuse_motion_clips": "실제 모션이 있는 클립(grok·wan·ltx 출신)만 복사한다. HyperFrames 클립은 스틸에서 로컬로 다시 만들 수 있으므로(무과금·TTS 길이 정확) 복사할 이유가 없다. 판정은 원본 videos/_engines.json 의 engine, 기록이 없으면 AAC 오디오 스트림 유무(HyperFrames 는 설계상 무음).",
+    "require_current_era": "현행 화풍으로 구운 컷만 후보로 본다. 2026-09-22 EP-0172 1차 실측에서 씬 003 이 EP-2026-0050(176자 구세대 템플릿)로 배정돼 평면 미니멀 화풍이 편집일러스트 컷들 사이에 섞였다. 점수는 '무엇을 그렸나'만 보고 '어떻게 그렸나'를 못 본다. 판정은 image-prompt-contract.js 의 BOUNDS.minChars + 캐릭터 시트 문구 — 계약이 바뀌면 판정도 따라온다.",
+    "block_palette_conflict": "bullish 그림을 bearish 대본에 붙이지 않는다. 상승 계단이 하락 대본에 붙으면 시청자가 즉시 알아본다. explainer·cta 는 중립이라 섞여도 된다.",
+    "block_caricature": "공인 캐리커처가 들어간 컷은 재사용하지 않는다. 2026-09-22 EP-0172 2차 실측에서 씬 005 가 실존 인물 캐리커처 컷(EP-2026-0128 s001)으로 배정됐는데 대본은 다른 인물을 말했다 — 인물 오귀속이다. 748컷 중 17개뿐이라 빼도 후보가 줄지 않는다. 판정은 image-prompt-contract.js 의 CARICATURE.clauseRe.",
+    "measured_2026_09_22": "최근 9편을 각각 대상으로 돌려 45컷 전부 배정 성공(미배정 0). 후보 풀은 현행 화풍 443컷 + 캐리커처 17컷 제외. 하루 5컷·쿨다운 30일 기준으로 여유가 있다.",
+    "complete_with_generic": "1차에서 못 채운 씬을 2차 패스로 반드시 채워 회차를 완주시킨다. 1차가 비는 이유는 대개 신선도 조건(min_source_age_days·cooldown·max_per_source_episode)이고, 거기서 멈추면 파이프라인이 Phase 7 에서 서서 회차가 통째로 날아간다. 2차는 **신선도만** 풀고 '마시가 서서 설명하는' 범용 구도(차트·보드·패널·연단)를 우선 배정한다. 화풍 세대·캐리커처·방향 모순은 2차에서도 막는다 — 그 셋은 '덜 맞는' 문제가 아니라 '틀린' 문제라 완주보다 우선한다. 2차 배정분은 항상 weak 로 표시해 사람이 한 번 본다. 2026-09-23 운영자 요청."
+  },
+  "library": {
+    "manifest": "workspace/assets/scene-library.json",
+    "obsidian_vault": "~/youtube-co/obsidian-vault/BarroTube",
+    "obsidian_dir": "06-Assets",
+    "_notes": "슬롯 분류 결과의 기계 정본은 manifest 다. 옵시디언 문서는 그 렌더일 뿐이고 손으로 고치면 다음 렌더에서 사라진다. 운영자 의도는 아래 backfill.slot_overrides 에 적는다 — 정본은 항상 코드 옆이다. 자유 메모는 <obsidian_dir>/notes.md 에 두고 렌더가 건드리지 않는다. 백필 산출물은 library.root 아래 날짜 배치 폴더에 에피소드 형태(30_script.md + 40_assets/images)로 쌓인다 — workspace/episodes 에 두면 발행 대조·보드·youtube-state 가 미업로드 회차로 착각한다.",
+    "root": "workspace/assets/library"
+  },
+  "backfill": {
+    "enabled": true,
+    "daily_cap": 5,
+    "require_no_fallback_today": true,
+    "grade_order": [
+      "A",
+      "B",
+      "C",
+      "R"
+    ],
+    "prefer_direction": "up",
+    "slot_overrides": {},
+    "_notes": "2026-09-25 Phase 3 구현과 함께 켰다(scripts/automation/backfill-library.js). pending_render_window_days 는 \"렌더가 덜 끝난 회차\" 가드의 관측 창이다 — 초기 회차 30여 편이 대본만 남고 버려져 있어 창이 없으면 가드가 영구히 켜진다. daily_cap 5 는 에피소드가 쓰는 15컷의 1/3 이하로 잡은 추정치이고 2주 관측 후 조정이 필요하다 — ChatGPT 는 남은 주간 한도를 노출하지 않는다. prefer_direction=up 의 근거: 2026-09-22 슬롯 분류에서 부족 11슬롯 중 6슬롯이 up 이었다(rates/up 2/4 · labor/up 0/3 · energy/up 1/3 · earnings/up 1/3 · fx/up 2/3 · metals/up 0/2). slot_overrides 는 {\"<slot>\": {\"hold\": true}} 형태로 특정 슬롯을 백필에서 제외한다.",
+    "_saturation_note": "포화 슬롯에는 백필하지 않는다. 수량이 아니라 쏠림이 문제이므로 더 구워도 해결되지 않는다 — 작가 프롬프트 쪽 문제다.",
+    "pending_render_window_days": 7
+  }
+}

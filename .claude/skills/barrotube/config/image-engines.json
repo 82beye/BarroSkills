@@ -14,8 +14,8 @@
     "intro_out": "45_intro.png",
     "notes": "기본값: S6c 씬 이미지와 S6d 인트로 카드는 media-render(ChatGPT 브라우저)로 PD가 생성해 각 경로에 저장(v2 레이아웃은 platforms/<platform>/ 하위). 인트로는 저장 전 타이틀 철자 확대 검수 필수(한글 렌더 오타 방지). 씬 모션 클립(Grok image→video)을 scene_video_out에 두면 render-direct.js가 정지 이미지 대신 자동 사용. 레거시(API): --image-engine(S6c) / --engine·BT_INTRO_ENGINE(S6d) openai|gemini.",
     "thumbnail_out": "47_thumbnail.png",
-    "chatgpt_seed_conversation": "https://chatgpt.com/c/6a82d4a1-b370-83ee-829b-8b420d271de5",
-    "seed_notes": "씬 이미지는 이 대화에서 이어서 만든다 — 맨 위 메시지에 캐릭터 시트가 첨부돼 있으므로 매 요청마다 파일을 다시 붙일 필요가 없다. codex 의 Chrome 표면은 로컬 파일 첨부가 구조적으로 막혀 있고(숨은 input·파일 선택 UI·Cmd+V 전부 실패, 2026-08-17 EP-0096·0097 실측), control-chrome 스킬이 외부 Playwright MCP 사용도 금지한다. 첨부를 요구하는 절차는 무인 실행에서 반드시 멈춘다. 시드 대화 방식은 같은 날 실측으로 캐릭터 일관성 유지 확인. 대화가 길어지면 운영자가 새로 시드해 이 URL 을 교체한다."
+    "chatgpt_seed_conversation": "https://chatgpt.com/c/6a97bbc4-9048-83ee-a4e6-091eb7fbc45b",
+    "seed_notes": "씬 이미지는 이 대화에서 이어서 만든다 — 맨 위 메시지에 캐릭터 시트가 첨부돼 있으므로 매 요청마다 파일을 다시 붙일 필요가 없다. codex 의 Chrome 표면은 로컬 파일 첨부가 구조적으로 막혀 있고(숨은 input·파일 선택 UI·Cmd+V 전부 실패, 2026-08-17 EP-0096·0097 실측), control-chrome 스킬이 외부 Playwright MCP 사용도 금지한다. 첨부를 요구하는 절차는 무인 실행에서 반드시 멈춘다. 시드 대화 방식은 같은 날 실측으로 캐릭터 일관성 유지 확인. 대화가 길어지면 운영자가 새로 시드해 이 URL 을 교체한다. 2026-09-02 재시드: 이전 시드(6a82d4a1)는 대화가 길어져 맨 위 시트가 로드되지 않았고, 워커가 \"시드 대화 없음\"으로 판정해 브라우저 이미지 패스가 통째로 버려졌다(EP-2026-0131). 새 대화에 시트를 첨부하고 \"SEED OK\" 확인까지 받아 교체했다. 같은 증상이 다시 보이면 또 새로 시드하고 이 URL 을 갱신하라."
   },
   "_notes": {
     "values": "gemini | openai | codex | auto | media-render(S6c 씬·S6d 인트로)",
@@ -24,7 +24,8 @@
     "media_render_requires": "브라우저 세션(ChatGPT/Grok 로그인) — 브라우저 도구 없는 headless 실행은 불가. launchd는 Chrome/Playwright가 연결된 Codex 오케스트레이터로 스킬 절차를 수행",
     "quick_global_switch": "전 파이프라인을 OpenAI로 전환하려면 BT_IMAGE_ENGINE=openai 또는 이 파일 global='openai'; 씬만 레거시 API로 되돌리려면 stages.S6c_scene='openai'",
     "codex_requires": "codex CLI + ChatGPT 로그인. API 키 불필요. 브라우저 불필요(무인 실행 가능).",
-    "switched_2026_08_20": "S6c 씬 / S6d 인트로 / S6e 썸네일 전부 media-render → codex. 브라우저 첨부가 무인 실행에서 막혀 EP-0101·0102·0104 가 S6c 에서 죽은 게 직접 계기이고, 썸네일은 Gemini 429(prepayment credits) 로 계속 씬 스틸 폴백으로 새고 있었다. 인트로·아웃트로 '카드'(45_intro.png / 48_outro.png)는 generate-cards.js 가 HyperFrames 로 씬 스틸 위에 한글을 로컬 합성하므로 이미지 엔진을 타지 않는다 — 배경이 되는 씬이 codex 로 바뀌면 카드도 자동으로 따라온다. S6d 의 codex 분기는 generate-intro.js 레거시 아트 경로용."
+    "switched_2026_08_20": "S6c 씬 / S6d 인트로 / S6e 썸네일 전부 media-render → codex. 브라우저 첨부가 무인 실행에서 막혀 EP-0101·0102·0104 가 S6c 에서 죽은 게 직접 계기이고, 썸네일은 Gemini 429(prepayment credits) 로 계속 씬 스틸 폴백으로 새고 있었다. 인트로·아웃트로 '카드'(45_intro.png / 48_outro.png)는 generate-cards.js 가 HyperFrames 로 씬 스틸 위에 한글을 로컬 합성하므로 이미지 엔진을 타지 않는다 — 배경이 되는 씬이 codex 로 바뀌면 카드도 자동으로 따라온다. S6d 의 codex 분기는 generate-intro.js 레거시 아트 경로용.",
+    "when_all_generation_blocked": "생성 경로(브라우저 ChatGPT · codex imagegen · gpt-image-1 · Gemini)가 전부 막히면 auto-pipeline.sh Phase 7 이 마지막으로 **자산 재사용 폴백**을 돈다 — 기존 에피소드의 마시 씬 스틸·모션 클립에서 대본에 맞는 컷을 골라 복사한다. 정책 정본은 config/asset-reuse.json, 구현은 scripts/automation/reuse-scene-assets.js 다. 수동 확인: node scripts/automation/reuse-scene-assets.js --script <30_script.md> --dry-run. 2026-09-22 추가 — 그날 ChatGPT 주간한도(9/25 해제) · gpt-image-1 크레딧 고갈 · Gemini 402 · Grok 소진이 동시에 걸려 EP-2026-0172 가 Phase 7 에서 halt 했다."
   },
   "_image_api_policy": "S6c/S6d/S6e 가 media-render 이면 이미지 API(gpt-image-1·Gemini)를 호출하지 않는다. 전부 브라우저(ChatGPT 이미지 → Grok 영상)로 만든다. API 로 만들려면 produce-episode.js --image-engine 으로 명시해야 한다.",
   "codex_imagegen": {

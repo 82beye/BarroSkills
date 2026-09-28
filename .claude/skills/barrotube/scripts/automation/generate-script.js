@@ -44,7 +44,7 @@ import {
 import { formatToPlatform } from './paths.js';
 import { TEMPLATE, BOUNDS, KNOWN_PALETTES, CANONICAL_TAIL, MASCOT_CLAUSE } from './lib/image-prompt-contract.js';
 import { callClaudeCode, callCodex, resolveChain, runEngineChain } from './lib/text-engine.js';
-import { buildAnalystContractBlock, validateScript, formatIssue } from './lib/script-quality-contract.js';
+import { buildAnalystContractBlock, validateScript, formatIssue, INDEX_MOVE_PCT_FLOOR } from './lib/script-quality-contract.js';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const DEFAULT_MODEL = process.env.GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
@@ -166,7 +166,32 @@ ${identity}
 `;
 }
 
-function buildSystemPrompt(format, persona, seriesContext, publicFiguresInfo = null, mascotClause = null) {
+/**
+ * 슬롯 전용 씬 뼈대 → scene_roles 문자열.
+ *
+ * config/routines.json 의 slots.<slot>.scene_skeleton 이 정본인데, 이 스크립트가 --slot 을
+ * 안 받아서 **한 번도 쓰인 적이 없었다** (2026-09-18 확인). 그래서 부동산 회차가 포맷 기본
+ * 뼈대를 타고 «global cause chain / US watchlist» 로 미국 금리 3씬을 실었다 — EP-2026-0150
+ * 과 0163 이 모두 그랬다. 부동산 뼈대는 원래 전부 국내다:
+ *   수치 → 원인 → 반대 해석 → 공급·미분양·거래량 → 실수요자 영향.
+ *
+ * 씬 수가 포맷과 맞을 때만 덮어쓴다 — 안 맞으면 포맷 기본값을 그대로 둔다.
+ */
+function slotSceneRoles(slot, sceneCount) {
+  if (!slot) return null;
+  try {
+    const cfg = JSON.parse(readFileSync(join(ROOT, 'config', 'routines.json'), 'utf-8'));
+    const skeleton = cfg?.slots?.[slot]?.scene_skeleton;
+    if (!Array.isArray(skeleton) || skeleton.length !== sceneCount) return null;
+    return skeleton.map((step, i) => {
+      const role = typeof step === 'string' ? step : step.role;
+      const intent = typeof step === 'string' ? '' : (step.intent || step.desc || step.note || '');
+      return `${String(i + 1).padStart(3, '0')}=${role}${intent ? ` — ${intent}` : ''}`;
+    }).join('\n  ');
+  } catch { return null; }
+}
+
+function buildSystemPrompt(format, persona, seriesContext, publicFiguresInfo = null, mascotClause = null, slot = null) {
   const spec = FORMAT_SPECS[format];
   const sceneCount = spec.scene_count;
 
@@ -182,6 +207,7 @@ function buildSystemPrompt(format, persona, seriesContext, publicFiguresInfo = n
   const pfResolved = publicFiguresInfo?.resolved || [];
   const hasCharacterizeFigure = pfResolved.some(r => r.treatment === 'CHARACTERIZE');
   const sceneCap = format === 'shorts' ? 2 : 3;
+  const slotRoles = slotSceneRoles(slot, sceneCount);
 
   return `You are "Writer Agent" of BarroTube, a Korean economy YouTube channel.
 
@@ -190,7 +216,7 @@ FORMAT: ${format}
 - Target total duration: ~${spec.target_total_seconds} seconds
 - Narration length: ${spec.scene_chars_range}
 - Aspect: ${spec.aspect}
-- Scene roles (mandatory): ${spec.scene_roles}
+- Scene roles (mandatory):${slotRoles ? '\n  ' + slotRoles : ' ' + spec.scene_roles}
 ${spec.mid_hook ? '- MID-HOOK REQUIRED: 씬 4 마지막 부분 또는 75초 지점에 "재점화 Hook" (이탈 방지 질문/궁금증 유발 1문장) 포함\n' : ''}${seriesBlock}${personaBlock}
 RULES:
 1. Output MUST be a single JSON object. No markdown, no prose, no code fences.
@@ -205,7 +231,15 @@ ${buildAnalystContractBlock(sceneCount)}
 7. Target audience: 20~40대 한국 투자자.
 8. FORBIDDEN: specific stock buy/sell recommendations, "무조건/100%/확실/이것만 하면 부자", 정치 편향.
 9. CRITICAL — narration is FOR TTS ONLY. DO NOT include in narration: emojis (📚 🚨 etc), bracket tags ([1/5]), intro card text, subtitle overlays, or any text that appears as visual-only elements. Those belong to video/subtitle layers — not to spoken audio.
-10. CRITICAL — Hook scene (씬 001): speak AT MOST ONE number, and the same scene must say why it matters to the viewer. A hook that only recites a figure fails — index moves are on every channel (see RULE 4-CONTRACT D). Prefer opening on the counter-intuitive fact: what moved against expectations, who disagreed, what broke the usual pattern. Put the remaining figures in subtitle_text.
+10. CRITICAL — Hook scene (씬 001): speak AT MOST ONE number, and the same scene must say why it matters to the viewer. A hook that only recites a figure fails — index moves are on every channel (see RULE 4-CONTRACT D). Open on the counter-intuitive fact: what moved against expectations, who disagreed, what broke the usual pattern. Put the remaining figures in subtitle_text.
+10a. CRITICAL — A ROUTINE DAILY MOVE MAY NOT BE THE SUBJECT of the hook. "오늘 X% 올랐다/내렸다" is not news below index ${INDEX_MOVE_PCT_FLOOR}% / FX 1.0% / commodity 3.0% / rates 10bp / single name 5.0% (absolute). Below those, the hook's subject must be the mechanism, the disagreement, or the consequence to the viewer; the figure may appear later only as EVIDENCE ("…때문에" / "그 결과…"), never as the thing being announced.
+10b. CRITICAL — BUT THESE ARE ALWAYS HEADLINE-WORTHY regardless of how small the daily move is, and when one is present in the research it MUST be the episode's main subject:
+    * LEVEL BREACH — crossing a round psychological line (미 10년물 5%, 유가 100달러, 원/달러 1,400원, 코스피 7000선). A 5bp move that takes the 10-year through 5% is the story; the 5bp is not.
+    * MULTI-YEAR EXTREME — N년래 최고·최저 경신.
+    * PERIOD CUMULATIVE — 주·월·분기 누적이 평소를 크게 넘을 때 (유가, 9월에만 20% 급등).
+    * STREAK — 연속 기록의 시작·중단 (7일 연속 하락).
+    Priority when several compete: level breach > multi-year extreme > period cumulative > streak.
+10c. Even for 10b, the hook leads with WHAT MADE IT HAPPEN or WHAT IT MEANS, not with the bare figure. "국채금리가 5%를 뚫었습니다" is acceptable only if the same scene says why that line matters. Measured 2026-09-16: figure-reciting hooks get views but not subscribers — 구독/1k뷰 0.63 vs 2.12 for causal framing (n=26).
 11. CRITICAL — image_prompt MUST NOT contain any text/words/numbers/company-names/labels to be rendered as text in the image. The image model will literally draw any text you mention. Use visual metaphors only:
     - BAD:  "pie chart labeled '80% of market cap' with company names 'Apple, Microsoft, Amazon'"
     - GOOD: "pie chart with one large highlighted wedge, three small anonymous company building icons stacked beside it"
@@ -333,6 +367,7 @@ async function main() {
       platform: { type: 'string' },          // long | shorts — 명시 시 platforms/<platform>/00_brief.md 우선 + 출력 platforms/<platform>/30_script.md 강제
       brief: { type: 'string' },             // 명시 시 이 brief 파일을 우선 읽음 (--platform 보다 우선순위 높음)
       force: { type: 'boolean' },            // 기존 30_script.md 덮어쓰기 허용 (default: false → existing 보호)
+      slot: { type: 'string' },              // us-close | kr-close | realestate | omnibus — 슬롯 전용 씬 뼈대
     },
   });
   if (!values.episode) {
@@ -440,7 +475,7 @@ async function main() {
   const mascotClause = loadMascotClause(channel);
   console.log(`   Mascot DNA: ${mascotClause ? `주입됨 (${mascotClause.length}자)` : '없음 — 인라인 서술 지시'}`);
 
-  const systemPrompt = buildSystemPrompt(format, persona, seriesContext, publicFiguresInfo, mascotClause);
+  const systemPrompt = buildSystemPrompt(format, persona, seriesContext, publicFiguresInfo, mascotClause, values.slot || null);
 
   const userPromptParts = [
     `[EPISODE BRIEF]`,
@@ -534,6 +569,18 @@ async function main() {
     if (!qualityIssues.some((i) => i.severity === 'error' || i.rewrite)) break;
 
     if (attempt === 2) {
+      // 2026-09-21 운영자 지시: 「3% 를 넘지 못하면 지수를 주제로 잡지 못하게 하라」.
+      // 이 규칙만은 '기록하고 진행' 하지 않는다 — 나머지 위반의 처리는 그대로 둔다.
+      // 여기서 멈추면 이미지·TTS 비용을 쓰기 전이다(Phase 4). auto-pipeline 이
+      // fail_with_alert 로 텔레그램을 울린다. exit 2·3 은 produce-episode 에서 다른
+      // 뜻으로 쓰이므로 1 을 쓴다.
+      const blocking = qualityIssues.filter((i) => i.rule === 'index-move-as-subject');
+      if (blocking.length) {
+        console.error(`❌ ${blocking[0].message}`);
+        console.error('   재작성 후에도 훅의 주어가 지수 등락률이다 — 대본을 내보내지 않는다.');
+        console.error('   토픽을 바꾸거나(레벨 돌파·N년래 최고·연속기록) 훅의 주어를 사건·인과로 바꿔라.');
+        process.exit(1);
+      }
       console.warn('   ⚠ 재작성 후에도 품질 계약 위반이 남았다 — frontmatter 에 기록하고 진행한다');
       break;
     }

@@ -31,9 +31,9 @@ import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSy
 import { join, resolve, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { getSecret } from './config-loader.js';
+import { telegramRequest } from './notify.js';
 
 const ROOT = resolve(import.meta.dirname, '../..');
-const API = 'https://api.telegram.org';
 
 const BOT_TOKEN = getSecret('TELEGRAM_BOT_TOKEN');
 const AUTH_CHAT = String(getSecret('TELEGRAM_CHAT_ID') || '');
@@ -66,22 +66,7 @@ function logLine(msg) {
  * getUpdates 는 long-polling(timeout 30s)이므로 curl 타임아웃을 그보다 넉넉히 잡는다.
  */
 async function tg(method, body) {
-  const waitSec = Number(body && body.timeout) || 0;
-  const out = spawnSync('curl', [
-    '-sS', '-4', '-m', String(waitSec + 20), '-X', 'POST',
-    `${API}/bot${BOT_TOKEN}/${method}`,
-    '-H', 'Content-Type: application/json',
-    '--data-binary', '@-',
-  ], { input: JSON.stringify(body), encoding: 'utf-8' });
-
-  if (out.status !== 0) {
-    throw new Error(`Telegram ${method}: curl exit ${out.status} ${(out.stderr || '').slice(0, 160)}`);
-  }
-  try {
-    return JSON.parse(out.stdout);
-  } catch {
-    throw new Error(`Telegram ${method}: 응답 파싱 실패 ${String(out.stdout).slice(0, 160)}`);
-  }
+  return telegramRequest(method, body, BOT_TOKEN);
 }
 
 async function reply(chatId, text, opts = {}) {
@@ -271,6 +256,7 @@ async function cmdReject(chatId, args) {
   if (!args[0]) return reply(chatId, '사용법: /reject EP-2026-XXXX\nauto-pipeline의 30분 reject window 내 차단');
   const epId = args[0];
   const rejectDir = join(ROOT, 'workspace/.reject-window');
+  if (!/^EP-\d{4}-\d{4}$/.test(epId)) return reply(chatId, '올바른 EP-YYYY-NNNN ID가 필요합니다.');
   mkdirSync(rejectDir, { recursive: true });
   const flagFile = join(rejectDir, `${epId}.flag`);
   writeFileSync(flagFile, new Date().toISOString(), 'utf-8');

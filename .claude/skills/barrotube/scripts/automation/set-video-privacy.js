@@ -70,12 +70,13 @@ async function main() {
     video: { type: 'string' },
     episode: { type: 'string' },
     privacy: { type: 'string' },
+    force: { type: 'boolean', default: false },
     'dry-run': { type: 'boolean', default: false },
   } });
 
   const privacy = (values.privacy || '').toLowerCase();
   if (!ALLOWED.includes(privacy)) {
-    console.error(`Usage: set-video-privacy.js (--video <id> | --episode <EP-YYYY-NNNN>) --privacy ${ALLOWED.join('|')} [--dry-run]`);
+    console.error(`Usage: set-video-privacy.js (--video <id> | --episode <EP-YYYY-NNNN>) --privacy ${ALLOWED.join('|')} [--force] [--dry-run]`);
     process.exit(2);
   }
 
@@ -86,7 +87,7 @@ async function main() {
   }
 
   const token = await accessToken();
-  const cur = await (await fetch(`${API}?part=status,snippet&id=${encodeURIComponent(videoId)}`, {
+  const cur = await (await fetch(`${API}?part=status,snippet,contentDetails,processingDetails&id=${encodeURIComponent(videoId)}`, {
     headers: { Authorization: `Bearer ${token}` },
   })).json();
   const item = cur.items?.[0];
@@ -95,6 +96,34 @@ async function main() {
   console.log(`🎬 ${item.snippet.title}`);
   console.log(`   현재: ${item.status.privacyStatus} → 목표: ${privacy}`);
   if (item.status.privacyStatus === privacy) { console.log('   이미 그 상태입니다 — 변경 없음'); process.exit(0); }
+
+  /**
+   * 미완성 영상을 공개로 넘기지 않는다.
+   *
+   * 2026-09-23~25 에 같은 사고가 두 번 났다(EP-2026-0176·0177). 업로드가 네트워크
+   * 중단으로 37/64MB · 33/69MB 에서 끊겼는데 유튜브에는 영상 리소스가 이미 만들어져
+   * 있었고, 그게 **공개 상태로 채널에 떠 있었다.** 길이 0초짜리 깨진 영상이 구독자에게
+   * 보인 것이다. 업로드 경로는 세션을 보존하고 재개할 수 있게 잘 짜여 있었는데,
+   * 공개로 넘기는 길목에 "이 영상이 온전한가"를 묻는 곳이 없었다.
+   *
+   * 판정은 유튜브가 주는 두 값으로 한다 — 처리 완료(processed) 이고 길이가 0 이 아닐 것.
+   * 둘 다 유튜브가 바이트를 다 받아 인코딩을 마쳐야 나온다.
+   */
+  const dur = item.contentDetails?.duration || '';
+  const proc = item.processingDetails?.processingStatus || '';
+  const incomplete = !/^PT(?=.*\d)/.test(dur) || item.status.uploadStatus !== 'processed';
+  if (privacy === 'public' && incomplete && !values.force) {
+    console.error(`\n❌ 아직 온전하지 않은 영상이라 공개하지 않았습니다.`);
+    console.error(`   길이: ${dur || '(없음)'} · 업로드: ${item.status.uploadStatus} · 처리: ${proc || '?'}`);
+    console.error(`\n   업로드가 중간에 끊겼을 수 있습니다. 재개 세션(80_publish_result.json.lock)이`);
+    console.error(`   남아 있으면 이어붙이고, 없으면 다시 올려야 합니다.`);
+    console.error(`   상태를 확인했고 그래도 공개하려면 --force 를 주세요.`);
+    process.exit(4);
+  }
+  if (privacy === 'public' && incomplete && values.force) {
+    console.warn(`   ⚠ --force — 길이 ${dur || '없음'} · 처리 ${proc || '?'} 인 채로 공개합니다.`);
+  }
+
   if (values['dry-run']) { console.log('   [DRY RUN] 변경하지 않았습니다'); process.exit(0); }
 
   // status 는 전체 교체다. 빠뜨린 필드는 기본값으로 되돌아가므로 현재 값을 보존한다.

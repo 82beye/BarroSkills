@@ -7,27 +7,35 @@
 #   bash install-cron.sh uninstall <routine>
 #   bash install-cron.sh list
 #
-# Routines:
-#   us-close              — 매일 06:00 KST 미국 증시 마감 브리핑 전체 파이프라인
-#   kr-close              — 평일 16:00 KST 국내 증시 마감 브리핑 (주말 미실행)
-#   realestate            — 매주 목요일 17:00 KST 주간 부동산 브리핑 (부동산원 지수 발표 후)
+# Routines (시각·요일의 정본은 config/routines.json 이다 — 여기는 안내용 요약):
+#   us-close              — 매일 06:00 KST 미국 증시 마감 브리핑 (08:00 공개)
+#   omnibus               — 월~목·토·일 10:00 점심 옴니버스 (12:00 공개)
+#   realestate            — 금요일 10:00 주간 부동산 브리핑 (12:00 공개)
+#   kr-close              — 매일 16:00 KST 국내 증시 마감 브리핑 (18:00 공개)
+#   market-map            — 매일 08:00,20:00 마켓맵 카드뉴스 (무과금)
 #   competitor-scan       — 매일 05:20,15:20 경쟁 인텔 수집→분석→핸드오프
 #   growth                — 매일 05:40,15:40 채널 성장 루프 (자체 수집→KPI→처방, 월 회고)
+#   publish-resume        — 매일 07:30,17:30 승인됐는데 미게시인 EP 회수
+#   oauth-renew           — 매일 06:40 YouTube refresh token 만료 점검
 #   weekly-marketing      — 매주 월요일 09:00 마케팅 인텔리전스 fetch
-#   doctor-daily          — 매일 07:00 자동 진단 (silent failure 탐지)
+#   doctor-daily          — 매일 07:10 자동 진단 (silent failure 탐지)
+#   telegram-bot          — 상시 데몬 (거부창·/pause 수신)
 #
 # Examples:
 #   bash install-cron.sh install us-close "06:00"
 #   bash install-cron.sh install kr-close "Mon-Fri 16:00"
-#   bash install-cron.sh install realestate "Thu 17:00"
+#   bash install-cron.sh install realestate "Fri 10:00"
 #   bash install-cron.sh install competitor-scan "05:20,15:20"
 #   bash install-cron.sh install growth "05:40,15:40"
 #   bash install-cron.sh install weekly-marketing "Mon 09:00"
-#   bash install-cron.sh install doctor-daily "07:00"
+#   bash install-cron.sh install doctor-daily "07:10"
+#   bash install-cron.sh install omnibus "Mon-Thu,Sat,Sun 10:00"
 #   bash install-cron.sh list
+#   bash install-cron.sh wake
 #   bash install-cron.sh uninstall us-close
 
 set -euo pipefail
+umask 077
 
 # BARROTUBE_HOME: self-contained barrotube 스킬 폴더 (모든 자산 위치)
 # 자동 감지: 본 스크립트 = .../barrotube/lib/install-cron.sh → BARROTUBE_HOME = .../barrotube/
@@ -63,6 +71,15 @@ weekday_index() {
   esac
 }
 
+valid_time() {
+  if (( 10#$1 > 23 || 10#$2 > 59 )); then
+    echo "❌ 시간 범위 오류 (00:00~23:59)" >&2
+    return 1
+  fi
+}
+
+xml_escape() { python3 -c 'import sys; from xml.sax.saxutils import escape; print(escape(sys.argv[1]))' "$1"; }
+
 cmd_install() {
   local routine="$1"
   local time_spec="${2:-}"
@@ -75,14 +92,14 @@ cmd_install() {
   local extra_args=""
   local daemon_mode=false
   case "$routine" in
-    us-close|kr-close|realestate)
+    us-close|kr-close|realestate|omnibus)
       # 정기 브리핑. 슬롯 정의는 config/routines.json.
-      #   realestate  Thu 17:00  주간 부동산 브리핑 (한국부동산원 주간지수 발표 뒤)
-      #     bash install-cron.sh install realestate "Thu 17:00"
+      #   realestate  Fri 10:00  주간 부동산 브리핑 (토요일 10:00 공개)
+      #     bash install-cron.sh install realestate "Fri 10:00"
       # 두 슬롯은 --slot 인자가 달라 라벨을 나눠야 한다 (배열로 합칠 수 없다).
       #
       # 발행 빈도 — 평일 2편 / 주말 1편:
-      #   us-close  매일 06:00   토=금요일 미국장 마감, 일=sunday_preopen
+      #   us-close  매일 06:00   토=금요일 미국장 마감, 일=한 주 결산, 월=이번 주 준비
       #   kr-close  Mon-Fri 16:00  토·일은 한국장이 없어 돌리지 않는다
       #     bash install-cron.sh install kr-close "Mon-Fri 16:00"
       script_path="${BARROTUBE_HOME}/lib/auto-pipeline.sh"
@@ -98,6 +115,12 @@ cmd_install() {
     weekly-marketing)
       script_path="${BARROSKILLS_HOME}/scripts/automation/marketing-fetch-local.js"
       extra_args="--source rss"
+      ;;
+    market-map)
+      # 마켓맵 이미지(미국·코스피·테마) 생성 + 텔레그램 발송. LLM 0회, API 무과금.
+      #   bash install-cron.sh install market-map "15:50"
+      script_path="${BARROTUBE_HOME}/lib/market-map-cron.sh"
+      extra_args=""
       ;;
     competitor-scan)
       # 경쟁 인텔 수집→분석→핸드오프.
@@ -138,22 +161,23 @@ cmd_install() {
       ;;
     *)
       echo "❌ 알 수 없는 routine: $routine" >&2
-      echo "사용 가능: us-close | kr-close | realestate | competitor-scan | growth | weekly-marketing | doctor-daily | telegram-bot | publish-resume"
+      echo "사용 가능: us-close | kr-close | omnibus | realestate | market-map | competitor-scan | growth | weekly-marketing | doctor-daily | telegram-bot | publish-resume"
       exit 1
       ;;
   esac
 
   # ProgramArguments 명령어가 doctor-daily의 경우 bash 셸 스크립트라 다른 처리
   local prog_args_xml
+  [ -f "$script_path" ] || { echo "❌ script missing: $script_path" >&2; return 1; }
   if [[ "$script_path" == *.sh ]]; then
     prog_args_xml="    <string>/bin/bash</string>
-    <string>${script_path}</string>"
+    <string>$(xml_escape "$script_path")</string>"
   else
     # node 스크립트는 run-node.sh 로 감싼다 — node 경로 해석을 실행 시점으로 미뤄
     # nvm 버전이 올라가도 plist 재설치 없이 계속 돌게 한다.
     prog_args_xml="    <string>/bin/bash</string>
-    <string>${BARROTUBE_HOME}/lib/run-node.sh</string>
-    <string>${script_path}</string>"
+    <string>$(xml_escape "$BARROTUBE_HOME")/lib/run-node.sh</string>
+    <string>$(xml_escape "$script_path")</string>"
   fi
   for arg in $extra_args; do
     prog_args_xml="${prog_args_xml}
@@ -176,11 +200,52 @@ cmd_install() {
     # 라벨을 나눌 필요가 없다. 인자가 다른 us-close/kr-close 는 여전히 분리해야 한다.
     local hour minute weekday_xml=""
 
+    # "Mon-Thu,Sat,Sun HH:MM" → 쉼표로 이은 요일/범위 목록.
+    # 2026-09-16 추가: 금요일 10:00 은 realestate 가 쓰므로 omnibus 는 그날을 빼야 한다.
+    # 범위만 지원하던 아래 분기로는 "특정 요일만 제외"를 표현할 수 없었다.
+    if [[ "$time_spec" =~ ^([A-Za-z,-]+),([A-Za-z,-]+)\ ([0-9]{1,2}):([0-9]{2})$ ]]; then
+      local daylist="${BASH_REMATCH[1]},${BASH_REMATCH[2]}"
+      local rh="${BASH_REMATCH[3]}" rm="${BASH_REMATCH[4]}"
+      valid_time "$rh" "$rm"
+      local entries="" tok fi ti d
+      local IFS=','
+      for tok in $daylist; do
+        if [[ "$tok" =~ ^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)-(Mon|Tue|Wed|Thu|Fri|Sat|Sun)$ ]]; then
+          fi="$(weekday_index "${BASH_REMATCH[1]}")"; ti="$(weekday_index "${BASH_REMATCH[2]}")"
+        elif [[ "$tok" =~ ^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)$ ]]; then
+          fi="$(weekday_index "$tok")"; ti="$fi"
+        else
+          echo "❌ 요일 표기 오류: $tok (예: 'Mon-Thu,Sat,Sun 10:00')" >&2; exit 1
+        fi
+        if (( fi > ti )); then echo "❌ 요일 범위 오류: $tok" >&2; exit 1; fi
+        for (( d = fi; d <= ti; d++ )); do
+          entries="${entries}
+    <dict>
+      <key>Weekday</key>
+      <integer>${d}</integer>
+      <key>Hour</key>
+      <integer>${rh}</integer>
+      <key>Minute</key>
+      <integer>${rm}</integer>
+    </dict>"
+        done
+      done
+      unset IFS
+      # 범위 분기와 같은 방식으로 끝낸다 — schedule_xml 을 채우고 __multi__ 로 표시하지 않으면
+      # 아래 분기들로 흘러내려 "시간 형식 오류" 로 죽는다 (2026-09-16 실측).
+      schedule_xml="<key>StartCalendarInterval</key>
+  <array>${entries}
+  </array>"
+      run_at_load="false"
+      keep_alive=""
+      time_spec="__multi__"
+
     # "Mon-Fri HH:MM" → 요일별 dict 배열로 펼친다.
     # 주말에 돌 이유가 없는 루틴(kr-close 등)을 평일로 제한할 때 쓴다.
-    if [[ "$time_spec" =~ ^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)-(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\ ([0-9]{1,2}):([0-9]{2})$ ]]; then
+    elif [[ "$time_spec" =~ ^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)-(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\ ([0-9]{1,2}):([0-9]{2})$ ]]; then
       local from="${BASH_REMATCH[1]}" to="${BASH_REMATCH[2]}"
       local rh="${BASH_REMATCH[3]}" rm="${BASH_REMATCH[4]}"
+      valid_time "$rh" "$rm"
       # macOS 기본 bash 는 3.2 라 연관 배열(declare -A)을 못 쓴다 — case 로 매핑한다.
       local fi ti
       fi="$(weekday_index "$from")"
@@ -209,7 +274,9 @@ cmd_install() {
       time_spec="__multi__"
     fi
 
-    if [[ "$time_spec" == *,* ]]; then
+    # 콤마가 요일 목록("Mon-Thu,Sat,Sun 10:00")일 수도 있다 — 그건 위 분기가 이미 처리했다.
+    # 여기서는 순수 다중 시각("05:20,15:20")만 본다. 공백이 있으면 요일 표기다.
+    if [[ "$time_spec" == *,* && "$time_spec" != *" "* ]]; then
       local entries="" spec
       IFS=',' read -ra _times <<< "$time_spec"
       for spec in "${_times[@]}"; do
@@ -218,6 +285,7 @@ cmd_install() {
           echo "❌ 시간 형식 오류: '$spec' (다중 시각은 'HH:MM,HH:MM' 형식만 지원)" >&2
           exit 1
         fi
+        valid_time "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
         entries="${entries}
     <dict>
       <key>Hour</key>
@@ -258,6 +326,7 @@ cmd_install() {
       exit 1
     fi
     if [[ "$time_spec" != "__multi__" ]]; then
+      valid_time "$hour" "$minute"
       schedule_xml="<key>StartCalendarInterval</key>
   <dict>
     <key>Hour</key>
@@ -286,17 +355,19 @@ cmd_install() {
 ${prog_args_xml}
   </array>
   <key>WorkingDirectory</key>
-  <string>${BARROSKILLS_HOME}</string>
+  <string>$(xml_escape "$BARROSKILLS_HOME")</string>
+  <key>Umask</key>
+  <integer>63</integer>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PAPERCLIP_DISABLED</key>
     <string>1</string>
     <key>BARROTUBE_HOME</key>
-    <string>${BARROTUBE_HOME}</string>
+    <string>$(xml_escape "$BARROTUBE_HOME")</string>
     <key>HOME</key>
-    <string>${HOME}</string>
+    <string>$(xml_escape "$HOME")</string>
     <key>PATH</key>
-    <string>${CRON_PATH}</string>
+    <string>$(xml_escape "$CRON_PATH")</string>
     <key>TZ</key>
     <string>Asia/Seoul</string>
   </dict>
@@ -305,12 +376,15 @@ ${prog_args_xml}
   <${run_at_load}/>
   ${keep_alive}
   <key>StandardOutPath</key>
-  <string>${BARROSKILLS_HOME}/logs/cron/${routine}.log</string>
+  <string>$(xml_escape "$BARROSKILLS_HOME")/logs/cron/${routine}.log</string>
   <key>StandardErrorPath</key>
-  <string>${BARROSKILLS_HOME}/logs/cron/${routine}.err</string>
+  <string>$(xml_escape "$BARROSKILLS_HOME")/logs/cron/${routine}.err</string>
 </dict>
 </plist>
 EOF
+
+  chmod 600 "$plist"
+  plutil -lint "$plist" >/dev/null
 
   # launchctl 로드 — DRY_RUN=1 이면 plist 만 만들고 실제로 켜지는 않는다.
   # (cron 을 켜는 것은 되돌리기 번거로운 외부 동작이라 검증과 분리한다.)
@@ -332,6 +406,7 @@ EOF
 
 cmd_uninstall() {
   local routine="$1"
+  [[ "$routine" =~ ^[a-z][a-z0-9-]*$ ]] || { echo "Invalid routine" >&2; return 1; }
   local label="${LABEL_PREFIX}.${routine}"
   local plist="${LAUNCH_AGENTS_DIR}/${label}.plist"
 
@@ -345,6 +420,63 @@ cmd_uninstall() {
   echo "✅ Uninstalled: $label"
 }
 
+# ─────────────────────────────────────────────────
+# wake — 기상 예약 상태 점검 + 설정 명령 안내
+#
+# 이 기계는 서버가 아니라 노트북이다. launchd 는 **잠든 기계를 깨우지 않는다** —
+# 예약 시각이 수면 중이면 그 회차는 깨어난 뒤에야 만회 실행된다. auto-pipeline 의
+# caffeinate 는 이미 깨어 있을 때 잠드는 것만 막지, 잠든 기계를 깨우지는 못한다.
+#
+# pmset 예약은 root 가 필요해 무인으로 걸 수 없다. 그래서 여기서는 상태를 보여 주고
+# 운영자가 한 번 실행할 명령을 그대로 찍는다 — 코드가 sudo 를 시도하면 크론에서
+# 암호 프롬프트에 걸려 멈춘다.
+# ─────────────────────────────────────────────────
+cmd_wake() {
+  echo "=== 현재 기상 예약 (pmset -g sched) ==="
+  local sched
+  sched="$(pmset -g sched 2>/dev/null)"
+  if printf '%s' "$sched" | grep -qiE 'wake|poweron'; then
+    printf '%s\n' "$sched"
+    echo ""
+    echo "✅ 기상 예약이 걸려 있습니다."
+  else
+    echo "(없음)"
+    echo ""
+    echo "⚠️  기상 예약이 없습니다 — 잠든 시각의 회차는 깨어난 뒤에야 만회됩니다."
+  fi
+
+  echo ""
+  echo "=== 설정하려면 (운영자가 1회, root 필요) ==="
+  local first
+  first="$(python3 - "$BARROTUBE_HOME/config/routines.json" <<'PY_WAKE'
+import json, re, sys
+try:
+    slots = json.load(open(sys.argv[1]))['slots']
+except Exception:
+    print('')
+    sys.exit(0)
+times = set()
+for slot in slots.values():
+    m = re.search(r'(\d{1,2}):(\d{2})', str(slot.get('cron', '')))
+    if m:
+        times.add('%02d:%s' % (int(m.group(1)), m.group(2)))
+print(sorted(times)[0] if times else '')
+PY_WAKE
+)"
+  [ -n "$first" ] || first="06:00"
+  # 슬롯 시각보다 5분 먼저 깨운다 — 디스크·네트워크가 올라올 여유.
+  local wake_at
+  wake_at="$(python3 -c "
+import datetime, sys
+h, m = sys.argv[1].split(':')
+t = (datetime.datetime(2000, 1, 1, int(h), int(m)) - datetime.timedelta(minutes=5)).time()
+print(t.strftime('%H:%M:00'))" "$first")"
+  echo "  sudo pmset repeat wakeorpoweron MTWRFSU ${wake_at}"
+  echo ""
+  echo "  (가장 이른 슬롯 ${first} 의 5분 전. 해제는 sudo pmset repeat cancel)"
+  echo "  ⚠️ 뚜껑을 닫으면(클램셸) 외장 전원·디스플레이 없이는 깨어나지 않습니다."
+}
+
 cmd_list() {
   echo "=== BarroSkills cron 데몬 목록 ==="
   local found=0
@@ -356,7 +488,7 @@ cmd_list() {
     echo ""
     echo "▸ $label"
     echo "   plist: $plist"
-    launchctl print "gui/$(id -u)/${label}" 2>/dev/null | grep -E "state|last exit|runs|program " | head -5 | sed 's/^/   /'
+    launchctl print "gui/$(id -u)/${label}" 2>/dev/null | grep -E "state|last exit|runs|program " | head -5 | sed 's/^/   /' || true
   done
   if [ $found -eq 0 ]; then
     echo "(설치된 cron 없음 — on-demand 모드)"
@@ -384,6 +516,9 @@ case "${1:-}" in
   list)
     cmd_list
     ;;
+  wake)
+    cmd_wake
+    ;;
   *)
     cat <<EOF
 BarroSkills cron·daemon 관리 스크립트
@@ -393,6 +528,7 @@ Usage:
   bash install-cron.sh install telegram-bot          # daemon 모드 (시간 불필요)
   bash install-cron.sh uninstall <routine>
   bash install-cron.sh list
+  bash install-cron.sh wake                          # 기상 예약 점검 + 설정 명령 안내
 
 Routines (cron — 정기 실행):
   us-close              미국 증시 마감 브리핑 전체 파이프라인 (예: "06:00")

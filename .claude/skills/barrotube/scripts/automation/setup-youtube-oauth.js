@@ -39,7 +39,14 @@ const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 // 'youtube' = 채널 전체 read/write (업로드 + 썸네일 + 재생목록 + 댓글 등)
 // 'youtube.upload' 단독으로는 playlists.insert 불가 → 'youtube' 확장 필요
-const SCOPE = 'https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/youtube.upload';
+// yt-analytics.readonly 는 노출수·CTR·시청지속률·트래픽소스를 준다 — 조회가 왜 줄었는지를
+// 가르는 유일한 출처다. 이게 없으면 growth 루프가 매 회차 'Analytics API: 스코프 없음' 으로
+// 건너뛰고, KPI 는 '언제 얼마나' 까지만 말할 수 있다 (2026-09-10).
+const SCOPE = [
+  'https://www.googleapis.com/auth/youtube',
+  'https://www.googleapis.com/auth/youtube.upload',
+  'https://www.googleapis.com/auth/yt-analytics.readonly',
+].join(' ');
 
 function findFreePort() {
   return new Promise((resolve) => {
@@ -55,6 +62,13 @@ async function waitForAuthCode(port) {
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
       const url = new URL(req.url, `http://127.0.0.1:${port}`);
+      // 브라우저가 콜백 직후 /favicon.ico 를 함께 요청한다. 그 요청까지 아래 분기를
+      // 타면 서버가 먼저 닫히거나 엉뚱한 응답이 나간다 — 콜백 경로만 처리한다.
+      if (url.pathname !== '/' && url.pathname !== '') {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
       const code = url.searchParams.get('code');
       const error = url.searchParams.get('error');
 
@@ -103,7 +117,40 @@ async function exchangeCodeForToken(code, clientId, clientSecret, redirectUri) {
   });
 
   if (!res.ok) {
-    throw new Error(`Token exchange failed: ${res.status} ${await res.text()}`);
+    const raw = await res.text();
+    let g = {};
+    try { g = JSON.parse(raw); } catch { /* HTML 오류면 원문만 보여 준다 */ }
+
+    // Google 이 돌려주는 error 코드마다 손볼 곳이 완전히 다르다. 예전에는 400 과
+    // 원문만 던져서 운영자가 무엇을 고쳐야 할지 알 수 없었다 (2026-09-24).
+    const HINT = {
+      invalid_grant:
+        '인가 코드가 이미 쓰였거나 만료됐습니다. 코드는 1회용이고 수명이 짧습니다.\n'
+        + '   → 브라우저 탭을 모두 닫고 스크립트를 처음부터 다시 실행하세요.\n'
+        + '   → 동의 화면에서 오래 머물렀다면 그것만으로도 만료됩니다.',
+      redirect_uri_mismatch:
+        'redirect_uri 가 클라이언트 등록값과 다릅니다.\n'
+        + '   → OAuth 클라이언트 유형이 "Desktop app" 인지 확인하세요. "Web application"\n'
+        + '     이면 loopback(127.0.0.1:임의포트)을 거부합니다. Desktop app 으로 새로 만드세요.',
+      invalid_client:
+        'client_id / client_secret 이 맞지 않습니다.\n'
+        + '   → .env 의 YOUTUBE_OAUTH_CLIENT_ID·SECRET 이 같은 클라이언트의 값인지,\n'
+        + '     앞뒤 공백이나 줄바꿈이 섞이지 않았는지 확인하세요.',
+      invalid_request:
+        '요청 형식이 거부됐습니다. 스코프가 동의 화면에 등록돼 있는지 확인하세요.\n'
+        + `   요청 스코프: ${SCOPE}`,
+      unauthorized_client:
+        '이 클라이언트에 authorization_code 그랜트가 허용돼 있지 않습니다.\n'
+        + '   → 클라이언트 유형을 Desktop app 으로 다시 만드세요.',
+    };
+
+    const code = g.error || '(코드 없음)';
+    console.error(`\n❌ 토큰 교환 실패 — HTTP ${res.status}`);
+    console.error(`   error: ${code}`);
+    if (g.error_description) console.error(`   설명 : ${g.error_description}`);
+    if (HINT[code]) console.error(`\n   ${HINT[code]}`);
+    if (!g.error) console.error(`   원문 : ${raw.slice(0, 400)}`);
+    throw new Error(`Token exchange failed: ${res.status} ${code}`);
   }
   return res.json();
 }

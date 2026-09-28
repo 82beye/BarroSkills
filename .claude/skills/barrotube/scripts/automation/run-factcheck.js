@@ -30,7 +30,7 @@
  * 판정 근거는 lib/evidence-verify.js 헤더 참조.
  */
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
@@ -75,10 +75,22 @@ RULES:
 7. If a claim cannot be verified via search, mark HIGH with risk_reason="unverifiable".
 8. Bind every market claim to the exact date and traded_at in the attached pipeline research. Never substitute the previous trading day's close.
 9. Treat pipeline snapshots as primary dated evidence, then corroborate them by searching the exact YYYY-MM-DD plus the quoted value. If search results conflict, explain the date mismatch instead of silently choosing another session.
-9a. SAME INSTRUMENT, SAME DAY, DIFFERENT TIMESTAMPS — decide by this order, do not re-decide per run:
-    (a) the official session close (KRX 15:30 for KOSPI/KOSDAQ/FX, US 16:00 ET for US indices) is canonical for a close-briefing episode;
+9a. SAME INSTRUMENT, SAME DAY, DIFFERENT TIMESTAMPS — decide by this order, do not re-decide per run.
+    FIRST fix which session the episode covers, from the slot and the attached research date:
+      * us-close  = the overnight US session that ended this morning KST. Its reference is the pipeline
+        snapshot taken after the US close (typically 05:00-06:00 KST today), NOT yesterday's KRX 15:30 close.
+      * kr-close   = today's domestic session. Its reference is the KRX 15:30 close.
+    A close from a DIFFERENT day or a DIFFERENT session is not evidence against the script — it is a
+    different measurement. Check the article's own date before using it to contradict a number.
+    Within the session the episode covers:
+    (a) the official close of THAT session is canonical;
     (b) an intraday or post-close snapshot is NOT a substitute for the close — it may only be cited as an intraday high/low, and only if labelled as such.
     When the pipeline snapshot and same-day market-wrap reporting disagree on a close value, cite the official close and require the script to state the basis (예: "15:30 종가 기준"). Never flip between the two across runs; name the basis explicitly in "evidence".
+9c. A number that matches the attached pipeline snapshot is NOT 부정확 just because search did not confirm it.
+    Absence of confirmation is 미확인 (LOW/MED), never 부정확. Rate it 부정확 only when a source CONTRADICTS it
+    for the same instrument, the same session, and the same measure (close vs intraday high vs open) — and name
+    which of those three differs. Rewrites are budgeted (3 per episode); a false 부정확 makes the reviser replace
+    a correct number with a wrong one and burns the budget the real defects needed.
 9b. CAUSATION MUST BE DATED. A cause that happened on an earlier date cannot be presented as the same-day trigger. When a script attributes a same-day move, search that day's market-wrap articles and check which trigger they name. If the script's cause predates the move, verdict=부정확 and the suggested_revision must use the trigger the same-day reporting identifies.
 10. EVERY URL you put in "evidence" is fetched and checked by the pipeline after you answer. A URL that returns 404 or whose domain does not resolve is treated as a fabricated citation and escalates that claim to HIGH. Only cite a URL you actually retrieved from search results — never reconstruct or guess one from a pattern. Cite the specific document, not a section or homepage.
 
@@ -242,6 +254,45 @@ async function callGeminiWithGroundingEnforced(userPrompt, model) {
   return { ...second, attempts: 2, retried: true, retried_grounded: second.grounded };
 }
 
+/**
+ * 모델이 한글을 \u 이스케이프로 뱉다가 흘리는 오타를 고친다.
+ *
+ * 2026-09-14 EP-2026-0154: "6억\uub2ec\ub7ec" — 달러(\ub2ec\ub7ec)를 쓰면서 u 가 하나
+ * 더 붙었다. JSON.parse 는 여기서 죽고, run-factcheck 는 그대로 종료했다. 그 결과
+ * 35_factcheck.md 가 **직전 판(script_revision 4)으로 남았고**, 손으로 고친 대본
+ * (revision 5)이 옛 리포트로 심사받을 뻔했다. 한 글자 오타로 회차 하나가 멈춘다.
+ */
+function repairJSONEscapes(raw) {
+  return raw
+    // \uu ub2ec → \ub2ec (u 중복)
+    .replace(/\\u{2,}(?=[0-9a-fA-F]{4})/g, '\\u')
+    // 그래도 4자리 hex 가 아니면 이스케이프가 아니다 — 리터럴로 낮춰 파싱은 살린다
+    .replace(/\\u(?![0-9a-fA-F]{4})/g, '\\\\u');
+}
+
+/**
+ * 파싱 실패 시 같은 엔진으로 몇 번까지 다시 부를지. 1 은 재시도 없음.
+ * 2 인 이유: 2026-09-23 실측에서 한 번 더 부르니 통과했고, 세 번째까지 끌면
+ * 팩트체크가 회차 예산을 먹는다.
+ */
+const PARSE_ATTEMPTS = Number(process.env.BT_FACTCHECK_PARSE_ATTEMPTS || 2);
+
+/**
+ * 깨진 응답을 통째로 파일에 남긴다.
+ *
+ * 로그에는 1000자만 찍혔는데 정작 문제는 3106번째 문자였다 — 사후에 원인을 볼 수 없었다.
+ * 다음 번에는 파일을 열면 된다.
+ */
+function dumpRawOutput(episodeId, engine, attempt, err) {
+  try {
+    const dir = resolve(import.meta.dirname, '..', '..', 'logs', 'factcheck-raw');
+    mkdirSync(dir, { recursive: true });
+    const f = join(dir, `${episodeId}-${engine}-${attempt}-${Date.now()}.txt`);
+    writeFileSync(f, `// ${err.message}\n\n${err.rawText ?? ''}`);
+    console.error(`   📄 깨진 응답 전문: ${f}`);
+  } catch { /* 진단용이라 실패해도 본류를 막지 않는다 */ }
+}
+
 function extractJSON(text) {
   const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   const candidate = (fence ? fence[1] : text).trim();
@@ -250,7 +301,18 @@ function extractJSON(text) {
   if (first === -1 || last === -1 || last <= first) {
     throw new Error(`Unable to locate JSON object in model output:\n${text.slice(0, 500)}`);
   }
-  return JSON.parse(candidate.slice(first, last + 1));
+  const body = candidate.slice(first, last + 1);
+  try { return JSON.parse(body); }
+  catch (e) {
+    const repaired = repairJSONEscapes(body);
+    // 덤프가 원문을 볼 수 있게 에러에 실어 보낸다.
+    if (repaired === body) { e.rawText = text; throw e; }
+    let out;
+    try { out = JSON.parse(repaired); }
+    catch (e2) { e2.rawText = text; throw e2; }
+    console.error('   ⚠ JSON 이스케이프 오타를 고쳐서 파싱했다 (\\u 중복)');
+    return out;
+  }
 }
 
 function classify(claims) {
@@ -486,20 +548,45 @@ async function main() {
   };
 
   let factcheckResp;
+  let result;
   const failures = [];
   for (const [i, name] of chain.entries()) {
-    try {
-      console.error(`🔍 Factcheck: ${episodeId} (engine=${name}${i > 0 ? `, 폴백 ${i}/${chain.length - 1}` : ''}, force_grounding=${FORCE_GROUNDING})`);
-      factcheckResp = await runEngine(name);
-      break;
-    } catch (e) {
-      failures.push(`${name}: ${String(e.message).slice(0, 120)}`);
-      if (i === chain.length - 1) {
-        console.error(`❌ 모든 엔진 실패:\n${failures.map((f) => `   - ${f}`).join('\n')}`);
-        throw e;
+    let lastErr = null;
+    // **파싱까지 성공해야 이 엔진이 성공한 것이다.**
+    //
+    // 예전에는 JSON 파싱이 이 루프 밖에 있었다. 모델이 깨진 JSON 을 한 번 뱉으면
+    // 폴백 엔진으로 넘어가지도, 다시 부르지도 못하고 그대로 exit(2) → 파이프라인이
+    // 회차 전체를 접었다. 2026-09-23 us-close(EP-2026-0175)가 그렇게 죽었다:
+    // "Expected double-quoted property name at position 3106". 같은 대본으로 다시
+    // 부르니 한 번에 통과했다 — 체계적 결함이 아니라 산발적 불량 응답이다.
+    for (let attempt = 1; attempt <= PARSE_ATTEMPTS; attempt += 1) {
+      try {
+        console.error(`🔍 Factcheck: ${episodeId} (engine=${name}${i > 0 ? `, 폴백 ${i}/${chain.length - 1}` : ''}${attempt > 1 ? `, 재시도 ${attempt - 1}/${PARSE_ATTEMPTS - 1}` : ''}, force_grounding=${FORCE_GROUNDING})`);
+        const resp = await runEngine(name);
+        result = extractJSON(resp.text);
+        factcheckResp = resp;
+        lastErr = null;
+        break;
+      } catch (e) {
+        lastErr = e;
+        if (/JSON|parse/i.test(String(e.message))) {
+          dumpRawOutput(episodeId, name, attempt, e);
+          if (attempt < PARSE_ATTEMPTS) {
+            console.error(`   ⚠ 응답 JSON 이 깨졌다 — 같은 엔진으로 다시 부른다 (${attempt}/${PARSE_ATTEMPTS - 1})`);
+            continue;
+          }
+        }
+        break;   // 파싱 외 실패이거나 재시도 소진 — 다음 엔진으로
       }
-      console.error(`   ⚠ ${failures.at(-1)} → 다음 엔진`);
     }
+    if (!lastErr) break;
+
+    failures.push(`${name}: ${String(lastErr.message).slice(0, 120)}`);
+    if (i === chain.length - 1) {
+      console.error(`❌ 모든 엔진 실패:\n${failures.map((f) => `   - ${f}`).join('\n')}`);
+      throw lastErr;
+    }
+    console.error(`   ⚠ ${failures.at(-1)} → 다음 엔진`);
   }
 
   const {
@@ -515,15 +602,7 @@ async function main() {
     groundedByQueries = false,
   } = factcheckResp;
 
-  let result;
-  try { result = extractJSON(text); }
-  catch (e) {
-    console.error(`❌ JSON parse failed: ${e.message}`);
-    console.error('--- raw output ---');
-    console.error(text.slice(0, 1000));
-    process.exit(2);
-  }
-
+  // 파싱은 엔진 루프 안에서 끝났다 (result 는 거기서 채워진다).
   if (!Array.isArray(result.claims)) {
     console.error(`❌ result.claims is not an array`);
     process.exit(2);

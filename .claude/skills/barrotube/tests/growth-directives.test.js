@@ -18,11 +18,25 @@ const ANALYSIS = {
 
 test('titleDirectives — positive 상위 2 + negative, 표본 10 미만 피처 제외', () => {
   const d = titleDirectives(ANALYSIS.patterns.title_features);
-  assert.equal(d.length, 3); // bracket, number, superlative (has_split 은 n_with=5 로 제외)
-  // 측정 regex 는 ^\[ (선두) — 처방도 '맨 앞'을 명시해야 한다 (리뷰 2026-08-31 오역 계열)
-  assert.ok(d[0].includes('맨 앞'));
   assert.ok(d.some((l) => l.includes('피하기') && l.includes('최상급')));
   assert.equal(titleDirectives(undefined).length, 0);
+});
+
+/**
+ * has_bracket 은 경쟁 채널 **조회** lift 로는 상위지만 처방하지 않는다.
+ * 2026-09-16 우리 채널 **구독** 실측(2026-08-25~09-16, 26편): 대괄호가 붙은 19편은
+ * 구독/1k뷰 0.77, 안 붙은 7편은 2.41. 태그가 제목 앞 8자를 먹으면서 '왜'를 말할 자리가
+ * 사라졌고(story 동반율 86%→16%) 주간 순증 구독이 11→2 가 됐다.
+ * 북극성이 weekly_net_subs 이므로 조회 처방과 충돌하면 구독 쪽을 따른다.
+ */
+test('titleDirectives — 대괄호는 경쟁 lift 가 높아도 쓰기 처방하지 않는다', () => {
+  const d = titleDirectives([
+    { feature: 'has_bracket', n_with: 120, n_without: 222, lift: 3.46, direction: 'positive' },
+    { feature: 'has_number', n_with: 177, n_without: 165, lift: 1.86, direction: 'positive' },
+  ]);
+  assert.equal(d.some((l) => l.includes('쓰기') && l.includes('대괄호')), false,
+    '대괄호를 쓰라고 처방하면 구독 전환이 무너진다');
+  assert.ok(d.some((l) => l.includes('쓰기') && l.includes('수치')), '다른 positive 는 그대로 나온다');
 });
 
 test('titleDirectives — has_split 문구는 측정 문자(콜론·파이프·슬래시)를 지목한다', () => {

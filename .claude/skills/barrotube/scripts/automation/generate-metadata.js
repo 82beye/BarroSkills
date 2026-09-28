@@ -23,6 +23,10 @@ import {
 } from './lib/public-figures.js';
 import { recordCost } from './lib/cost-tracker.js';
 import { callClaudeCode, callCodex, resolveChain, runEngineChain } from './lib/text-engine.js';
+import { findHeadlineCollision, recentTitles, selectTitle } from './lib/title-select.js';
+import { classifyTitle, TYPE_LABEL } from './lib/title-types.js';
+
+export { headlineNumberTokens, findHeadlineCollision } from './lib/title-select.js';
 
 // 스킬 루트 기준 경로. resolve('config/…') 는 CWD 의존이라
 // launchd 처럼 CWD 가 다른 실행 환경에서 조용히 깨진다.
@@ -46,8 +50,22 @@ function buildSystemPrompt(format, seriesInfo, publicFiguresInfo = null) {
   // 시리즈 표시명: seriesInfo.series_name (series.json에서 동적 로드) 또는 series_id 자체.
   // 이전 코드는 sp500을 hardcode해서 다른 시리즈에도 sp500 라벨이 박혔음 — 이를 동적으로 교체.
   const seriesName = seriesInfo?.series_name || seriesInfo?.series_id || '';
+  // 제목이 무엇을 말해야 하는지는 config/growth.json 의 content_policy 가 정본이다.
+  // 2026-09-16 영상별 구독 실측: '왜·역설·숨은 원인' 구조가 있으면 구독/1k뷰 2.12,
+  // 없으면 0.63 (26편). 조회는 수치 나열로도 받지만 구독은 안 따라온다 —
+  // 최근 8편 중 7편이 수치 나열이었고 그 8편의 순증 구독 합이 1 이었다.
+  // 북극성이 weekly_net_subs 이므로 이 규칙이 경쟁 채널 조회 lift 보다 위다.
+  const cp = loadContentPolicy();
+  const th = cp?.index_move_thresholds ?? {};
+  const causalRule = cp?.title_requires_causal_clause
+    ? ` · 제목은 반드시 "왜"를 말한다 — 통념과 어긋난 것/반대로 움직인 것/숨은 원인 중 하나를 제목 안에서 주장하라`
+      + ` (예: "…인데도 …", "…는 왜 …?", "금리 아니라 …", "…한 이유")`
+      + ` · **일상 등락률**(오늘 X% 올랐다/내렸다)을 제목의 주어로 쓰지 마라 — 지수 ${th.index_pct}%·환율 ${th.fx_pct}%·원자재 ${th.commodity_pct}%·금리 ${th.rate_bp}bp·개별종목 ${th.single_name_pct}% 미만은 뉴스가 아니다`
+      + ` · 단, 레벨 돌파(금리 5%·유가 100달러·환율 1,400원 같은 라운드 넘버 돌파/붕괴)·N년래 최고최저·기간 누적 급등·연속기록은 등락폭과 무관하게 **반드시 제목의 메인**이다. 여럿이면 레벨돌파 > N년래최고 > 기간누적 > 연속기록 순`
+      + ` · 시황 라벨([美마감]·[속보] 등)로 시작하지 마라 — 그 자리에 "왜"가 들어가야 한다`
+    : '';
   const titleHint = isShorts
-    ? "100자 이내, primary keyword 앞 30자에, '#Shorts' 포함 권장"
+    ? `100자 이내, primary keyword 앞 30자에, '#Shorts' 포함 권장${causalRule}`
     : `70자 이내, primary keyword 앞 30자, 시리즈 번호 포함 예: '[${seriesName} ${seriesInfo?.series_episode || 1}/${seriesInfo?.series_total || 5}]', #Shorts 사용 금지`;
   const shortsTagValue = isShorts ? 'true' : 'false';
   const brandHashtags = isShorts ? '#BarroTube, #60초경제' : '#BarroTube, #3분경제, #경제수업';
@@ -72,6 +90,7 @@ OUTPUT: Single JSON only. No markdown, no code fences.
 SCHEMA:
 {
   "title": "${titleHint}",
+  "title_candidates": [{"type": "company|account|question|contrast|causal", "title": "title 규칙을 지킨 후보"}],
   "summary": "150자 이내 한 줄 요약",
   "description": "${isShorts ? '첫 100자에 secondary keywords, 말미에 해시태그' : '첫 100자에 시리즈 컨텍스트 + primary keyword, 중간에 본편 핵심 3가지, 다음 편 예고, 말미에 해시태그'}",
   "tags": ["18~25개, 합산 500자 이내, primary + secondary + related"],
@@ -85,6 +104,19 @@ SCHEMA:
     "reels": {"caption": "2200자 이내", "hashtags": ["#...", "..."]}
   }
 }
+
+TITLE CANDIDATES (필수):
+- title_candidates 에 **서로 다른 유형**의 후보 5개를 쓴다. 유형마다 하나씩:
+  · company  — 움직임을 만든 종목·기업을 앞에 세운다 (종목이 이 회차의 핵심일 때만. 아니면 다른 유형을 하나 더)
+  · account  — 시청자의 계좌·내 돈에 닿는 각도 ("지수는 올랐는데 내 계좌는 …")
+  · question — "왜 …?" / "어떻게 …?" 로 끝나는 물음. 답은 영상이 준다
+  · contrast — 반대로 움직인 것을 세운다 ("A는 올랐는데 B는 내렸다")
+  · causal   — 원인을 주장한다 ("…한 이유", "… 때문")
+- 다섯 개 모두 위 title 규칙을 지킨다. 기록·레벨 돌파는 후보의 **재료**로 쓰되 그것만으로 제목을 세우지 마라
+  (기록만 앞세운 제목은 채널 조회 중앙값 275 로 가장 약했다).
+- "진짜 이유" 틀은 [최근 제목]에 이미 있으면 쓰지 마라. 없을 때도 다섯 개 중 최대 하나.
+- [최근 제목]이 쓴 수치(%·달러·원·bp)를 다시 쓰지 말고, 바로 앞 제목과 같은 유형으로 열지 마라.
+- title 에는 다섯 개 중 네가 가장 강하다고 보는 것을 그대로 옮긴다. 최종 선택은 코드가 규칙·최근 제목과의 겹침을 보고 한다.
 
 RULES:
 - 클릭베이트/과장 금지
@@ -140,13 +172,104 @@ async function callGemini(systemPrompt, userPrompt, model = DEFAULT_MODEL, maxTo
   return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
 }
 
+/**
+ * 목표 공개 시각이 지났다면, 얼마나 지났는지(시간). 아직 안 지났으면 null.
+ *
+ * 이 기계는 노트북이라 예약 시각을 놓치는 일이 구조적으로 생긴다 — 일과 중(08~18시)
+ * 잠들어 있다가 늦게 깨면 10:00 목표가 13:00 에 도달한다. 그때 선택지는 둘뿐이다:
+ *   (a) private 로 남긴다 → 아무도 안 보는 사이 영영 묻힌다 (텔레그램도 죽어 있다)
+ *   (b) 즉시 공개한다     → 늦었지만 나간다
+ * 뉴스 채널이므로 조금 늦은 건 (b)가 맞고, 너무 늦으면 내용이 죽었으니 (a)가 맞다.
+ * 경계는 config/routines.json 의 guards.publish_late_grace_hours.
+ */
+function hoursLate(input, now) {
+  const s = String(input ?? '').trim();
+  let target = null;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) target = new Date(s);
+  else {
+    const m = s.match(/^(?:\+(\d)d\s+)?(\d{1,2}):(\d{2})$/);
+    if (!m) return null;
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(now);
+    const day = m[1]
+      ? new Date(Date.parse(`${today}T00:00:00Z`) + Number(m[1]) * 86400_000).toISOString().slice(0, 10)
+      : today;
+    target = new Date(`${day}T${m[2].padStart(2, '0')}:${m[3]}:00+09:00`);
+  }
+  if (!target || Number.isNaN(target.getTime())) return null;
+  const late = (now.getTime() - target.getTime()) / 3600_000;
+  return late > 0 ? late : null;
+}
+
+/** config/growth.json 의 content_policy. 없으면 null — 규칙 없이 기존 동작. */
+function loadContentPolicy() {
+  try {
+    const p = join(resolve(import.meta.dirname, '../..'), 'config', 'growth.json');
+    if (!existsSync(p)) return null;
+    return JSON.parse(readFileSync(p, 'utf-8')).content_policy ?? null;
+  } catch { return null; }
+}
+
+/** 늦은 게시를 즉시 내보낼 유예 시간(h). 기본 6 — 반나절 넘으면 뉴스가 죽는다. */
+function loadLateGraceHours() {
+  try {
+    const p = join(resolve(import.meta.dirname, '../..'), 'config', 'routines.json');
+    const v = JSON.parse(readFileSync(p, 'utf-8'))?.guards?.publish_late_grace_hours;
+    return Number.isFinite(v) && v >= 0 ? v : 6;
+  } catch { return 6; }
+}
+
+/**
+ * 목표 공개 시각 하나로부터 **업로드 상태 전체**를 정한다 — publishAt 과 privacyStatus 를
+ * 한 자리에서 같이 내놓는 것이 핵심이다.
+ *
+ * 예전에는 이 둘이 떨어져 있었다: 예약이 불가능하면 publishAt 만 null 로 지우고,
+ * privacyStatus 는 위쪽에서 잡아 둔 'private' 가 그대로 남았다. 그래서 "유예 이내 →
+ * 즉시 공개" 분기가 로그로는 공개한다고 말하면서 실제로는 비공개 업로드를 했다.
+ * 2026-09-16~20 에 EP-0157·0161·0165·0166·0167 다섯 편이 그렇게 조회 0 으로 묻혔다.
+ *
+ *   예약 가능      → publishAt 설정, private (유튜브가 예약 공개를 그렇게 요구한다)
+ *   유예 이내 지각 → publishAt 없음, **public** (늦었지만 내보낸다)
+ *   유예 초과 지각 → publishAt 없음, private (내용이 죽었다 — 사람이 판단)
+ *   형식 불명      → 아무것도 바꾸지 않는다
+ */
+export function resolvePublishPlan(publishAtArg, now = new Date(), graceHours = null) {
+  const grace = graceHours ?? loadLateGraceHours();
+  const publishAt = resolvePublishAt(publishAtArg, now);
+  if (publishAt) {
+    return { publishAt, privacyStatus: 'private', publish_late: null, action: 'scheduled' };
+  }
+  const late = hoursLate(publishAtArg, now);
+  if (late === null) {
+    return { publishAt: null, privacyStatus: null, publish_late: null, action: 'unparsed' };
+  }
+  const action = late <= grace ? 'publish_now' : 'hold_private';
+  return {
+    publishAt: null,
+    privacyStatus: action === 'publish_now' ? 'public' : 'private',
+    publish_late: { target: String(publishAtArg), hours_late: Number(late.toFixed(2)), action },
+    action,
+    hours_late: late,
+    grace,
+  };
+}
+
 function parseFrontmatter(md) {
   const m = md.match(/^---\n([\s\S]*?)\n---/);
   return m ? parseYAML(m[1]) : null;
 }
 
 /**
- * "HH:MM" (KST) → "YYYY-MM-DDTHH:MM:00+09:00". 완전한 ISO8601 이면 그대로 통과.
+ * "HH:MM" 또는 "+Nd HH:MM" (KST) → "YYYY-MM-DDTHH:MM:00+09:00". 완전한 ISO8601 이면 그대로 통과.
+ *
+ * "+Nd" 는 **만든 날과 공개하는 날을 떼어 놓기 위한** 것이다. 2026-09-14 실측(채널
+ * Analytics 09-01~09-11): 하루에 2편을 올린 날 채널 총 조회 중앙값 1249(n=5), 3편을 올린
+ * 날 1239(n=3) — 셋째 편은 도달을 **넓히지 않고 같은 파이를 나눈다**(편당 625 → 413).
+ * 그런데 금요일만 us-close·realestate·kr-close 가 겹쳐 3편이고 토·일은 1편씩이라, 주 13편
+ * 중 한 편이 구조적으로 낭비되고 있었다. realestate 를 토요일 공개로 미루면 같은 13편으로
+ * 주간 도달이 +3.7~10.7% 늘어난다(제작 추가 0).
+ * 크론 자체를 토요일로 옮기지 않는 이유 — 한국부동산원 주간지수가 목요일 발표라 금요일
+ * 생성이 가장 신선하고, 금 10:00 은 kr-close(16:00) 와 겹치지 않도록 2026-09-10 에 고른
+ * 자리다. 생성은 그대로 두고 공개만 미루는 편이 두 제약을 다 지킨다.
  *
  * 달력일은 실행 머신 TZ 가 아니라 Asia/Seoul 기준으로 잡는다 — launchd plist 에 TZ 가
  * 빠져 있던 이력이 있어 머신 TZ 를 신뢰하지 않는다.
@@ -159,19 +282,32 @@ export function resolvePublishAt(input, now = new Date()) {
   if (!s) return null;
 
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) {
-    return Number.isNaN(new Date(s).getTime()) ? null : s;
+    const at = new Date(s);
+    if (Number.isNaN(at.getTime())) return null;
+    // 전체 ISO 도 **과거 검사를 받아야 한다.** 예전에는 여기서 그대로 통과시켰고,
+    // HH:MM 경로에만 있던 5분 가드를 건너뛰었다. 2026-09-16 EP-2026-0156 실측:
+    // 07:18 에 시작하며 10:00 을 목표로 넘겼는데 Grok 실패·폴백으로 13:09 에야 업로드돼
+    // publishAt 이 3시간 전이 됐다 — 유튜브가 즉시 공개해 버렸고, 파이프라인은
+    // 그걸 `status: scheduled` 로 보고했다. 의도한 시각도 아니고 보고도 틀렸다.
+    if (at.getTime() - now.getTime() < 5 * 60 * 1000) return null;
+    return s;
   }
 
-  const m = s.match(/^(\d{1,2}):(\d{2})$/);
+  const m = s.match(/^(?:\+(\d)d\s+)?(\d{1,2}):(\d{2})$/);
   if (!m) return null;
-  const hh = Number(m[1]);
-  const mm = Number(m[2]);
+  const plusDays = m[1] ? Number(m[1]) : 0;
+  const hh = Number(m[2]);
+  const mm = Number(m[3]);
   if (hh > 23 || mm > 59) return null;
 
+  // 달력일을 KST 로 잡은 뒤 일수를 더한다. UTC 자정 기준으로 더해야 서머타임 없는
+  // KST 에서 날짜가 어긋나지 않는다.
   const today = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(now);
-  const iso = `${today}T${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:00+09:00`;
+  const day = plusDays === 0 ? today
+    : new Date(Date.parse(`${today}T00:00:00Z`) + plusDays * 86400_000).toISOString().slice(0, 10);
+  const iso = `${day}T${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:00+09:00`;
 
   const when = new Date(iso);
   if (Number.isNaN(when.getTime())) return null;
@@ -265,6 +401,22 @@ async function main() {
 
   const systemPrompt = buildSystemPrompt(format, seriesInfo, publicFiguresInfo);
 
+  // 최근 제목(3일) — 채널 인덱스 + 이미 업로드된 로컬 회차. 같은 날 두 번째 회차가 첫 회차를
+  // 못 보고 같은 수치를 또 쓰는 일을 막는다(인덱스 동기화가 늦게 돌 수 있다).
+  const videosIdxPath = join(SKILL_ROOT, 'workspace', 'growth', 'channel', 'videos.json');
+  let videosIndex = null;
+  try { if (existsSync(videosIdxPath)) videosIndex = JSON.parse(readFileSync(videosIdxPath, 'utf-8')); } catch {}
+  const recent = recentTitles({
+    videosIndex,
+    episodesRoot: join(SKILL_ROOT, 'workspace', 'episodes'),
+    excludeEpisode: fm.episode_id,
+    now: new Date(),
+  });
+  const recentBlock = recent.length
+    ? ['[최근 제목 — 3일, 최신순. 이 수치와 이 틀을 피하라]',
+       ...recent.slice(0, 8).map((r) => `- ${r.title}  (${TYPE_LABEL[classifyTitle(r.title).primary]})`), ''].join('\n')
+    : '';
+
   const userPrompt = [
     `[EPISODE]`, fm.episode_id, `Channel: ${fm.channel_id}`, `Format: ${format}`,
     seriesInfo ? `Series: ${seriesInfo.series_id} ep ${seriesInfo.series_episode}/${seriesInfo.series_total}` : '',
@@ -284,6 +436,7 @@ async function main() {
     `대본 narration 의 한글 수사 표기를 그대로 옮기지 마라. 태그에도 한글 수사 숫자를 넣지 마라.`,
     '',
     refs ? `[NEWS REFERENCES]\n${refs}\n` : '',
+    recentBlock,
     growthDirectives ? `[GROWTH DIRECTIVES]\n제목 작성 시 아래 '제목 패키징' 지시와, '이번 주 실험' 중 적용 대상이 제목(메타데이터)인 것을 반영하라.\n표기 규칙·공인 인물 SEO 정책·클릭베이트 금지 규칙과 충돌하면 그쪽이 항상 우선이다:\n${growthDirectives}\n` : '',
     `[TASK]`,
     `위 에피소드의 YouTube${format.startsWith('shorts') ? '/TikTok/Reels' : ''} 배포 메타데이터를 JSON으로 작성하라.`,
@@ -320,6 +473,40 @@ async function main() {
 
   const meta = safeParse(raw);
 
+  // 제목 후보 선택 — 규칙 위반은 거르고, 최근과 같은 유형·같은 수치는 피한다.
+  // 옛 형식(title 하나)만 와도 그 한 개를 후보로 판정한다.
+  {
+    const cands = [
+      ...(Array.isArray(meta.title_candidates) ? meta.title_candidates : []),
+      ...(meta.title ? [{ title: meta.title, type: 'model_pick' }] : []),
+    ].filter((c) => c && typeof c.title === 'string' && c.title.trim());
+    const pick = selectTitle(cands, {
+      recent,
+      shorts: format.startsWith('shorts'),
+      requireWhy: !!loadContentPolicy()?.title_requires_causal_clause,
+      seriesBadge: seriesInfo ? `[${seriesInfo.series_name} ${seriesInfo.series_episode}/${seriesInfo.series_total}]` : null,
+      figure: figurePrimaryCandidates[0] || null,
+    });
+    if (pick) {
+      meta.title = pick.chosen.title;
+      meta.title_selection = {
+        chosen_index: pick.chosen.index,
+        chosen_type: pick.chosen.type,
+        chosen_hard: pick.chosen.hard,
+        fallback: pick.fallback,
+        recent_titles: recent.length,
+        candidates: pick.judged.map((j) => ({
+          title: j.title, llm_type: j.llm_type, type: j.type, hard: j.hard, soft: j.soft, penalty: j.penalty,
+        })),
+      };
+      console.log(`   🏷  제목 후보 ${pick.judged.length}개 → ${TYPE_LABEL[pick.chosen.type]}${pick.fallback ? ' (⚠ 규칙을 다 지킨 후보 없음 — 차선)' : ''}`);
+      for (const j of pick.judged) {
+        console.log(`      ${j === pick.chosen ? '▶' : ' '} [${TYPE_LABEL[j.type]}] ${j.title}${j.hard.length ? '  ✗ ' + j.hard.join(',') : ''}${j.soft.length ? '  · ' + j.soft.join(',') : ''}`);
+      }
+    }
+    delete meta.title_candidates;
+  }
+
   // 필수 필드 주입/보정
   meta.episode_id = fm.episode_id;
   meta.channel_id = fm.channel_id;
@@ -350,13 +537,18 @@ async function main() {
   // 예약 공개 — publish-approval.js 가 publishAt 이 있으면 privacyStatus 를 private 로 강제하고
   // publish-youtube.js 가 status.publishAt 으로 실어 보낸다. 여기서는 값만 정확히 만든다.
   if (publishAtArg) {
-    const publishAt = resolvePublishAt(publishAtArg);
-    if (publishAt) {
-      meta.publishAt = publishAt;
-      console.log(`  ⏰ 예약 공개: ${publishAt}`);
-    } else if (/^\d{1,2}:\d{2}$/.test(String(publishAtArg).trim())) {
-      // 형식은 맞는데 null → 이미 지난 시각. 예약 없이 private 로 남는다는 걸 분명히 알린다.
-      console.warn(`  ⚠ 예약 시각 ${publishAtArg} (KST) 이 이미 지났습니다 — 예약 없이 private 로 둡니다. 운영자 확인 필요.`);
+    const plan = resolvePublishPlan(publishAtArg, new Date());
+    if (plan.privacyStatus) meta.privacyStatus = plan.privacyStatus;
+    if (plan.publish_late) meta.publish_late = plan.publish_late;
+    if (plan.action === 'scheduled') {
+      meta.publishAt = plan.publishAt;
+      console.log(`  ⏰ 예약 공개: ${plan.publishAt}`);
+    } else if (plan.action === 'publish_now') {
+      meta.publishAt = null;
+      console.warn(`  ⏱  목표 ${publishAtArg} 를 ${plan.hours_late.toFixed(1)}시간 놓쳤습니다 (유예 ${plan.grace}h 이내) — 예약 없이 **즉시 공개**합니다 (privacy=public).`);
+    } else if (plan.action === 'hold_private') {
+      meta.publishAt = null;
+      console.warn(`  ⚠ 목표 ${publishAtArg} 를 ${plan.hours_late.toFixed(1)}시간 놓쳤습니다 (유예 ${plan.grace}h 초과) — 내용이 낡았을 수 있어 private 로 둡니다. 운영자 확인 필요.`);
     } else {
       console.warn(`  ⚠ --publish-at 형식을 해석하지 못해 무시합니다: ${publishAtArg}`);
     }
@@ -427,6 +619,20 @@ async function main() {
   // 어느 엔진이 만들었는지 남긴다 — 폴백이 일어난 EP 를 사후에 가릴 수 있어야 한다.
   meta.generated_by = `metadata-writer (${engineUsed})`;
 
+  // EXP-02-distinct-headline: 최근 3일 제목과 같은 수치를 또 쓰면 표시해 둔다.
+  try {
+    if (meta.title) {
+      const merged = { videos: Object.fromEntries(recent.map((r, i) => [i, { title: r.title, publishedAt: new Date(r.at).toISOString() }])) };
+      const hit = findHeadlineCollision(meta.title, merged, new Date(Date.now() + 86400_000), { days: 4 });
+      if (hit) {
+        meta.headline_conflict = { shared: hit.shared, with: hit.title, published_at: hit.publishedAt };
+        console.warn(`   ⚠ 제목 수치 충돌: ${hit.shared.join(', ')} — 최근 회차 「${String(hit.title).slice(0, 40)}」 와 겹친다`);
+      }
+    }
+  } catch (e) {
+    console.warn(`   ⚠ 제목 충돌 검사 건너뜀: ${e.message}`);
+  }
+
   const outPath = join(baseDir, '70_publish_meta.json');
   writeFileSync(outPath, JSON.stringify(meta, null, 2), 'utf-8');
 
@@ -435,6 +641,8 @@ async function main() {
   console.log(`   shortsTag: ${meta.shortsTag}`);
   console.log(`   Tags: ${meta.tags?.length || 0}개`);
 }
+
+// headlineNumberTokens · findHeadlineCollision 은 lib/title-select.js 로 옮겼다 (위에서 다시 내보낸다).
 
 // 직접 실행일 때만 main. resolvePublishAt 을 테스트에서 import 할 수 있게 한다.
 // (build-distribution.js:159 와 같은 관례. node 가 argv[1] 을 절대경로로 해석하므로

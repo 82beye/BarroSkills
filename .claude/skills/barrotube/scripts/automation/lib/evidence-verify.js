@@ -199,3 +199,51 @@ export function escalateFabricatedEvidence(claims, verification) {
 
   return { claims: out, escalated, flagged };
 }
+
+/**
+ * 기사의 게시 날짜를 뽑는다 (KST 달력일).
+ *
+ * URL 이 살아 있다는 것과 **오늘 기사라는 것**은 다르다.
+ * 2026-09-16 EP-2026-0157: 리서처가 「LIG넥스원 +28.88%(오늘)」의 근거로
+ * biz.heraldcorp.com/article/10685491 을 들었는데, 그 기사는 살아 있지만
+ * 2026-03-03 자 「이란 사태에 방산주 불기둥」 — 반년 전, 정반대 사건(확전), 다른 수치였다.
+ * 실존 검증만으로는 alive 로 통과한다. 날짜를 봐야 잡힌다.
+ *
+ * 한국 언론은 대부분 <meta property="article:published_time"> 또는 JSON-LD
+ * "datePublished" 를 준다 (헤럴드경제·연합뉴스 실측 확인).
+ */
+export async function articleDate(url, { timeoutMs = 12_000 } = {}) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      signal: ac.signal, redirect: 'follow',
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; BarroTubeBot/1.0)' },
+    });
+    if (!res.ok) return null;
+    const html = (await res.text()).slice(0, 200_000);
+    const m = html.match(/article:published_time"\s+content="([^"]+)"/i)
+      || html.match(/"datePublished"\s*:\s*"([^"]+)"/i);
+    if (!m) return null;
+    const t = Date.parse(m[1]);
+    if (!Number.isFinite(t)) return null;
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date(t));
+  } catch { return null; }
+  finally { clearTimeout(timer); }
+}
+
+/**
+ * 인용들이 해당 날짜의 기사인지 본다. 날짜를 못 읽으면 판단하지 않는다(알 수 없음).
+ * @returns [{ url, date, staleDays }] — staleDays 가 maxAgeDays 를 넘은 것만
+ */
+export async function findStaleCitations(urls, episodeDate, { maxAgeDays = 3, timeoutMs = 12_000 } = {}) {
+  const base = Date.parse(`${episodeDate}T12:00:00+09:00`);
+  const out = [];
+  for (const url of urls) {
+    const d = await articleDate(url, { timeoutMs });
+    if (!d) continue;
+    const age = Math.round((base - Date.parse(`${d}T12:00:00+09:00`)) / 86400_000);
+    if (age > maxAgeDays) out.push({ url, date: d, staleDays: age });
+  }
+  return out;
+}

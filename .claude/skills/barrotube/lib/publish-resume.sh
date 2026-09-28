@@ -10,7 +10,7 @@
 # 사람의 확인은 그대로 남는다. 이 스크립트는 승인을 만들지 않고 **확인만** 한다.
 #
 # Usage:
-#   bash publish-resume.sh                 # 오늘자 EP 중 승인됐고 미게시인 것을 처리
+#   bash publish-resume.sh                 # 최근 5개 EP 중 승인됐고 미게시인 것을 처리
 #   DRY_RUN=1 bash publish-resume.sh       # 대상만 출력
 
 set -uo pipefail
@@ -18,7 +18,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export BARROTUBE_HOME="${BARROTUBE_HOME:-$(dirname "$SCRIPT_DIR")}"
 export PAPERCLIP_DISABLED=1
-cd "$BARROTUBE_HOME"
+cd "$BARROTUBE_HOME" || exit 1
 
 DRY_RUN="${DRY_RUN:-0}"
 source "${SCRIPT_DIR}/guards.sh"
@@ -29,9 +29,12 @@ EPISODES="${BARROTUBE_HOME}/workspace/episodes"
 [ -d "$EPISODES" ] || { echo "episodes 디렉토리 없음"; exit 0; }
 
 found=0
+failed=0
 # 최근 5개만 본다. 오래된 것을 되살려 올리는 사고를 막는다.
-for ep_dir in $(ls -d "$EPISODES"/EP-* 2>/dev/null | sort | tail -5); do
+EP_DIRS=$(printf '%s\n' "$EPISODES"/EP-* | sort | tail -5)
+while IFS= read -r ep_dir; do
   ep_id=$(basename "$ep_dir")
+  [[ "$ep_id" =~ ^EP-[0-9]{4}-[0-9]{4}$ ]] || continue
   for platform in shorts long; do
     base="${ep_dir}/platforms/${platform}"
     [ -d "$base" ] || continue
@@ -61,6 +64,12 @@ for ep_dir in $(ls -d "$EPISODES"/EP-* 2>/dev/null | sort | tail -5); do
     fi
 
     found=$((found + 1))
+    if [ -e "${result}.lock" ]; then
+      echo "⏸  ${ep_id} (${platform}) — 기존 업로드 상태 확인 필요; 잠금 유지"
+      audit "publish_resume_pending_upload" "WARN" "ep=$ep_id platform=$platform"
+      failed=1
+      continue
+    fi
     echo "▶ ${ep_id} (${platform}) — 승인 완료·미게시"
     if [ "$DRY_RUN" = "1" ]; then
       echo "  [DRY_RUN] node scripts/automation/run-episode.js --episode ${ep_id} --platform ${platform} --from S11"
@@ -68,15 +77,16 @@ for ep_dir in $(ls -d "$EPISODES"/EP-* 2>/dev/null | sort | tail -5); do
     fi
 
     audit "publish_resume_start" "INFO" "ep=$ep_id platform=$platform"
-    if node scripts/automation/run-episode.js --episode "$ep_id" --platform "$platform" --from S11; then
+    if node scripts/automation/run-episode.js --episode "$ep_id" --platform "$platform" --from S11 && [ -s "$result" ]; then
       audit "publish_resume_done" "INFO" "ep=$ep_id platform=$platform"
       notify_telegram "📺 <b>${ep_id}</b> 예약 게시 완료 (승인 후 자동 재개)"
     else
+      failed=1
       audit "publish_resume_fail" "ERROR" "ep=$ep_id platform=$platform"
       notify_telegram "❌ <b>${ep_id}</b> 게시 재개 실패 — 로그 확인 필요"
     fi
   done
-done
+done <<< "$EP_DIRS"
 
 [ "$found" -eq 0 ] && echo "승인 대기 중이거나 이미 게시된 EP 뿐 — 할 일 없음"
-exit 0
+exit "$failed"

@@ -32,7 +32,6 @@ import { join, resolve, dirname, basename, isAbsolute } from 'node:path';
 import { parse as parseYAML } from 'yaml';
 import sharp from 'sharp';
 import {
-  generateImageGemini,
   loadCharacterDna,
   loadChannelStylePrefix,
   loadPalette,
@@ -47,7 +46,6 @@ import { composeThumbnail } from './lib/thumbnail-composer.js';
 // 갈라지고, 갈라지는 순간 어느 쪽이 정본인지 아무도 모르게 된다.
 import { deriveIntro } from './generate-cards.js';
 import { detectSentimentPalette } from './lib/sentiment.js';
-import { resolveImageEngine } from './lib/image-engine-config.js';
 import { getSecret } from './config-loader.js';
 
 // YouTube thumbnails.set 은 2 MiB 를 넘으면 400 invalidImage 로 거절한다. 업로드는
@@ -169,42 +167,13 @@ function aspectForFormat(format) {
 // gpt-image-1 지원 사이즈는 1024x1536(세로)·1536x1024(가로)·1024x1024 뿐이라
 // 정확한 16:9/9:16이 아닌 근사 비율(가로 3:2 / 세로 2:3)이다. v2는 composer가
 // 1080×1920 cover로 재정렬하므로 무관하고, v1 직출력은 약간의 크롭이 생길 수 있다.
-async function renderThumbnailImage({ engine, useOpenAI, prompt, outPath, aspectRatio, episodeId, note, channel }) {
-  // codex: 내장 imagegen. ChatGPT 계정 인증이라 OPENAI_API_KEY 도, 브라우저도 필요 없다.
-  // Gemini 가 429(prepayment credits) 로 막혀 씬 스틸 폴백으로 새던 경로를 대체한다.
-  if (engine === 'codex') {
-    try {
-      const { generateImageCodex } = await import('./lib/image-engines/codex-imagegen.js');
-      generateImageCodex({ prompt, outPath, channel: channel || null });
-      return 'codex-imagegen';
-    } catch (e) {
-      console.warn(`   ⚠ codex imagegen 썸네일 실패 (${String(e.message).slice(0, 120)}) → Gemini 폴백`);
-    }
-  }
-  if (useOpenAI) {
-    try {
-      const { generateImageOpenAI } = await import('./lib/image-engines/openai-gpt-image.js');
-      const size = aspectRatio === '16:9' ? '1536x1024' : '1024x1536';
-      await generateImageOpenAI({
-        prompt,
-        outPath,
-        size,
-        quality: 'high',
-        costContext: { episode: episodeId, stage: 'S6e', note: `${note}-openai`, engine: 'openai-gpt-image-1' },
-      });
-      return 'openai-gpt-image-1';
-    } catch (e) {
-      console.warn(`   ⚠ OpenAI(gpt-image-1) 썸네일 실패 (${String(e.message).slice(0, 120)}) → Gemini 폴백`);
-    }
-  }
-  await generateImageGemini({
-    prompt,
-    outPath,
-    aspectRatio,
-    resolution: '1K',
-    costContext: { episode: episodeId, stage: 'S6e', note },
-  });
-  return 'gemini';
+async function renderThumbnailImage({ prompt, outPath, channel }) {
+  // codex imagegen **하나만** 쓴다 (운영자 지시 2026-09-18). 예전 OpenAI→Gemini 폴백은
+  // 유료 크레딧을 태우고(2026-09-18 EP-0162 가 429 로 죽었다) 캐릭터를 드리프트시켰다.
+  // 실패하면 멈춘다 — 다른 엔진의 그림이 조용히 나가는 것보다 낫다.
+  const { generateImageCodex } = await import('./lib/image-engines/codex-imagegen.js');
+  generateImageCodex({ prompt, outPath, channel: channel || null });
+  return 'codex-imagegen';
 }
 
 function resolveStylePrefix(channel, format) {
@@ -521,9 +490,7 @@ async function main() {
 
   // 이미지 엔진: 전역 resolver(SSOT)로 통일. --engine / BT_THUMBNAIL_ENGINE / BT_IMAGE_ENGINE
   // / config/image-engines.json 순으로 해석. 기본(auto)은 현행 호환 = gemini.
-  const thumbEngine = resolveImageEngine('S6e_thumbnail', { cliOverride: opts.engine });
-  const useOpenAIThumb = thumbEngine.engine === 'openai';
-  if (thumbEngine.downgraded) console.warn('   ⚠ OpenAI 요청됐으나 OPENAI_API_KEY 없음 → Gemini 사용');
+  // 엔진 선택 로직을 지웠다 (2026-09-18) — codex imagegen 하나뿐이라 고를 게 없다.
 
   console.log(`🖼  Generating thumbnail for ${fm.episode_id}${isV2 ? ' (v2 composer mode)' : ''}`);
   console.log(`   Series: ${seriesName} [${seriesN}/${seriesM}]`);
@@ -545,8 +512,7 @@ async function main() {
     }
   }
   console.log(`   Format: ${format} → aspect=${aspectRatio}`);
-  console.log(`   Engine: ${thumbEngine.engine === 'codex' ? 'codex-imagegen (Gemini 폴백)'
-    : useOpenAIThumb ? 'openai-gpt-image-1 (Gemini 폴백)' : 'gemini'} (source=${thumbEngine.source})`);
+  console.log('   Engine: codex-imagegen');
   console.log(`   Out: ${outPath}`);
 
   try {
@@ -568,8 +534,6 @@ async function main() {
         baseEngine = `operator-base(${basename(baseOverride)})`;
       } else try {
         baseEngine = await renderThumbnailImage({
-          engine: thumbEngine.engine,
-          useOpenAI: useOpenAIThumb,
           channel,
           prompt,
           outPath: baseOutPath,
@@ -593,8 +557,6 @@ async function main() {
       console.log(`✅ Thumbnail (v2 composer, ${result.layers} layers): ${outPath}`);
     } else {
       const engUsed = await renderThumbnailImage({
-        engine: thumbEngine.engine,
-        useOpenAI: useOpenAIThumb,
         channel,
         prompt,
         outPath,

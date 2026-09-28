@@ -317,6 +317,11 @@ function previousDay(date) {
 
 function resolveContentMode(slotName, date, quotes = [], requireClosed = []) {
   const day = new Date(`${date}T00:00:00Z`).getUTCDay();
+  // us-close 주말·월요일 편성(2026-09-28 운영자 결정): 토 금요일 미국장 · 일 한 주 결산 ·
+  // 월 이번 주 준비(주말 이슈가 이번 주에 미칠 영향 + 이번 주 일정). 월요일 06:00 에는
+  // 새 미국 종가가 없고(직전 세션이 일요일) 토·일 이틀치 이슈를 다 볼 수 있다.
+  if (slotName === 'us-close' && day === 0) return { content_mode: 'weekly_recap', expected_session_date: null };
+  if (slotName === 'us-close' && day === 1) return { content_mode: 'weekly_preview', expected_session_date: null };
   if (day === 0) return { content_mode: 'sunday_preopen', expected_session_date: null };
   if (day === 6) return { content_mode: 'closed_market_issue', expected_session_date: null };
 

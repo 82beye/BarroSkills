@@ -11,6 +11,8 @@
 #
 # 각 함수: 통과 = exit 0, 위반 = exit 1 + 표준 출력에 사유
 
+umask 077
+
 # BARROTUBE_HOME 자동 감지
 if [ -z "${BARROTUBE_HOME:-}" ]; then
   GUARDS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -40,6 +42,7 @@ load_bt_env() {
       *) continue ;;
     esac
     key="${line%%=*}"
+    [[ "$key" =~ ^BT_[A-Z0-9_]+$ ]] || continue
     val="${line#*=}"
     # 앞뒤 따옴표 제거
     val="${val%\"}"; val="${val#\"}"
@@ -59,6 +62,13 @@ load_bt_env
 # nvm 버전이 올라가는 순간 죽은 경로가 된다 (v24.11.1 → v26 이면 끝).
 # 여기서 한 번 더 찾아 두면 plist 가 낡아도 스크립트는 계속 돈다.
 # ─────────────────────────────────────────────────
+# Google 로 가는 IPv6 경로가 죽어 있는 환경이 있다 (2026-09-23 실측: curl -6 은
+# 실패하고 curl -4 만 200). Node 는 Happy Eyeballs 로 IPv4 로 떨어져야 하는데
+# 간헐적으로 실패해 fetch 가 EHOSTUNREACH(AggregateError)로 죽는다. 그날 omnibus 는
+# Phase 1 에서 yahoo_finance 를, Phase 12 에서 업로드를 그렇게 잃었다 — 렌더까지
+# 끝난 회차가 마지막 한 걸음에서 날아갔다. IPv4 를 먼저 보게 해 그 창을 없앤다.
+export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--dns-result-order=ipv4first"
+
 ensure_node_on_path() {
   command -v node >/dev/null 2>&1 && return 0
 
@@ -116,13 +126,13 @@ guard_master_switch() {
     audit "guard_master_switch" "BLOCKED" "autonomy-pause.json missing"
     return 1
   fi
-  local status=$(python3 -c "import json;print(json.load(open('$AUTONOMY_FILE')).get('status','unknown'))")
+  local status=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('status','unknown'))" "$AUTONOMY_FILE")
   if [ "$status" != "active" ]; then
     echo "🛑 Autonomy paused (status=$status) — 자율 작업 중단"
     audit "guard_master_switch" "BLOCKED" "status=$status"
     return 1
   fi
-  local enabled=$(python3 -c "import json;d=json.load(open('$AUTONOMY_FILE'));print(d.get('guards',{}).get('auto_pipeline_enabled',False))")
+  local enabled=$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d.get('guards',{}).get('auto_pipeline_enabled',False))" "$AUTONOMY_FILE")
   if [ "$enabled" != "True" ]; then
     echo "🛑 auto_pipeline_enabled=false — 비활성화됨"
     audit "guard_master_switch" "BLOCKED" "auto_pipeline_enabled=false"
@@ -135,17 +145,44 @@ guard_master_switch() {
 # Guard 2: 일일 EP 발행 상한
 # ─────────────────────────────────────────────────
 guard_daily_quota() {
-  local max=$(python3 -c "import json;print(json.load(open('$AUTONOMY_FILE')).get('guards',{}).get('max_episodes_per_day',1))")
-  local today=$(date +%Y-%m-%d)
-  # 오늘 publish된 EP 카운트 (workspace/episodes/EP-*/.episode_status.json의 status=published + updated_at today)
-  local count=$(find "${BARROTUBE_HOME}/workspace/episodes" -name ".episode_status.json" -maxdepth 2 2>/dev/null | xargs -I{} python3 -c "
-import json,sys
-try:
-  d=json.load(open(sys.argv[1]))
-  if d.get('status')=='published' and (d.get('updated_at','').startswith('$today') or any(h.get('stage')=='S11' and h.get('timestamp','').startswith('$today') for h in d.get('stage_history',[]))):
-    print(1)
-except: pass
-" {} 2>/dev/null | wc -l | tr -d ' ')
+  local quota max count
+  quota=$(python3 - "$AUTONOMY_FILE" "${BARROTUBE_HOME}/workspace/episodes" <<'PY_CHECK'
+import datetime, json, pathlib, sys
+kst = datetime.timezone(datetime.timedelta(hours=9))
+limit = json.load(open(sys.argv[1]))['guards']['max_episodes_per_day']
+if type(limit) is not int or limit < 1:
+    raise ValueError('invalid daily publish limit')
+today = datetime.datetime.now(kst).date()
+seen = set()
+root = pathlib.Path(sys.argv[2])
+for p in list(root.glob('EP-*/80_publish_result.json')) + list(root.glob('EP-*/platforms/*/80_publish_result.json')):
+    d = json.loads(p.read_text())
+    yt = d.get('targets', {}).get('youtube', d)
+    if not yt.get('videoId'):
+        continue
+    if yt.get('privacyStatus') == 'private' and yt.get('status') != 'scheduled':
+        continue
+    # uploadedAt 은 같은 사건의 옛 필드명이다. 2026-07 이전 회차가 이 이름만 갖고 있다.
+    raw = yt.get('publishedAt') or d.get('published_at') or yt.get('uploadedAt') or d.get('uploaded_at')
+    if not raw:
+        # 날짜를 못 읽는 기록 하나로 **모든 실행을 영구히 막아서는 안 된다.**
+        # 2026-09-16 실측: EP-2026-0062(2026-07-12 게시)가 uploadedAt 만 갖고 있어
+        # Phase 0 가드가 두 달째 raise 했고, 새 회차가 한 편도 시작되지 못했다.
+        # 그렇다고 조용히 건너뛰면 오늘치 발행을 놓칠 수 있으므로, 파일 수정 시각을
+        # 상한으로 쓴다 — 오늘 쓰인 파일이 아니면 오늘의 발행일 수 없다.
+        mtime = datetime.datetime.fromtimestamp(p.stat().st_mtime, kst)
+        if mtime.date() == today:
+            raise ValueError('publish timestamp missing on a file written today: ' + str(p))
+        continue
+    at = datetime.datetime.fromisoformat(raw.replace('Z', '+00:00'))
+    if at.tzinfo is None:
+        raise ValueError('publish timestamp has no timezone')
+    if at.astimezone(kst).date() == today:
+        seen.add(yt['videoId'])
+print(limit, len(seen))
+PY_CHECK
+  ) || { audit "guard_daily_quota" "BLOCKED" "invalid quota configuration or publish evidence"; return 1; }
+  read -r max count <<< "$quota"
   if [ "$count" -ge "$max" ]; then
     echo "🛑 일일 EP 상한 도달 ($count/$max) — 오늘 자동 발행 종료"
     audit "guard_daily_quota" "BLOCKED" "today_published=$count max=$max"
@@ -158,13 +195,27 @@ except: pass
 # Guard 3: 월 예산 한도
 # ─────────────────────────────────────────────────
 guard_budget() {
-  local block_pct=$(python3 -c "import json;print(json.load(open('$AUTONOMY_FILE')).get('guards',{}).get('budget_block_threshold_pct',90))")
-  local total_limit=$(python3 -c "import json;p=json.load(open('$BUDGET_FILE'));print(sum(r.get('monthly_limit',0) for r in p['budget_policy']['roles'].values()))")
-  local used=0
-  if [ -f "$USAGE_FILE" ]; then
-    used=$(python3 -c "import json;d=json.load(open('$USAGE_FILE'));print(sum(v.get('total_usd',0) for v in d.values() if isinstance(v,dict)))")
-  fi
-  local pct=$(python3 -c "print(int(($used/$total_limit)*100) if $total_limit>0 else 0)")
+  local values used total_limit pct alert_pct block_pct
+  values=$(python3 - "$AUTONOMY_FILE" "$BUDGET_FILE" "$USAGE_FILE" <<'PY_CHECK'
+import json, math, pathlib, sys
+policy = json.load(open(sys.argv[1]))['guards']
+budget = json.load(open(sys.argv[2]))['budget_policy']['roles']
+usage_path = pathlib.Path(sys.argv[3])
+usage = json.loads(usage_path.read_text()) if usage_path.exists() else {}
+def number(value):
+    if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+        raise ValueError('invalid budget number')
+    return value
+limit = sum(number(r.get('monthly_limit', 0)) for r in budget.values())
+used = sum(number(r.get('total_usd', 0)) for r in usage.values() if isinstance(r, dict))
+alert = number(policy.get('budget_alert_threshold_pct', 80))
+block = number(policy.get('budget_block_threshold_pct', 90))
+if not 0 <= alert <= block <= 100 or limit <= 0:
+    raise ValueError('invalid budget policy')
+print(used, limit, int(100 * used / limit), int(alert), int(block))
+PY_CHECK
+  ) || { audit "guard_budget" "BLOCKED" "invalid budget configuration or usage"; return 1; }
+  read -r used total_limit pct alert_pct block_pct <<< "$values"
   if [ "$pct" -ge "$block_pct" ]; then
     echo "🛑 월 예산 $pct% / $block_pct% 도달 — 비용 발생 작업 차단"
     audit "guard_budget" "BLOCKED" "used_usd=$used limit_usd=$total_limit pct=$pct"
@@ -172,7 +223,6 @@ guard_budget() {
   fi
   # 경고선. 이 값은 선언만 돼 있고 읽는 코드가 없어서, 무인 운영 중 예산이 90% 벽에
   # 부딪혀 생산이 서는 순간까지 아무 신호도 가지 않았다.
-  local alert_pct=$(python3 -c "import json;print(json.load(open('$AUTONOMY_FILE')).get('guards',{}).get('budget_alert_threshold_pct',80))")
   if [ "$pct" -ge "$alert_pct" ]; then
     echo "⚠️  월 예산 $pct% / 경고선 $alert_pct% (차단선 $block_pct%)"
     audit "guard_budget" "WARN" "used_usd=$used limit_usd=$total_limit pct=$pct alert_at=$alert_pct"
@@ -195,26 +245,40 @@ guard_in_flight() {
     audit "guard_in_flight" "BLOCKED" "active_ep=$ep pid=$pid"
     return 1
   fi
-  # Stale lock — 자동 정리
-  echo "⚠️  Stale lock 정리 (PID $pid 없음)"
-  rm -f "$INFLIGHT_FILE"
-  audit "guard_in_flight" "STALE_CLEANED" "removed pid=$pid"
-  return 0
+  # 공유 구현이 소유자를 재검사한다. 셸에서 무조건 rm 하면 재획득한 락을 지운다.
+  node "${BARROTUBE_HOME}/scripts/automation/in-flight-lock.js" release-stale || return 1
+  [ ! -f "$INFLIGHT_FILE" ]
 }
 
 # ─────────────────────────────────────────────────
-# Guard 5: Telegram 알람 전송 (실패 시 silent)
+# Guard 5: Telegram 알람 전송 (required=1이면 실패를 호출자에 전달)
 # ─────────────────────────────────────────────────
 notify_telegram() {
-  local text="$1"
-  if [ ! -f "${BARROTUBE_HOME}/.env" ]; then return 0; fi
-  local token=$(grep "^TELEGRAM_BOT_TOKEN=" "${BARROTUBE_HOME}/.env" | cut -d= -f2-)
-  local chat=$(grep "^TELEGRAM_CHAT_ID=" "${BARROTUBE_HOME}/.env" | cut -d= -f2-)
-  if [ -z "$token" ] || [ -z "$chat" ]; then return 0; fi
-  curl -sS -m 10 -X POST "https://api.telegram.org/bot${token}/sendMessage" \
-    -H "Content-Type: application/json" \
-    -d "{\"chat_id\":\"$chat\",\"text\":$(printf '%s' "$text" | python3 -c "import sys,json;print(json.dumps(sys.stdin.read()))"),\"parse_mode\":\"HTML\"}" \
-    > /dev/null 2>&1 || true
+  local text="$1" required="${2:-0}"
+  [ "${DRY_RUN:-0}" = "1" ] && return 0
+  if printf '%s' "$text" | node --input-type=module -e '
+import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const { sendTelegramText } = await import(pathToFileURL(process.argv[2]));
+try { if (!await sendTelegramText(readFileSync(0, "utf8"))) process.exitCode = 1; }
+catch (e) { console.error(e.message); process.exitCode = 1; }
+' barrotube-notify-helper "${BARROTUBE_HOME}/scripts/automation/notify.js"; then
+    return 0
+  fi
+  # 일부러 끈 것과 못 보낸 것을 구분해 **기록**한다.
+  # notify.js 는 BT_NO_NOTIFY=1 이면 false 를 돌려주는데, 그것까지 전송 실패로 적는 바람에
+  # 문서가 권하는 수동 점검(BT_NO_NOTIFY=1 bash lib/doctor-cli.sh)을 돌릴 때마다 가짜
+  # 실패가 쌓였고, 진짜 경보 유실(2026-09-18 08:14·08:37)과 구분되지 않았다.
+  #
+  # 단, 반환값은 그대로 실패다 — required=1 인 호출(거부창 시작 알림)은 알림이 실제로
+  # 가지 않았으면 발행을 멈춰야 한다. 여기서 성공으로 돌리면 BT_NO_NOTIFY=1 로 돌린
+  # 파이프라인이 사람 게이트를 통째로 건너뛰고 게시한다.
+  if [ "${BT_NO_NOTIFY:-0}" = "1" ]; then
+    audit "telegram_suppressed" "INFO" "BT_NO_NOTIFY=1 — 전송하지 않음(실패 아님)"
+  else
+    audit "telegram_delivery" "ERROR" "message delivery failed"
+  fi
+  [ "$required" != "1" ]
 }
 
 # ─────────────────────────────────────────────────
@@ -222,11 +286,13 @@ notify_telegram() {
 # ─────────────────────────────────────────────────
 wait_telegram_reject_window() {
   local ep="$1"
-  local minutes=$(python3 -c "import json;print(json.load(open('$AUTONOMY_FILE')).get('guards',{}).get('publish_reject_window_minutes',30))")
+  [[ "$ep" =~ ^EP-[0-9]{4}-[0-9]{4}$ ]] || return 1
+  local minutes
+  minutes=$(python3 -c 'import json,sys; m=json.load(open(sys.argv[1])).get("guards",{}).get("publish_reject_window_minutes",30); assert type(m) is int and 1 <= m <= 1440, "invalid reject window"; print(m)' "$AUTONOMY_FILE") || return 1
   local reject_file="${BARROTUBE_HOME}/workspace/.reject-window/${ep}.flag"
   local open_file="${BARROTUBE_HOME}/workspace/.reject-window/${ep}.open"
   mkdir -p "$(dirname "$reject_file")"
-  rm -f "$reject_file"   # 시작 시 클리어
+  [ ! -f "$reject_file" ] || { echo "🛑 기존 reject 유지 — publish 중단"; return 1; }
 
   # 창이 열려 있다는 사실을 **파일로** 남긴다.
   #
@@ -241,15 +307,26 @@ wait_telegram_reject_window() {
   # 발행을 막으면 "승인됐는데 안 올라간 EP 를 되살린다" 는 publish-resume 의
   # 존재 이유가 사라진다. 지난 표식은 무시하고 지운다.
   local deadline
-  deadline=$(python3 -c "import datetime;print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(minutes=$minutes)).isoformat())")
+  deadline=$(python3 -c 'import datetime,sys; print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(minutes=int(sys.argv[1]))).isoformat())' "$minutes") || return 1
   printf '%s\n' "$deadline" > "$open_file"
 
-  notify_telegram "🟡 <b>${ep}</b> reject window 시작 (${minutes}분)\n취소하려면 <code>/reject ${ep}</code>"
+  # 제목을 함께 보낸다 — 무엇을 판단할지 모르는 거부창은 형식일 뿐이다(2026-09-26).
+  # 줄바꿈은 실제 개행으로 넣는다. 예전 문구의 "\n" 은 큰따옴표 안이라 글자 그대로 전송됐다.
+  local title_lines msg
+  title_lines=$(node "${BARROTUBE_HOME}/scripts/automation/title-summary.js" --episode "$ep" 2>/dev/null) || title_lines=""
+  msg="🟡 <b>${ep}</b> reject window 시작 (${minutes}분)"
+  [ -n "$title_lines" ] && msg+=$'\n'"$title_lines"
+  msg+=$'\n'"취소하려면 <code>/reject ${ep}</code>"
+  if ! notify_telegram "$msg" 1; then
+    printf '%s\n' 'notification_failed' > "$open_file"
+    return 1
+  fi
   audit "telegram_reject_window_start" "INFO" "ep=$ep minutes=$minutes"
 
   local i=0
   while [ "$i" -lt "$minutes" ]; do
     sleep 60
+    guard_master_switch || return 1
     if [ -f "$reject_file" ]; then
       echo "🛑 운영자 reject 수신 — publish 중단"
       audit "telegram_reject_window" "REJECTED" "ep=$ep at_minute=$i"
@@ -277,7 +354,7 @@ raw = os.environ.get('BT_RW_DEADLINE', '').strip()
 try:
     d = datetime.datetime.fromisoformat(raw)
 except Exception:
-    sys.exit(1)
+    sys.exit(0)  # 손상되거나 전송 실패한 표식은 게시를 차단한다.
 sys.exit(0 if datetime.datetime.now(datetime.timezone.utc) < d else 1)
 " 2>/dev/null; then
     return 0
@@ -293,29 +370,24 @@ guard_qa_pass() {
   local ep_dir="$1"
   local qa_report="${ep_dir}/60_qa_report.md"
   if [ ! -f "$qa_report" ]; then
-    # platforms/long 또는 platforms/shorts 시도
-    qa_report=$(find "$ep_dir" -name "60_qa_report.md" | head -1)
-  fi
-  if [ ! -f "$qa_report" ]; then
     echo "🛑 QA report 없음 — publish 차단"
     audit "guard_qa_pass" "BLOCKED" "no_qa_report"
     return 1
   fi
-  # PASS|FAIL 검색 (단순)
-  if grep -qi "verdict: *FAIL\|status: *FAIL\|❌ FAIL" "$qa_report"; then
-    echo "🛑 QA FAIL — publish 차단"
-    audit "guard_qa_pass" "BLOCKED" "verdict=FAIL"
+  node --input-type=module -e '
+import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const { parseQaReport } = await import(pathToFileURL(process.argv[1]));
+const source = readFileSync(process.argv[2], "utf8");
+const qa = parseQaReport(source);
+const score = /Score:\s*(\d+)/i.exec(source);
+const min = JSON.parse(readFileSync(process.argv[3], "utf8")).guards?.qa_min_score ?? 60;
+process.exit(qa.passed && qa.video_sha256 && (!score || Number(score[1]) >= min) ? 0 : 1);
+' "${BARROTUBE_HOME}/scripts/automation/lib/publish-approval.js" "$qa_report" "$AUTONOMY_FILE" || {
+    echo "🛑 QA 판정·해시가 없거나 FAIL — publish 차단"
+    audit "guard_qa_pass" "BLOCKED" "invalid_or_failed_qa"
     return 1
-  fi
-  # score 추출 (Score: 75 형식 가정)
-  local score=$(grep -oE "Score: *[0-9]+" "$qa_report" | head -1 | grep -oE "[0-9]+" || echo "100")
-  local min_score=$(python3 -c "import json;print(json.load(open('$AUTONOMY_FILE')).get('guards',{}).get('qa_min_score',60))")
-  if [ "$score" -lt "$min_score" ]; then
-    echo "🛑 QA score $score < $min_score — publish 차단"
-    audit "guard_qa_pass" "BLOCKED" "score=$score min=$min_score"
-    return 1
-  fi
-  return 0
+  }
 }
 
 # ─────────────────────────────────────────────────
