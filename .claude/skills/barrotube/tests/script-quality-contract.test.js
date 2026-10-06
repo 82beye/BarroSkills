@@ -336,3 +336,19 @@ test('임계 정본이 config/growth.json 과 갈라지지 않는다', () => {
   assert.equal(cfg.content_policy.index_move_thresholds.index_pct, INDEX_MOVE_PCT_FLOOR,
     'config 는 작가 프롬프트 문장, INDEX_MOVE_PCT_FLOOR 는 기계 게이트 — 갈라지면 한 프롬프트 안에서 임계가 둘이 된다');
 });
+
+test('image_prompt 자세가 반복되면 pose-repeat — 막지 않고 한 번 되돌린다', () => {
+  const scene = (id, pose) => ({
+    scene_id: id, role: 'context', target_seconds: 12,
+    narration: '유가가 오르자 금리가 먼저 움직였습니다. 그래서 외국인이 팔았습니다.',
+    image_prompt: `[palette:bearish] mascot, calm, ${pose} a single golden bar in the centre, face readable.`,
+  });
+  const same = ['001', '002', '003', '004', '005'].map((id) => scene(id, 'standing before'));
+  const issue = validateScript(same).find((i) => i.rule === 'pose-repeat');
+  assert.ok(issue);
+  assert.equal(issue.severity, 'warn', 'error 면 팩트체크 재작성 게이트까지 막는다');
+  assert.equal(issue.rewrite, true, 'generate-script 가 한 번 되돌리게 한다');
+
+  const noPrompt = same.map(({ image_prompt, ...rest }) => rest);
+  assert.equal(validateScript(noPrompt).some((i) => i.rule === 'pose-repeat'), false, 'image_prompt 가 없으면 판단하지 않는다');
+});

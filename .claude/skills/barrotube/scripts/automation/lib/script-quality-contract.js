@@ -19,6 +19,8 @@
  * 검증기가 쓸 수치를 한 파일에 두고, 갈라지면 테스트가 깨지게 한다.
  */
 
+import { poseRepeat } from './image-prompt-contract.js';
+
 /** 한글 수사 음절. "영점이육", "천사백이십오" 처럼 이어 붙는다. */
 const NUM = '[영공일이삼사오육칠팔구십백천만억조점]';
 
@@ -412,6 +414,18 @@ export function validateScript(scenes) {
       rule: 'hedge-overuse', severity: 'warn', scene_id: null,
       message: `헤지 표현 ${totalHedges}회 (권장 ${hedgeCap} 이하)`,
       suggestion: '확신이 낮으면 모호하게 말하지 말고, 관찰을 좁게 단정하고 해석은 해석이라고 말해라.',
+    });
+  }
+
+  // 마시가 매 씬 같은 자세면 같은 그림을 다섯 번 보여 준다 — 2026-09-30 운영자 지적:
+  // EP-2026-0191~0197 35컷이 전부 "standing before … bracing its body". 막지는 않되 한 번 되돌린다.
+  const pose = poseRepeat(scenes.map((sc) => sc.image_prompt || ''));
+  if (pose.repeated) {
+    issues.push({
+      rule: 'pose-repeat', severity: 'warn', rewrite: true, scene_id: null,
+      message: `마시 자세가 ${pose.total}컷 중 ${pose.count}컷에서 같다 ("${pose.pose}")`,
+      suggestion: '씬마다 다른 전신 자세를 줘라 — stepping back from / kneeling beside / crouching under / '
+        + 'leaning against / sitting in front of / reaching up toward. 팔·손 동작도 바꿔라.',
     });
   }
 

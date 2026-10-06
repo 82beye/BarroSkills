@@ -42,7 +42,7 @@ import {
   buildAllowlistContextBlock,
 } from './lib/public-figures.js';
 import { formatToPlatform } from './paths.js';
-import { TEMPLATE, BOUNDS, KNOWN_PALETTES, CANONICAL_TAIL, MASCOT_CLAUSE } from './lib/image-prompt-contract.js';
+import { TEMPLATE, BOUNDS, KNOWN_PALETTES, CANONICAL_TAIL, MASCOT_CLAUSE, checkEpisodePrompts } from './lib/image-prompt-contract.js';
 import { callClaudeCode, callCodex, resolveChain, runEngineChain } from './lib/text-engine.js';
 import { buildAnalystContractBlock, validateScript, formatIssue, INDEX_MOVE_PCT_FLOOR } from './lib/script-quality-contract.js';
 
@@ -137,7 +137,7 @@ function buildCaricatureBlock() {
   ].join('\n');
 }
 
-function buildImagePromptContractBlock(mascotClause) {
+export function buildImagePromptContractBlock(mascotClause) {
   const identity = mascotClause
     ? `The channel mascot clause you MUST use (verbatim, inside the parentheses form shown):\n${mascotClause}\n`
     : 'The channel has no character DNA on disk — describe the mascot inline and keep it identical across every scene.\n';
@@ -150,7 +150,11 @@ ${TEMPLATE}
 
 ${identity}
 1. The mascot MUST be the grammatical SUBJECT of the scene action, in ONE sentence:
-   "<mascot clause>, <emotion>, standing before <the single scene object> …".
+   "<mascot clause>, <emotion>, <full-body pose> <the single scene object> …".
+   Give the mascot a DIFFERENT full-body pose in EVERY scene — no two scenes may share the
+   same pose verb (e.g. stepping back from / kneeling beside / crouching under / leaning
+   against / sitting in front of / reaching up toward / standing before), and vary what its
+   arms and hands do. Every scene "standing before … bracing its body" draws the same picture five times.
    Do NOT describe the mascot in a separate sentence ("Masi is the protagonist, 40% of frame").
    Subject position is what makes the model draw it large and centred; a separate
    descriptive sentence makes it a corner sticker. This is the single most important rule.
@@ -535,18 +539,23 @@ async function main() {
    * 매일 도는 파이프라인을 멈춰 세우면, 다음 사람이 게이트를 끄는 쪽을 택하게 된다.
    * 남은 위반은 Board 승인 화면에서 사람이 본다.
    */
-  let parsed, engineUsed, scenes, qualityIssues = [];
+  // 재작성에는 직전 응답을 함께 준다. 위반 목록만 주면 모델이 처음부터 다시 써서, 고친 컷 대신
+  // 다른 컷이 걸린다 — 2026-10-06 EP-2026-0212 는 Phase 5 재생성에서 003 이 그대로 남고 005 가 새로 걸려 멈췄다.
+  let parsed, engineUsed, scenes, qualityIssues = [], promptBlocks = [], previous = '';
   for (let attempt = 1; attempt <= 2; attempt++) {
     const prompt = attempt === 1
       ? userPrompt
       : [userPrompt, '', '## 재작성 지시 — 직전 응답이 RULE 4-CONTRACT 를 위반했다',
-         ...qualityIssues.map((i) => `- ${i.message}\n  → ${i.suggestion}`), '',
+         ...qualityIssues.map((i) => `- ${i.message}\n  → ${i.suggestion}`),
+         ...promptBlocks.map((v) => `- 씬 ${v.sceneId} image_prompt [${v.code}] ${v.message}`), '',
+         '## 직전 응답 — 이것을 고쳐 JSON 하나로 다시 내라', previous, '',
          '지적된 것만 고치고 나머지 계약(씬 수·target_seconds 합·image_prompt·TTS 한글 수사)은 그대로 지켜라.',
          '수치를 덜어낸 자리는 비우지 말고, 오늘 이 뉴스에서만 할 수 있는 인과·함의로 채워라. 분량은 유지한다.',
         ].join('\n');
 
     const got = await runEngineChain(chain, buildRunners(prompt));
     engineUsed = got.engineUsed;
+    previous = got.json;
 
     try {
       parsed = JSON.parse(got.json);
@@ -564,9 +573,15 @@ async function main() {
 
     qualityIssues = validateScript(scenes);
     qualityIssues.forEach((i) => console.error(`   ${formatIssue(i)}`));
+    // 씬별 image_prompt 계약 BLOCK 도 여기서 한 번 되돌린다. 예전에는 Phase 5 게이트만 봐서,
+    // 걸리면 위반 내용을 모르는 재생성 한 번이 전부였다(10-01·10-03·10-06 세 번 멈춤).
+    // 에피소드 단위 상한(캐리커처 씬 수)은 운영자 토큰이 있는 게이트에 맡긴다.
+    promptBlocks = checkEpisodePrompts(scenes.map((s, i) => ({ sceneId: String(s.scene_id ?? i + 1), prompt: s.image_prompt })))
+      .violations.filter((v) => v.severity === 'BLOCK' && v.sceneId);
+    promptBlocks.forEach((v) => console.error(`   ⛔ [${v.code}] ${v.sceneId} image_prompt`));
     // error 는 게이트, rewrite 는 '막지는 않되 한 번 되돌린다'. 후자가 없던 동안
     // no-mechanism(사실 나열) 경고가 매 회차 기록만 되고 그대로 나갔다 (2026-09-05).
-    if (!qualityIssues.some((i) => i.severity === 'error' || i.rewrite)) break;
+    if (!qualityIssues.some((i) => i.severity === 'error' || i.rewrite) && !promptBlocks.length) break;
 
     if (attempt === 2) {
       // 2026-09-21 운영자 지시: 「3% 를 넘지 못하면 지수를 주제로 잡지 못하게 하라」.

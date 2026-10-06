@@ -42,7 +42,11 @@ export const THEME_GRADE = {
   geopolitics: 'C', crypto: 'C', realestate: 'C', metals: 'C',
 };
 
-export const GRADE_TARGET = { A: 4, B: 3, C: 2, R: 6 };
+// 2026-10-01 상향 (A 4→10 · B 3→6 · C 2→4 · R 6→10). 처음 값은 「생성이 막힌 날 폴백」용
+// 최소 재고였다. 「미국 증시 요약」(config/market-summary.json)은 라이브러리를 **먼저** 쓰고
+// 맞는 컷이 없을 때만 굽는다 — 하루 마시 컷 6장 × 쿨다운 30일이면 자주 쓰는 슬롯은 한 달에
+// 열 번 가까이 불린다. 옛 목표로는 rates/up(5)·energy/up(3)·labor(3) 같은 칸이 며칠 만에 마른다.
+export const GRADE_TARGET = { A: 10, B: 6, C: 4, R: 10 };
 
 /** 팔레트 → 방향. cta 는 주제 슬롯이 아니라 역할 슬롯으로 간다. */
 export const PALETTE_DIRECTION = {
@@ -221,7 +225,11 @@ const MODIFIERS = new Set([
 ]);
 
 export function normalizeObject(prompt) {
+  // 자세가 "standing before" 하나뿐이던 때의 패턴이 먼저다. 씬마다 자세를 바꾸면서
+  // (kneeling beside / crouching under …, 2026-09-30) 전치사가 달라져도 오브젝트를 잃지 않게
+  // 계약 필수 문구 "a single … in the centre" 로도 잡는다.
   const m = String(prompt).match(/before (?:a|an|the) ([^,.]{3,70}?) in the (?:centre|center)/i)
+    || String(prompt).match(/\ba single ([^,.]{3,70}?) in the (?:centre|center)/i)
     || String(prompt).match(/before (?:a|an|the) ([^,.]{3,70})/i);
   if (!m) return null;
   const words = m[1].toLowerCase().match(/[a-z-]+/g) || [];

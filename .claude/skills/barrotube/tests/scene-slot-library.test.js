@@ -45,7 +45,7 @@ test('슬롯은 11주제 × 3방향 + 역할 1 = 34개이고 목표 합이 102�
   // hook 은 역할 슬롯이 아니다 — hook 씬은 그 회차 주제로 열리므로 주제 슬롯에 속한다.
   // 유령 슬롯을 남기면 체크리스트가 영구히 "비어 있음"을 표시해 신호가 죽는다.
   assert.ok(!slots.includes('hook/generic'));
-  assert.equal(slots.reduce((a, s) => a + slotTarget(s), 0), 102);
+  assert.equal(slots.reduce((a, s) => a + slotTarget(s), 0), 220);
 });
 
 test('주제는 프롬프트가 아니라 한국어 대사로 판정한다', () => {
@@ -149,13 +149,13 @@ test('라이브러리는 자산을 복사하지 않고 원위치를 참조한다
 
 test('gap 과 target 이 등급에서 일관되게 나온다', () => {
   assert.equal(slotGrade('index/up'), 'A');
-  assert.equal(slotTarget('index/up'), 4);
+  assert.equal(slotTarget('index/up'), 10);
   assert.equal(slotGrade('energy/down'), 'B');
-  assert.equal(slotTarget('energy/down'), 3);
+  assert.equal(slotTarget('energy/down'), 6);
   assert.equal(slotGrade('metals/up'), 'C');
-  assert.equal(slotTarget('metals/up'), 2);
+  assert.equal(slotTarget('metals/up'), 4);
   assert.equal(slotGrade('cta/generic'), 'R');
-  assert.equal(slotTarget('cta/generic'), 6);
+  assert.equal(slotTarget('cta/generic'), 10);
   for (const t of Object.keys(THEME_TERMS)) assert.ok(THEME_GRADE[t], `${t} 등급 없음`);
 });
 
@@ -183,15 +183,24 @@ test('옵시디언 렌더는 생성 표시를 달고 notes.md 를 소유하지 �
   assert.match(src, /if \(!existsSync\(notes\)\)/, 'notes.md 를 조건 없이 덮어쓴다');
 
   const { renderChecklist, renderGaps } = await import('../scripts/automation/sync-asset-obsidian.js');
-  // index/down 목표는 4다 — 체크가 켜지려면 4컷이 있어야 한다.
-  const filled = ['001', '002', '003', '004'].map((sceneId) =>
+  // 체크가 켜지려면 index/down 목표(slotTarget)만큼 컷이 있어야 한다.
+  const need = slotTarget('index/down');
+  const filled = Array.from({ length: need }, (_, i) => String(i + 1).padStart(3, '0')).map((sceneId) =>
     entry({ sceneId, text: '코스피가 내렸습니다', object: `single object ${sceneId}` }));
   const lib = buildLibrary(filled, { now: 'T', probeClip: () => false });
-  assert.equal(lib.slots['index/down'].count, 4);
+  assert.equal(lib.slots['index/down'].count, need);
 
   const md = renderChecklist(lib);
   assert.match(md, /^<!-- 자동 생성/);
   assert.match(md, /- \[x\] `index\/down`/);   // 목표 충족 → 체크
   assert.match(md, /- \[ \] `metals\/up`/);    // 비어 있는 슬롯 → 해제
   assert.match(renderGaps(lib), /\| 슬롯 \| 등급 \|/);
+});
+
+test('자세가 바뀌어도(전치사가 before 가 아니어도) 오브젝트를 잃지 않는다', () => {
+  // 2026-09-30: 씬마다 자세를 바꾸면서 "kneeling beside a single …" 이 생겼다.
+  // before 만 보던 추출이 null 을 주면 장면 재사용 매칭이 조용히 빠진다.
+  assert.equal(normalizeObject('mascot, calm, kneeling beside a single oversized balance scale in the centre, face readable'), 'scale');
+  assert.equal(normalizeObject('mascot, calm, crouching low under a single heavy anchor in the centre, face readable'), 'anchor');
+  assert.equal(normalizeObject('mascot, calm, standing before a single rusty anchor in the centre, face readable'), 'anchor', '기존 형태는 그대로');
 });

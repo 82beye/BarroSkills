@@ -7,7 +7,7 @@ const ROOT = join(import.meta.dirname, '..');
 
 import {
   BOUNDS, CANONICAL_TAIL, TEMPLATE, KNOWN_PALETTES, MASCOT_CLAUSE, CARICATURE,
-  checkImagePrompt, checkEpisodePrompts, profile,
+  checkImagePrompt, checkEpisodePrompts, profile, poseOf, poseRepeat,
 } from '../scripts/automation/lib/image-prompt-contract.js';
 
 // 계약은 EP-2026-0069(발행본) vs EP-2026-0070(구석 스티커)의 A/B 에서 역산했다.
@@ -65,6 +65,17 @@ test('마스코트 절이 있어도 씬 동사가 없으면 주어가 아니다'
   const p = `[palette:cta] ${MASCOT_FULL}, calm. A giant fork splits into two glowing paths. ` +
     `BACKGROUND: deep navy horizon, orange-gold halo, low-contrast textures, ${CANONICAL_TAIL}`;
   assert.ok(codes(checkImagePrompt(p)).has('MASCOT_NOT_SUBJECT'));
+});
+
+test('템플릿이 권하는 자세는 모두 씬 동작의 주어로 인정된다', () => {
+  // 2026-10-06 EP-2026-0212: 템플릿 예시 그대로 "crouching under" 를 쓴 컷이 MASCOT_NOT_SUBJECT
+  // 로 막혔다. 예시와 판정 동사 목록이 갈라지면 템플릿을 따를수록 걸린다.
+  const poses = TEMPLATE.match(/e\.g\. ([^>]+)>/)[1].split('/').map(s => s.trim());
+  assert.ok(poses.length >= 5, '템플릿의 자세 예시를 찾지 못했다');
+  for (const pose of poses) {
+    const p = GOOD.replace('standing before', pose);
+    assert.ok(!codes(checkImagePrompt(p)).has('MASCOT_NOT_SUBJECT'), `"${pose}" 가 주어로 인정되지 않는다`);
+  }
 });
 
 test('고정 꼬리의 "no readable text or numbers" 는 금지어로 세지 않는다', () => {
@@ -215,4 +226,36 @@ test('작성 규칙과 검증 계약이 캐리커처 형식에서 어긋나지 �
   // 계약이 실제로 그 형식만 캐리커처로 인정하는지 — 양쪽이 같은 문자열을 본다.
   assert.match(CARICATURE.clauseRe.source, /WITH:/,
     '계약의 캐리커처 정규식과 작성 규칙의 형식이 같아야 한다');
+});
+
+// 2026-09-30 운영자 지적: EP-2026-0191~0197 35컷이 전부 "standing before … bracing its body".
+// 템플릿이 자세 자리를 고정 문구로 줘서 작성기가 매 씬 그대로 베꼈다.
+const posed = (pose) => `[palette:bearish] ${MASCOT_CLAUSE}, shocked, ${pose} a single cracked golden bar ` +
+  'in the centre, face readable, raising both white mitten hands, the unified bar splitting in two. ' +
+  `BACKGROUND: deep navy abstract trading floor, red glow on the floor, soft grain at low contrast, ${CANONICAL_TAIL}`;
+
+test('자세는 "a single" 앞 구절의 -ing 동사로 읽는다', () => {
+  assert.equal(poseOf(posed('standing before')), 'standing');
+  assert.equal(poseOf(posed('stepping back from')), 'stepping');
+  assert.equal(poseOf(posed('crouching low under')), 'crouching');
+  assert.equal(poseOf('flat vector cel shading, bold outline'), null, '스테이징 문구가 없으면 판단하지 않는다');
+});
+
+test('한 편의 자세가 절반 넘게 같으면 POSE_REPEAT 경고 — 막지는 않는다', () => {
+  const same = ['standing before', 'standing before', 'standing before', 'kneeling beside', 'leaning against'];
+  const r = checkEpisodePrompts(same.map((pose, i) => ({ sceneId: String(i + 1).padStart(3, '0'), prompt: posed(pose) })));
+  const v = r.violations.find((x) => x.code === 'POSE_REPEAT');
+  assert.ok(v, '5컷 중 3컷이 같은 자세면 기록해야 한다');
+  assert.equal(v.severity, 'WARN');
+  assert.equal(r.ok, true, 'WARN 은 Phase 5 재생성을 부르지 않는다');
+
+  const varied = ['stepping back from', 'kneeling beside', 'crouching under', 'leaning against', 'sitting in front of'];
+  assert.equal(poseRepeat(varied.map(posed)).repeated, false);
+  assert.equal(poseRepeat([posed('standing before'), posed('standing before')]).repeated, false, '3컷 미만은 판단하지 않는다');
+});
+
+test('템플릿은 자세를 고정하지 않고 씬마다 다르게 요구한다', () => {
+  assert.match(TEMPLATE, /DIFFERENT in every/);
+  assert.doesNotMatch(TEMPLATE, /bracing its body/, '고정 자세 문구가 돌아오면 모든 컷이 같은 포즈가 된다');
+  assert.match(TEMPLATE, /a single <adjective> <scene object> in the centre, face readable/, '스테이징 문구는 그대로다');
 });

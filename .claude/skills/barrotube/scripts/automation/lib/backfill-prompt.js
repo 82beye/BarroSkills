@@ -74,6 +74,10 @@ export const THEME_SCENES = {
       { noun: 'faucet', adj: 'wide', hand: 'grips the faucet handle' },
       { noun: 'turnstile', adj: 'tall', hand: 'pushes one arm of the turnstile' },
       { noun: 'escalator', adj: 'towering', hand: 'rests on the escalator rail' },
+      // 2026-10-01 목표 상향(GRADE_TARGET A 10)으로 rates/up 부족분이 5컷이 돼 객체가 모자랐다.
+      { noun: 'seesaw', adj: 'long', hand: 'presses down one end of the seesaw' },
+      { noun: 'spring', adj: 'giant', hand: 'compresses the coiled spring' },
+      { noun: 'pump', adj: 'tall', hand: 'pushes the pump handle' },
     ],
   },
   energy: {
@@ -86,6 +90,9 @@ export const THEME_SCENES = {
       { noun: 'pipeline', adj: 'thick', hand: 'taps the pipeline joint' },
       { noun: 'jerrycan', adj: 'tall', hand: 'lifts the jerrycan by its handle' },
       { noun: 'flare', adj: 'tall', hand: 'reaches toward the flare tip' },
+      { noun: 'barrel', adj: 'giant', hand: 'rolls the barrel forward' },
+      { noun: 'valve', adj: 'wide', hand: 'turns the valve wheel' },
+      { noun: 'tanker', adj: 'long', hand: 'taps the tanker hull' },
     ],
   },
   fx: {
@@ -98,6 +105,9 @@ export const THEME_SCENES = {
       { noun: 'pulley', adj: 'tall', hand: 'pulls the pulley cord' },
       { noun: 'kiosk', adj: 'wide', hand: 'leans on the kiosk shutter' },
       { noun: 'conveyor', adj: 'wide', hand: 'sets one note on the conveyor' },
+      { noun: 'compass', adj: 'giant', hand: 'turns the compass needle' },
+      { noun: 'tollgate', adj: 'wide', hand: 'lifts the tollgate arm' },
+      { noun: 'balloon', adj: 'giant', hand: 'holds the balloon string' },
     ],
   },
   earnings: {
@@ -110,6 +120,9 @@ export const THEME_SCENES = {
       { noun: 'trophy', adj: 'tall', hand: 'lifts the trophy by one handle' },
       { noun: 'jar', adj: 'wide', hand: 'tips the jar forward' },
       { noun: 'envelope', adj: 'wide', hand: 'holds the sealed envelope up' },
+      { noun: 'piggybank', adj: 'giant', hand: 'pats the piggybank' },
+      { noun: 'cashbox', adj: 'wide', hand: 'lifts the cashbox lid' },
+      { noun: 'basket', adj: 'wide', hand: 'sets one coin in the basket' },
     ],
   },
   labor: {
@@ -122,6 +135,9 @@ export const THEME_SCENES = {
       { noun: 'hourglass', adj: 'tall', hand: 'tilts the hourglass' },
       { noun: 'ladder', adj: 'towering', hand: 'grips one rung of the ladder' },
       { noun: 'lunchbox', adj: 'wide', hand: 'snaps the lunchbox shut' },
+      { noun: 'wheelbarrow', adj: 'wide', hand: 'pushes the wheelbarrow handles' },
+      { noun: 'wrench', adj: 'giant', hand: 'turns the wrench' },
+      { noun: 'stopwatch', adj: 'giant', hand: 'presses the stopwatch button' },
     ],
   },
   metals: {
@@ -134,6 +150,9 @@ export const THEME_SCENES = {
       { noun: 'anvil', adj: 'thick', hand: 'taps the anvil face' },
       { noun: 'nugget', adj: 'wide', hand: 'holds the nugget up' },
       { noun: 'coil', adj: 'thick', hand: 'unrolls one turn of the coil' },
+      { noun: 'minecart', adj: 'wide', hand: 'pushes the minecart' },
+      { noun: 'pickaxe', adj: 'giant', hand: 'grips the pickaxe handle' },
+      { noun: 'forge', adj: 'wide', hand: 'pumps the forge bellows' },
     ],
   },
   index: {
@@ -170,6 +189,9 @@ export const THEME_SCENES = {
       { noun: 'padlock', adj: 'thick', hand: 'turns the padlock shackle' },
       { noun: 'handshake', adj: 'wide', hand: 'reaches toward the handshake sculpture' },
       { noun: 'crate', adj: 'thick', hand: 'pushes the stamped crate' },
+      { noun: 'globe', adj: 'giant', hand: 'spins the globe' },
+      { noun: 'gate', adj: 'tall', hand: 'pulls one side of the gate' },
+      { noun: 'anchor', adj: 'heavy', hand: 'lifts the anchor chain' },
     ],
   },
   crypto: {
@@ -182,6 +204,9 @@ export const THEME_SCENES = {
       { noun: 'cable', adj: 'thick', hand: 'plugs in the cable' },
       { noun: 'lantern', adj: 'tall', hand: 'lifts the lantern' },
       { noun: 'domino', adj: 'tall', hand: 'holds back one domino' },
+      { noun: 'beacon', adj: 'tall', hand: 'switches on the beacon' },
+      { noun: 'satellite', adj: 'wide', hand: 'aims the satellite dish' },
+      { noun: 'circuit', adj: 'wide', hand: 'traces the glowing circuit' },
     ],
   },
   realestate: {

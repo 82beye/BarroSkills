@@ -85,14 +85,45 @@ export const MASCOT_CLAUSE =
  * 이 문구가 하나도 없던 EP-2026-0092 는 마시가 정장을 입고 화면 30% 로 줄고 배경이
  * 회화풍으로 채워졌다(2026-08-14 실측). 마스코트에게 신체 동작을 주지 않으면
  * 모델이 그를 배치 대상이 아니라 나중에 얹는 장식으로 처리한다.
+ *
+ * 자세 자리는 씬마다 달라야 한다. 예전 템플릿은 "standing before … planting its rounded
+ * shoe-feet / bracing its body while one white mitten hand …" 를 그대로 줘서, 작성기가
+ * 매 씬 그 자세를 베꼈다 — EP-2026-0191~0197 일곱 편 35컷이 전부 같은 포즈였다(2026-09-30 운영자 지적).
  */
 export const TEMPLATE =
-  '[palette:<tag>] <MASCOT_CLAUSE>, <emotion>, standing before a single <adjective> ' +
-  '<scene object> in the centre, face readable, <mascot body action — planting its ' +
-  'rounded shoe-feet / bracing its body> while one white mitten hand <acts on the object>, ' +
+  '[palette:<tag>] <MASCOT_CLAUSE>, <emotion>, <full-body pose and position, DIFFERENT in every ' +
+  'scene — e.g. standing before / kneeling beside / crouching under / leaning against / sitting in ' +
+  'front of / stepping back from / reaching up toward> a single <adjective> <scene object> in the ' +
+  'centre, face readable, <what its arms and white mitten hands do — both hands raised, a hand on ' +
+  'its chin, arms folded, pushing with both hands, pointing>, ' +
   'the unified <scene object> <state that carries the scene meaning>. ' +
   'BACKGROUND: deep navy abstract <place>, <accent> on <element>, <texture> at low contrast, ' +
   CANONICAL_TAIL;
+
+/**
+ * 프롬프트 한 컷의 마스코트 자세 — "a single" 바로 앞 구절의 -ing 동사.
+ * "…, shocked, stepping back from a single …" → "stepping". 못 찾으면 null.
+ */
+export function poseOf(prompt) {
+  const parts = String(prompt).split(/\ba single\b/i);
+  if (parts.length < 2) return null;   // 스테이징 문구가 없으면 계약이 따로 잡는다
+  const head = parts[0];
+  const phrase = head.slice(head.lastIndexOf(',') + 1);
+  const m = phrase.match(/\b([a-z]+ing)\b/i);
+  return m ? m[1].toLowerCase() : null;
+}
+
+/**
+ * 한 편의 자세 분포. 가장 흔한 자세가 컷의 절반을 넘으면 repeated.
+ * 3컷 미만은 판단하지 않는다.
+ */
+export function poseRepeat(prompts) {
+  const poses = prompts.map(poseOf);
+  const counts = {};
+  for (const p of poses) if (p) counts[p] = (counts[p] || 0) + 1;
+  const [pose = null, count = 0] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0] || [];
+  return { poses, pose, count, total: prompts.length, repeated: prompts.length >= 3 && count > prompts.length / 2 };
+}
 
 /**
  * 발행본이 100% 갖고 있던 스테이징 문구. 하나라도 빠지면 마스코트가 구석으로 밀린다.
@@ -109,7 +140,10 @@ export const STAGING_PHRASES = [
  * 0070 은 마스코트를 서술 대상으로만 두어("Masi is the dominant protagonist, 36-40% of frame height")
  * 모델이 배치 대상이 아니라 나중에 얹는 장식으로 처리했다.
  */
-const SCENE_VERBS = /\b(standing|sitting|walking|running|facing|holding|gripping|pointing|pushing|pulling|reaching|leaning|bracing|kneeling|climbing|balancing|carrying|presenting|watching|looking|stepping|raising|lifting|hugging|floating)\b/i;
+// TEMPLATE 의 자세 예시는 전부 여기 있어야 한다. 2026-09-30 에 예시를 늘리면서 crouching 이
+// 빠져, 템플릿대로 "crouching under" 를 쓴 컷이 MASCOT_NOT_SUBJECT 로 막혔다 — 재생성도 같은
+// 자세를 다시 골라 2026-10-06 us-close(EP-2026-0212)가 멈췄다(전체 1,104컷 중 crouching 9컷·3컷 차단).
+const SCENE_VERBS = /\b(standing|sitting|walking|running|facing|holding|gripping|pointing|pushing|pulling|reaching|leaning|bracing|kneeling|crouching|climbing|balancing|carrying|presenting|watching|looking|stepping|raising|lifting|hugging|floating)\b/i;
 
 /** 캐릭터 시트에 없는 의상. DNA 허용은 "기본 무착장" 또는 "네이비 정장+타이" 둘뿐이다. */
 const OFF_SHEET_WARDROBE = /\b(waistcoat|vest|hoodie|hood|zip-?up|jacket|blazer|coat|parka|pouch|backpack|crossbody|scarf|cape|apron|uniform|helmet)\b/i;
@@ -281,6 +315,17 @@ export function checkEpisodePrompts(scenes, opts = {}) {
       code: 'WARDROBE_OVERUSE', severity: WARN,
       message: `의상 지정이 ${wardrobe}컷 (허용 ${BOUNDS.maxWardrobeScenes}컷). ` +
         '한 편 안에서 갈아입으면 캐릭터 연속성이 깨집니다.',
+    });
+  }
+
+  // 씬마다 같은 자세면 같은 그림이 다섯 번 나온다 (2026-09-30 운영자 지적). 막지는 않는다 —
+  // 작성 단계(generate-script)가 pose-repeat 로 한 번 되돌리고, 여기서는 기록으로 남긴다.
+  const pose = poseRepeat(scenes.map((s) => s.prompt || ''));
+  if (pose.repeated) {
+    violations.push({
+      code: 'POSE_REPEAT', severity: WARN,
+      message: `마시 자세가 ${pose.total}컷 중 ${pose.count}컷에서 같습니다 ("${pose.pose}") — ` +
+        '씬마다 다른 전신 자세로 바꾸세요.',
     });
   }
 
