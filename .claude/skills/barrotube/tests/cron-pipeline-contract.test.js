@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { resolveContentMode } from '../scripts/automation/fetch-market-snapshot.js';
-import { parseFactcheckFindings } from '../scripts/automation/revise-script-factcheck.js';
+import { introducedErrors, numberGrowth, parseFactcheckFindings, sceneNumberCap, suggestionAllowance } from '../scripts/automation/revise-script-factcheck.js';
+import { summaryDataText } from '../scripts/automation/run-factcheck.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const AUTO = join(ROOT, 'lib', 'auto-pipeline.sh');
@@ -143,6 +144,129 @@ test('factcheck findings drive a rewrite loop before a human is paged', () => {
   // 고칠 대상이 없어 루프가 상한까지 헛돈다.
   const reviser = readFileSync(join(ROOT, 'scripts', 'automation', 'revise-script-factcheck.js'), 'utf8');
   assert.match(reviser, /FIXABLE_VERDICTS = \['부정확', '미확인'\]/);
+});
+
+test('팩트체크 재작성은 원래 대본의 위반이 아니라 수정이 새로 만든 위반만 막는다', () => {
+  // 2026-09-29 EP-2026-0195: Phase 4 가 기록만 하고 넘긴 씬 002 의 수치 초과 때문에
+  // 씬 003·004 수정본이 매번 버려져 kr-close 가 Phase 6 에서 멈췄다. 이 단계는 지적된 씬만
+  // 고칠 수 있으니, 씬 002 위반으로 막으면 몇 번을 돌아도 같은 이유로 실패한다.
+  const mk = (id, role, narration) => ({ scene_id: id, role, narration, target_seconds: 12 });
+  const original = [
+    mk('001', 'hook', '유가가 오르자 금리가 먼저 움직였습니다. 그래서 외국인이 팔았습니다.'),
+    mk('002', 'context', '미국 십 년 금리는 오점이 퍼센트, 이천칠 년 이후 가장 높습니다.'),
+    mk('003', 'insight', '전쟁 날에도 금값은 제자리였습니다.'),
+  ];
+  const fixed = original.map((s) => (s.scene_id === '003'
+    ? { ...s, narration: '금리가 오르면 이자 없는 금의 매력이 줄어듭니다. 그래서 금은 제자리였습니다.' } : s));
+  assert.deepEqual(introducedErrors(original, fixed), [], '씬 002 의 기존 위반은 수정본 탓이 아니다');
+
+  const worse = original.map((s) => (s.scene_id === '003'
+    ? { ...s, narration: '금은 삼 퍼센트, 은은 육 퍼센트, 구리는 이 퍼센트 움직였습니다.' } : s));
+  assert.deepEqual(introducedErrors(original, worse).map((i) => [i.rule, i.scene_id]),
+    [['spoken-number-budget', '003'], ['spoken-number-total', null]], '수정이 새로 만든 위반은 그대로 막는다');
+});
+
+test('재작성 한 번의 계약 실패로 회차를 접지 않는다 — 남은 재작성 예산으로 다시 돈다', () => {
+  // 2026-10-07 EP-2026-0214: 재작성 1/3 이 수치 초과로 실패하자 「Phase 6 재작성」 halt 로 곧장
+  // 사람을 불러 08:00 편이 빠졌다. 상한(FC_MAX_REWRITES)에 닿기 전엔 멈추지 않아야 한다.
+  const source = readFileSync(AUTO, 'utf8');
+  assert.doesNotMatch(source, /halt_for_human "Phase 6 재작성"/, '재작성 실패가 단독 halt 경로여서는 안 된다');
+  const loopStart = source.indexOf('while factcheck_gate_blocks; do');
+  const loopEnd = source.indexOf('\n  done', loopStart);
+  const revise = source.indexOf('if ! node scripts/automation/revise-script-factcheck.js', loopStart);
+  assert.ok(revise > loopStart && revise < loopEnd, '재작성 호출은 루프 안에서 실패를 받아야 한다');
+  assert.match(source.slice(revise, loopEnd), /auto_pipeline_factcheck_rewrite_rejected[\s\S]{0,90}\n\s*continue/);
+});
+
+test('접지 재시도는 같은 엔진을 반복하지 않는다 — 재실행마다 엔진 순서를 돌린다', () => {
+  // 2026-09-26 EP-2026-0186: claude 가 URL 대신 출처명을 내 미접지 → 같은 claude 로 두 번 재실행 → 재작성 예산 소진.
+  const source = readFileSync(AUTO, 'utf8');
+  const fn = source.slice(source.indexOf('fc_rotate() {'), source.indexOf('\n}', source.indexOf('fc_rotate() {')) + 2);
+  const run = (n) => spawnSync('/bin/bash', ['-c', `${fn}\nfc_rotate "claude,gemini,codex" ${n}`], { encoding: 'utf8' }).stdout.trim();
+  assert.deepEqual([0, 1, 2, 3].map(run), ['claude,gemini,codex', 'gemini,codex,claude', 'codex,claude,gemini', 'claude,gemini,codex']);
+  const reground = source.slice(source.indexOf('auto_pipeline_factcheck_reground'), source.indexOf('continue', source.indexOf('auto_pipeline_factcheck_reground')));
+  assert.match(reground, /FC_CHAIN="\$\(fc_rotate "\$\{BT_FACTCHECK_ENGINE_CHAIN:-claude,gemini,codex\}" "\$FC_REGROUNDS"\)"/);
+  assert.match(reground, /BT_FACTCHECK_ENGINE_CHAIN="\$FC_CHAIN" node scripts\/automation\/run-factcheck\.js/);
+});
+
+test('재개는 실패한 팩트체크 리포트를 캐시로 다시 쓰지 않는다', () => {
+  // run-factcheck 는 --force 가 없으면 있는 리포트(pass:false 포함)를 그대로 돌려준다.
+  // 2026-10-07 EP-2026-0214: 검사기를 고친 뒤 재개해도 옛 HIGH 판정이 게이트에 다시 걸릴 뻔했다.
+  const source = readFileSync(AUTO, 'utf8');
+  const keep = source.indexOf("RESUME: 기존 PASS 팩트체크 유지");
+  const call = source.indexOf('run-factcheck.js "${FC_ARGS[@]}"', keep);
+  assert.ok(keep > 0 && call > keep, 'PASS 가 아닌 재개 경로에서 팩트체크를 다시 불러야 한다');
+  assert.match(source.slice(keep, call), /if \[ -n "\$RESUME_EP" \] && \[ -s "\$FACTCHECK_PATH" \]; then FC_ARGS\+=\(--force\); fi/);
+});
+
+test('재작성은 말한 수치를 늘리지 못한다 — 미확인을 새 수치로 「보강」한 수정본은 버린다', () => {
+  // 2026-10-07 EP-2026-0214 씬 006: 미확인 유가 문장을 고치라 했더니 검색한 숫자를 보태 5개 → 10개.
+  const sc = (id, narration, extra = {}) => ({ scene_id: id, role: 'context', target_seconds: 18, narration, ...extra });
+  const before = [sc('006', '유가는 팔십구점 구사 달러로 올랐고, 금은 사천백구십일 달러로 영점 팔삼 퍼센트 올랐습니다. 비트코인은 내렸습니다.')];
+  const trimmed = [sc('006', '금은 사천백구십일 달러로 영점 팔삼 퍼센트 올랐습니다. 비트코인은 내렸습니다.')];
+  const padded = [sc('006', '유가는 팔십구점 구사 달러, 브렌트는 구십삼점 일 달러로 올랐고, 금은 사천백구십일 달러로 영점 팔삼 퍼센트, 은은 일점 이 퍼센트 올랐습니다.')];
+  assert.deepEqual(numberGrowth(before, trimmed, ['006']), [], '수치를 빼는 수정은 통과');
+  const grown = numberGrowth(before, padded, ['006']);
+  assert.equal(grown.length, 1);
+  assert.ok(grown[0].after > grown[0].before, `늘어난 수치를 잡아야 한다: ${JSON.stringify(grown)}`);
+
+  // 아라비아 숫자를 한글 수사로 고친 것은 늘어난 게 아니다.
+  const digits = [sc('006', '금은 4,191달러로 0.83% 올랐습니다.')];
+  const spoken = [sc('006', '금은 사천백구십일 달러로 영점 팔삼 퍼센트 올랐습니다.')];
+  assert.deepEqual(numberGrowth(digits, spoken, ['006']), []);
+  // 팩트체커가 수정 제안에 적어 준 수치만큼은 늘어도 된다 — 그 수치는 검증된 것이다.
+  const vague = [sc('004', '델이 크게 올랐습니다.')];
+  const fixedDell = [sc('004', '델은 삼점 구삼 퍼센트 올랐습니다.')];
+  const allow = suggestionAllowance([{ scene_id: '004', suggestion: '델은 삼점 구삼 퍼센트 올랐습니다.' }]);
+  assert.deepEqual(numberGrowth(vague, fixedDell, ['004'], allow), []);
+  assert.equal(numberGrowth(vague, fixedDell, ['004']).length, 1, '제안 없이 보탠 수치는 막는다');
+
+  // 씬 헤더의 상한은 검증기와 같은 기준이어야 한다 — 요약 포맷(card 씬)은 6, 일반은 2~3.
+  const summary = [sc('001', '지수', { card: { kind: 'indices' } }), sc('006', '거시')];
+  assert.equal(sceneNumberCap(summary, summary[1]), 6);
+  assert.equal(sceneNumberCap(before, before[0]), 2);
+});
+
+test('요약 포맷 팩트체크는 대본이 숫자를 가져온 summary-us.json 을 함께 받는다', () => {
+  // 2026-10-07 EP-2026-0214: 업종 평균(리테일 1.96%)·종목 사유(미즈호 650달러)는 이 파일에만 있었는데
+  // 프롬프트에 없어 HIGH 미확인 6건 → 재작성 → halt. 일반 포맷은 리서치에 숫자가 있으므로 그대로 둔다.
+  const root = mkdtempSync(join(tmpdir(), 'bt-fc-snap-'));
+  try {
+    const ep = join(root, 'workspace', 'episodes', 'EP-2026-9999');
+    const day = join(root, 'workspace', 'daily-news', '2026-10-07');
+    mkdirSync(ep, { recursive: true });
+    mkdirSync(day, { recursive: true });
+    writeFileSync(join(day, 'summary-us.json'), JSON.stringify({
+      date: '2026-10-07', us_session: '2026-10-06', indices: [], macro: [{ name: 'WTI 유가', value: '$89.94', pct: 0.57 }],
+      sectors: [{ sec: '리테일', pct: 1.9582230740984459 }], movers: { up: [], down: [] },
+      reasons: { DELL: { why: '미즈호 목표주가 650달러로 상향', url: 'https://example.com/dell' } },
+      stocks: [{ t: 'DELL', name: '델', sec: '하드웨어', price: 574, pct: 3.9309058646725523 }],
+      after_hours: [], calendar: [],
+    }));
+    const text = summaryDataText({ form: 'market-summary', summary_date: '2026-10-07' }, ep);
+    const d = JSON.parse(text);
+    assert.equal(d.sectors[0].pct, 1.96, '업종 평균은 대본이 말하는 자릿수로 반올림');
+    assert.equal(d.stocks[0].pct, 3.93);
+    assert.match(text, /미즈호 목표주가 650달러/);
+    assert.match(text, /\$89\.94/);
+    assert.equal(summaryDataText({ form: 'shorts', summary_date: '2026-10-07' }, ep), '', '요약 포맷이 아니면 붙이지 않는다');
+    assert.equal(summaryDataText({ form: 'market-summary', summary_date: '2026-01-01' }, ep), '', '파일이 없으면 빈 값');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+  const src = readFileSync(FACTCHECK, 'utf8');
+  assert.match(src, /PIPELINE DATA SNAPSHOT/, '프롬프트에 원자료 블록이 들어가야 한다');
+  assert.match(src, /7a\. EXCEPTION/, '원자료와 맞는 수치는 검색 실패를 이유로 HIGH 가 되면 안 된다');
+});
+
+test('팩트체크는 claude·Gemini 가 함께 막혀도 codex 웹검색으로 넘어간다', () => {
+  // 2026-09-30 us-close(EP-2026-0196): claude 세션 한도 + Gemini 선불 크레딧 소진(402)이 겹쳐
+  // Phase 6 에서 회차가 멈췄다. 대본·메타데이터 체인엔 codex 가 있는데 팩트체크에만 없었다.
+  const src = readFileSync(FACTCHECK, 'utf8');
+  assert.match(src, /BT_FACTCHECK_ENGINE_CHAIN \|\| 'claude,gemini,codex'/, '기본 체인 끝에 codex 가 있어야 한다');
+  assert.match(src, /case 'codex':\s*\n\s*return callCodexFactcheck\(/);
+  // 읽기 전용이어야 모델이 리포트를 직접 써서 게이트를 우회하지 못한다. 검색이 임무라 --search 는 켠다.
+  assert.match(src, /\['-a', 'never', '-s', 'read-only', '--search', 'exec'/);
 });
 
 test('the browser pass pins the logged-in Chrome extension, not the runtime default', () => {

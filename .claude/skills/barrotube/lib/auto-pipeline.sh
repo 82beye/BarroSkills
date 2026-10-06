@@ -624,8 +624,12 @@ FACTCHECK_PATH="${EP_DIR}/platforms/${PLATFORM}/35_factcheck.md"
 if [ -n "$RESUME_EP" ] && [ -s "$FACTCHECK_PATH" ] && grep -q '^pass: true$' "$FACTCHECK_PATH"; then
   echo "⏭  RESUME: 기존 PASS 팩트체크 유지 — $FACTCHECK_PATH"
 else
-  run_or_echo node scripts/automation/run-factcheck.js \
-    --episode "$EP_ID" --platform "$PLATFORM" \
+  # 재개는 실패한 리포트를 다시 쓰지 않는다 — run-factcheck 는 --force 가 없으면 있는 리포트를
+  # 캐시로 돌려준다. 멈춘 뒤 대본이나 검사기를 고쳐 재개해도 옛 판정(HIGH)이 그대로 게이트에
+  # 걸려 같은 자리에서 다시 멈췄다 (2026-10-07 EP-2026-0214 재개 때 손으로 리포트를 치워야 했다).
+  FC_ARGS=(--episode "$EP_ID" --platform "$PLATFORM")
+  if [ -n "$RESUME_EP" ] && [ -s "$FACTCHECK_PATH" ]; then FC_ARGS+=(--force); fi
+  run_or_echo node scripts/automation/run-factcheck.js "${FC_ARGS[@]}" \
     || fail_with_alert "Phase 6 factcheck" "run-factcheck.js 실패"
 fi
 
@@ -700,6 +704,15 @@ fc_snapshot() {
   cp -f "$FACTCHECK_PATH" "${dir}/${tag}.report.md" 2>/dev/null || true
 }
 
+# "a,b,c" 를 n 칸 돌린다 — fc_rotate "claude,gemini,codex" 1 → gemini,codex,claude
+fc_rotate() {
+  local IFS=','
+  local -a c=($1)
+  local n=$(( $2 % ${#c[@]} ))
+  local out="${c[*]:n},${c[*]:0:n}"
+  out="${out%,}"; echo "${out#,}"
+}
+
 fc_restore_best() {
   local dir="${EP_DIR}/platforms/${PLATFORM}/.factcheck-revs"
   [ -d "$dir" ] || return 0
@@ -757,7 +770,12 @@ if [ "$DRY_RUN" = "0" ] && [ -s "$FACTCHECK_PATH" ]; then
       FC_REGROUNDS=$((FC_REGROUNDS + 1))
       echo "   ↻ 접지 실패(grounded=false) — 팩트체크 재실행 ${FC_REGROUNDS}/${FC_MAX_REGROUNDS} (재작성 아님)"
       audit "auto_pipeline_factcheck_reground" "WARN" "slot=$SLOT ep=$EP_ID attempt=$FC_REGROUNDS"
-      node scripts/automation/run-factcheck.js \
+      # 같은 엔진에 다시 물으면 같은 이유(검색 미호출·URL 대신 출처명)로 또 미접지가 된다 — 재실행마다
+      # 엔진 순서를 한 칸씩 돌린다. 2026-09-26 EP-2026-0186 은 claude 로만 두 번 재실행하고 예산을 다 썼다
+      # (소급 분석 growth/incidents/IR-20261007-0723.md). 엔진 하나가 막혀도 run-factcheck 가 다음으로 넘긴다.
+      FC_CHAIN="$(fc_rotate "${BT_FACTCHECK_ENGINE_CHAIN:-claude,gemini,codex}" "$FC_REGROUNDS")"
+      echo "     엔진 순서: ${FC_CHAIN}"
+      BT_FACTCHECK_ENGINE_CHAIN="$FC_CHAIN" node scripts/automation/run-factcheck.js \
         --episode "$EP_ID" --platform "$PLATFORM" --force \
         || fail_with_alert "Phase 6 factcheck" "접지 재시도 중 run-factcheck.js 실패"
       continue
@@ -785,10 +803,15 @@ if [ "$DRY_RUN" = "0" ] && [ -s "$FACTCHECK_PATH" ]; then
     echo "   ↻ 팩트체크 지적 반영 재작성 ${FC_REWRITES}/${FC_MAX_REWRITES}"
     audit "auto_pipeline_factcheck_rewrite" "WARN" "slot=$SLOT ep=$EP_ID attempt=$FC_REWRITES"
 
-    node scripts/automation/revise-script-factcheck.js \
-      --episode "$EP_DIR" --platform "$PLATFORM" \
-      || { fc_restore_best; halt_for_human "Phase 6 재작성" \
-           "MED 부정확 또는 미접지(grounded=false) 주장을 대본에 반영하지 못했습니다. 대본을 손보고 재개하세요."; }
+    # 재작성 한 번이 계약을 못 맞췄다고 회차를 접지 않는다 — 대본은 그대로 두고 남은 재작성
+    # 예산으로 다시 시도한다(새 표본). 예산을 다 쓰면 위 상한 분기가 가장 나은 판본으로 멈춘다.
+    # 2026-10-07 EP-2026-0214: 재작성 1/3 이 수치 초과로 실패하자 곧장 사람을 불러 08:00 편이 빠졌다.
+    if ! node scripts/automation/revise-script-factcheck.js \
+         --episode "$EP_DIR" --platform "$PLATFORM"; then
+      echo "   ⚠ 재작성 ${FC_REWRITES}/${FC_MAX_REWRITES} 이 계약을 못 맞췄다 — 대본 유지, 남은 예산으로 다시"
+      audit "auto_pipeline_factcheck_rewrite_rejected" "WARN" "slot=$SLOT ep=$EP_ID attempt=$FC_REWRITES"
+      continue
+    fi
 
     node scripts/automation/run-factcheck.js \
       --episode "$EP_ID" --platform "$PLATFORM" --force \

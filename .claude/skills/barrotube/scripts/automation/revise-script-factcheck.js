@@ -33,10 +33,65 @@ import { parse as parseYAML, stringify as stringifyYAML } from 'yaml';
 
 import { resolvePaths } from './paths.js';
 import { callClaudeCode, callCodex, resolveChain, runEngineChain } from './lib/text-engine.js';
-import { validateScript, formatIssue, spokenNumberCap } from './lib/script-quality-contract.js';
+import {
+  validateScript, formatIssue, spokenNumberCap, countSpokenNumbers, isSummaryScript, SUMMARY_SCENE_NUMBER_CAP,
+} from './lib/script-quality-contract.js';
 
 /** 고쳐야 하는 판정. '사실' 은 건드리지 않는다. */
 const FIXABLE_VERDICTS = ['부정확', '미확인'];
+
+/**
+ * 수정본이 **새로 만든** 품질 계약 error 만 돌려준다.
+ *
+ * 원래 대본에 있던 위반은 이 단계가 만든 게 아니고, 지적된 씬만 고칠 수 있는 이 단계로는
+ * 없앨 수도 없다. 그것까지 막으면 모든 시도가 같은 이유로 버려진다 — 2026-09-29 EP-2026-0195:
+ * Phase 4 가 기록만 하고 넘긴 씬 002 의 수치 초과 때문에 씬 003·004 수정본이 매번 버려져
+ * kr-close 가 Phase 6 에서 멈췄다.
+ */
+export function introducedErrors(originalScenes, nextScenes) {
+  const key = (i) => `${i.rule}:${i.scene_id ?? '*'}`;
+  const before = new Set(validateScript(originalScenes).filter((i) => i.severity === 'error').map(key));
+  return validateScript(nextScenes).filter((i) => i.severity === 'error' && !before.has(key(i)));
+}
+
+/**
+ * 고친 씬 중 **말한 수치가 원본보다 늘어난** 씬을 돌려준다 ([{scene_id, before, after}]).
+ *
+ * 이 단계는 지적된 주장을 빼거나 해석으로 표시하는 곳이지 새 수치를 보태는 곳이 아니다.
+ * 2026-10-07 EP-2026-0214: 「미확인」 유가·금 문장을 고치라 했더니 모델이 검색한 숫자를 덧붙여
+ * 씬 006 이 수치 5개 → 10개가 됐고, 두 번 다 계약에 걸려 회차가 Phase 6 에서 멈췄다.
+ * 상한 안에서 늘어도 막는다 — 늘어난 수치는 팩트체크를 거치지 않은 새 주장이다.
+ */
+export function numberGrowth(originalScenes, nextScenes, sceneIds, allowance = {}) {
+  const out = [];
+  for (const id of sceneIds) {
+    const a = originalScenes.find((s) => String(s.scene_id) === String(id));
+    const b = nextScenes.find((s) => String(s.scene_id) === String(id));
+    if (!a || !b) continue;
+    const before = numberCount(a.narration);
+    const after = numberCount(b.narration);
+    // 팩트체커가 수정 제안에 직접 적어 준 수치는 검증된 것이다 — 그만큼은 늘어도 된다.
+    if (after > before + (allowance[String(id)] ?? 0)) out.push({ scene_id: String(id), before, after });
+  }
+  return out;
+}
+
+/** 말한 수치 + 아라비아 숫자 토큰. 「3.4%」를 「삼점사 퍼센트」로 고친 것을 '늘었다'로 읽지 않게 둘 다 센다. */
+export function numberCount(text) {
+  return countSpokenNumbers(text).length + (String(text || '').match(/\d[\d.,]*/g) || []).length;
+}
+
+/** 씬별로 팩트체커 수정 제안에 든 수치 개수 — numberGrowth 의 허용분. */
+export function suggestionAllowance(findings) {
+  const out = {};
+  for (const f of findings) out[f.scene_id] = (out[f.scene_id] ?? 0) + numberCount(f.suggestion);
+  return out;
+}
+
+/** 씬 헤더에 적는 말한 수치 상한 — 검증기(validateScript)와 같은 기준을 쓴다. */
+export function sceneNumberCap(scenes, scene) {
+  return isSummaryScript(scenes) ? SUMMARY_SCENE_NUMBER_CAP : spokenNumberCap(scene.target_seconds);
+}
 
 /**
  * 35_factcheck.md 의 `### [MED] Scene 001: "..."` 블록을 구조화한다.
@@ -102,7 +157,7 @@ function buildUserPrompt(scenes, findings, retryFeedback) {
   for (const [sceneId, items] of byScene) {
     const scene = scenes.find((s) => String(s.scene_id) === sceneId);
     if (!scene) continue;
-    parts.push(`## Scene ${sceneId} (role=${scene.role}, ${scene.target_seconds}초, 말할 수치 상한 ${spokenNumberCap(scene.target_seconds)}개)`);
+    parts.push(`## Scene ${sceneId} (role=${scene.role}, ${scene.target_seconds}초, 말할 수치 상한 ${sceneNumberCap(scenes, scene)}개 · 지금 ${countSpokenNumbers(scene.narration).length}개 — 늘리지 마라)`);
     parts.push(`현재 narration: ${scene.narration}`);
     parts.push(`현재 subtitle_text: ${scene.subtitle_text || ''}`);
     parts.push(`현재 emphasis_tokens: ${(scene.emphasis_tokens || []).join(', ')}`);
@@ -137,6 +192,11 @@ function buildUserPrompt(scenes, findings, retryFeedback) {
   // 매수세가 몰렸습니다」로, 정확히 시청자가 원하는 답이었다. 검증이 안 된다는 이유로 지워졌다.
   // 팩트체크가 지워야 할 것은 **틀린 것**이지 **검증 안 되는 것**이 아니다 —
   // 이 채널이 파는 건 해석이고, 해석은 원 출처로 증명되지 않는다.
+  parts.push('');
+  parts.push('[미확인은 "틀렸다"가 아니라 "확인 못 했다"다 — 수치를 보태서 고치지 마라]');
+  parts.push('검색으로 찾은 다른 수치·새 사실을 덧붙여 문장을 "보강"하지 마라. 새 수치는 팩트체크를 거치지 않은');
+  parts.push('새 주장이 되고, 씬의 말한 수치가 늘어 계약에 걸린다. 미확인 수치는 그 수치만 빼거나,');
+  parts.push('팩트체커 수정 제안에 있는 사실만 남겨라. 씬의 말한 수치 개수는 지금보다 늘면 안 된다.');
   parts.push('');
   parts.push('[설명을 지우지 마라 — 표시만 바꿔라]');
   parts.push('"왜 그런가"를 말하는 문장이 검증되지 않았다고 **삭제하지 마라.** 삭제하면 이 채널은');
@@ -237,7 +297,8 @@ async function main() {
   const MAX_ATTEMPTS = (() => {
     const raw = values.attempts || process.env.BT_FACTCHECK_REVISE_ATTEMPTS;
     const n = Number.parseInt(raw, 10);
-    return Number.isFinite(n) && n > 0 ? n : 2;
+    // 2회였을 때 두 번째 거부 사유를 되먹일 기회가 없었다 (EP-2026-0214: 1회 아라비아 숫자, 2회 수치 초과).
+    return Number.isFinite(n) && n > 0 ? n : 3;
   })();
 
   let retryFeedback = [];
@@ -311,11 +372,19 @@ async function main() {
       continue;
     }
 
+    const grown = numberGrowth(scenes, nextScenes, applied, suggestionAllowance(findings));
+    if (grown.length) {
+      const what = grown.map((g) => `씬 ${g.scene_id} ${g.before}→${g.after}개`).join(', ');
+      giveUp(`❌ 수정본이 말한 수치를 늘렸다 — ${what} (새 수치는 검증되지 않은 새 주장)`);
+      retryFeedback = grown.map((g) => `씬 ${g.scene_id}: 말한 수치가 ${g.before}개에서 ${g.after}개로 늘었다. 새 수치를 덧붙이지 말고, 미확인 수치는 빼서 ${g.before}개 이하로 맞춰라.`);
+      continue;
+    }
+
     // 고치려다 분석 밀도 계약을 깨면 이득이 없다. error 만 막고 warn 은 통과시킨다
     // (generate-script.js 도 error 만 재작성 트리거로 쓴다).
     const issues = validateScript(nextScenes);
     issues.forEach((i) => console.warn(`   ${formatIssue(i)}`));
-    const errors = issues.filter((i) => i.severity === 'error');
+    const errors = introducedErrors(scenes, nextScenes);
     if (errors.length) {
       giveUp(`❌ 수정본이 품질 계약 error ${errors.length}건 — 원본을 남기고 중단한다`);
       retryFeedback = errors.map((i) => formatIssue(i).replace(/^\s*[❌⚠]\s*/, ''));

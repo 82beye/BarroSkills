@@ -30,7 +30,8 @@
  * 판정 근거는 lib/evidence-verify.js 헤더 참조.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
@@ -53,7 +54,7 @@ const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
  * Phase 6 이 통째로 멈춘 전력이 있다. Gemini 는 groundingMetadata 라는
  * 더 강한 증거를 주므로 뒤에 남겨 폴백으로 쓴다.
  */
-const ENGINE_CHAIN = (process.env.BT_FACTCHECK_ENGINE_CHAIN || 'claude,gemini')
+const ENGINE_CHAIN = (process.env.BT_FACTCHECK_ENGINE_CHAIN || 'claude,gemini,codex')
   .split(',').map((e) => e.trim()).filter(Boolean);
 
 function buildSystemPrompt(searchTool) {
@@ -71,8 +72,13 @@ RULES:
    - MED: 맥락 누락, 과장 표현, 불완전한 인용
    - LOW: 사소한 표현 차이, 최신 데이터와 미세 차이
 5. For HIGH/MED, always provide "suggested_revision" (corrected Korean sentence, same 스타일/길이).
-6. Cite "evidence" with source URL or official document name. Min 2 independent sources for HIGH.
+6. Cite "evidence" with the source URL itself. When the source is in the attached pipeline research, copy its URL exactly as written there — a markdown link's target in parentheses IS the URL; a name like "FXStreet(09-28)" alone is not a citation. Use an official document name only when no URL exists. Min 2 independent sources for HIGH.
 7. If a claim cannot be verified via search, mark HIGH with risk_reason="unverifiable".
+7a. EXCEPTION — a claim whose figures match the attached PIPELINE DATA SNAPSHOT for the same instrument and session
+    (index/sector/stock change, price, macro value, calendar time, or a stock reason with its URL) is verified BY THAT
+    SNAPSHOT: verdict=사실, risk=LOW, evidence="pipeline snapshot summary-us.json: <field>=<value>" plus the reason URL
+    when the snapshot gives one. A sector figure is the snapshot's own weighted average, so search cannot confirm it
+    and must not be asked to. Rule 7 applies only when neither the snapshot nor search supports the claim.
 8. Bind every market claim to the exact date and traded_at in the attached pipeline research. Never substitute the previous trading day's close.
 9. Treat pipeline snapshots as primary dated evidence, then corroborate them by searching the exact YYYY-MM-DD plus the quoted value. If search results conflict, explain the date mismatch instead of silently choosing another session.
 9a. SAME INSTRUMENT, SAME DAY, DIFFERENT TIMESTAMPS — decide by this order, do not re-decide per run.
@@ -114,6 +120,37 @@ OUTPUT SCHEMA:
 const SYSTEM_PROMPT = buildSystemPrompt('google_search');
 
 function readIfExists(p) { return existsSync(p) ? readFileSync(p, 'utf-8') : ''; }
+
+/**
+ * 「미국 증시 요약」 대본이 숫자를 가져온 원자료(summary-us.json)를 프롬프트용 문자열로 돌려준다.
+ *
+ * 이 포맷의 업종 평균·종목 등락률·종목 사유는 리서치(10_)·데스크(05_)가 아니라 이 파일에서
+ * 바로 온다. 파일을 안 주면 팩트체커는 맞는 숫자를 「검색으로 확인 못 함」 = HIGH 미확인으로
+ * 잡고, 재작성기가 그걸 고치려다 수치를 덧붙여 계약을 깨 회차가 멈춘다 — 2026-10-07
+ * EP-2026-0214: 리테일 1.96%·WTI 89.94달러·델(미즈호 목표가 650달러)이 전부 이 파일에 있었는데
+ * HIGH 6건으로 막혔다. 요약 포맷이 아니거나 파일이 없으면 빈 문자열.
+ */
+export function summaryDataText(fm, episodeDir) {
+  if (fm?.form !== 'market-summary' || !fm.summary_date) return '';
+  const p = join(episodeDir, '..', '..', 'daily-news', String(fm.summary_date), 'summary-us.json');
+  if (!existsSync(p)) return '';
+  let d;
+  try { d = JSON.parse(readFileSync(p, 'utf-8')); } catch { return ''; }
+  const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : v ?? null);
+  return JSON.stringify({
+    source: 'summary-us.json (Yahoo Finance 종가 시세 · 업종 = 종목 등락률의 가중 평균 · reasons = 종목 사유와 출처 URL)',
+    date: d.date,
+    us_session: d.us_session,
+    indices: d.indices,
+    macro: d.macro,
+    sectors: (d.sectors || []).map((s) => ({ sec: s.sec, pct: r2(s.pct) })),
+    movers: d.movers,
+    reasons: d.reasons,
+    after_hours: d.after_hours,
+    calendar: d.calendar,
+    stocks: (d.stocks || []).map((s) => ({ t: s.t, name: s.name, sec: s.sec, price: s.price, pct: r2(s.pct) })),
+  });
+}
 
 function parseScriptFrontmatter(scriptText) {
   const m = scriptText.match(/^---\n([\s\S]*?)\n---\n/);
@@ -178,6 +215,55 @@ function callClaudeFactcheck(userPrompt, model = 'sonnet', timeoutSec = 900) {
     attempts: 1,
     retried: false,
   };
+}
+
+/**
+ * codex exec --search 로 같은 JSON 을 받는다 — claude 와 gemini 가 함께 막힌 날의 마지막 폴백.
+ *
+ * 2026-09-30 us-close(EP-2026-0196): claude 세션 한도와 Gemini 선불 크레딧 소진(402)이 겹쳐
+ * Phase 6 에서 회차가 통째로 멈췄다. 대본·메타데이터 체인에는 codex 가 있는데 여기만 없었다.
+ * 읽기 전용 샌드박스라 모델이 35_factcheck.md 를 직접 쓸 수 없고, grounded 는 claude 경로와
+ * 똑같이 호출자가 인용 URL 실존 검증으로 확정한다.
+ */
+function callCodexFactcheck(userPrompt, timeoutSec = 900) {
+  const prompt = [
+    buildSystemPrompt('web search'),
+    '', '───────────────', '',
+    userPrompt,
+    '', '───────────────',
+    '출력 규칙: JSON 객체 **하나만** 출력해라. 코드펜스·머리말·요약을 붙이지 마라.',
+    '파일을 쓰지 마라. 최종 답변에 JSON 만 낸다.',
+  ].join('\n');
+  const outFile = join(tmpdir(), `bt-factcheck-codex-${process.pid}-${Date.now()}.txt`);
+  try {
+    const r = spawnSync('codex', ['-a', 'never', '-s', 'read-only', '--search', 'exec', '--ephemeral', '-o', outFile, prompt], {
+      cwd: resolve(import.meta.dirname, '../..'),
+      encoding: 'utf-8',
+      timeout: timeoutSec * 1000,
+      maxBuffer: 10 * 1024 * 1024,
+      env: process.env,
+    });
+    if (r.error?.code === 'ENOENT') throw new Error('codex CLI 를 찾을 수 없다 (launchd PATH 확인)');
+    if (r.signal === 'SIGTERM') throw new Error(`codex 타임아웃 (${timeoutSec}s)`);
+    if (r.status !== 0) throw new Error(`codex 종료코드 ${r.status}: ${(r.stderr || '').slice(-300)}`);
+    const text = existsSync(outFile) ? readFileSync(outFile, 'utf-8').trim() : '';
+    if (!text) throw new Error('codex 응답이 비었다');
+    return {
+      text,
+      backend: 'codex-websearch',
+      groundingMeta: null,
+      webSearchQueries: [],
+      evidenceUrls: extractEvidenceUrls(text),
+      groundedByChunks: false,
+      groundedByQueries: false,
+      grounded: false,            // URL 실존 검증 후 호출자가 확정한다
+      usage: null,
+      attempts: 1,
+      retried: false,
+    };
+  } finally {
+    try { unlinkSync(outFile); } catch { /* 없으면 그만 */ }
+  }
 }
 
 async function callGeminiWithSearch(userPrompt, model, opts = {}) {
@@ -457,7 +543,7 @@ async function main() {
   const { values } = parseArgs({
     options: {
       episode: { type: 'string', short: 'e' },
-      engine: { type: 'string' },              // claude | gemini | auto(기본)
+      engine: { type: 'string' },              // claude | gemini | codex | auto(기본)
       force: { type: 'boolean', default: false },
       model: { type: 'string', short: 'm' },
       platform: { type: 'string', short: 'p' },
@@ -465,7 +551,7 @@ async function main() {
     },
   });
   if (!values.episode) {
-    console.error('Usage: run-factcheck.js --episode <EP-YYYY-NNNN> [--platform shorts|long] [--engine claude|gemini] [--force] [--model <model>]');
+    console.error('Usage: run-factcheck.js --episode <EP-YYYY-NNNN> [--platform shorts|long] [--engine claude|gemini|codex] [--force] [--model <model>]');
     process.exit(1);
   }
 
@@ -516,11 +602,13 @@ async function main() {
   const episodeId = fm.episode_id || 'EP-UNKNOWN';
   const channelId = fm.channel_id || 'econ-daily';
   const scriptRevision = fm.revision ?? 1;
+  const summaryData = summaryDataText(fm, absEp);
 
   const userPrompt = [
     '[AUTHORITATIVE PIPELINE MARKET RESEARCH]',
     researchText || '(not available)',
     ...(deskText ? ['', '[DESK BRIEFING — 기자단 원본 근거·출처 URL]', deskText] : []),
+    ...(summaryData ? ['', '[PIPELINE DATA SNAPSHOT — 이 대본의 지수·업종·종목 수치와 종목 사유는 이 데이터에서 왔다]', summaryData] : []),
     '',
     '[CONTENT STRATEGY AND FACT BOUNDARIES]',
     strategyText || '(not available)',
@@ -542,8 +630,10 @@ async function main() {
         return callClaudeFactcheck(userPrompt, values.model || 'sonnet');
       case 'gemini':
         return callGeminiWithGroundingEnforced(userPrompt, values.model || DEFAULT_MODEL);
+      case 'codex':
+        return callCodexFactcheck(userPrompt);
       default:
-        throw new Error(`알 수 없는 엔진: ${name} (가능: claude | gemini)`);
+        throw new Error(`알 수 없는 엔진: ${name} (가능: claude | gemini | codex)`);
     }
   };
 
