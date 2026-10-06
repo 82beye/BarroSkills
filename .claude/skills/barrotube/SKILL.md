@@ -75,6 +75,22 @@ Phase 7 worker의 로그인 판정은 참고값이다. 사용자가 로그인을
 PD가 같은 브라우저에서 프로필+composer를 한 번 직접 확인하고, 로그인 상태면 누락 자산만
 완성한다. 완료 정본은 응답 문구가 아니라 이미지 5+영상 5+인트로+썸네일의 12/12 게이트다.
 
+### 「미국 증시 요약」 포맷 (us-close · 2026-10-01)
+
+오선 「증시 요약」 427편 벤치마크(`workspace/intel/benchmarks/futuresnow-summary/REPORT.md`)로 만든
+세로 약 2.5분(7씬·150초) 데일리 요약. 정본은 `config/market-summary.json`, 슬롯 `form: market-summary`.
+화~토 중 전날 미국 종가가 실제로 있는 날만 적용하고(Phase 1b 판정), 일·월요일·미국 휴장 다음 날·수집 실패일은 기존 쇼츠로 간다.
+
+| 단계 | 스크립트 | 비고 |
+|---|---|---|
+| 1b 데이터 | `fetch-econ-calendar.js` · `collect-summary-data.js` · `research-movers.js` | 일정(무과금)·84종목 등락·시간외·종목 이유(출처 URL) → `daily-news/<날짜>/summary-us.json` |
+| 4 대본 | `generate-summary-script.js` | 통신사 브리핑체, 질문·권유 금지. 씬 1 `card: indices`, 씬 2~7 `slot` + **범용** `image_prompt`(회사명·숫자·로고 없이 슬롯 상징물 — 재활용용) |
+| 6b 화면 | `render-summary-cards.js` · `summary-assets.js` | 씬 1 지수 카드 1장. 마시 컷은 **라이브러리 먼저**(`reuse-scene-assets.js mode=primary`), 약한 매칭만 Phase 7 이 굽는다 |
+| 9 메타 | `generate-metadata.js` | 제목 `【미국 증시 요약】 <훅 25자> \| YY.MM.DD(요일) #Shorts` |
+
+라이브러리 재고 목표는 `lib/scene-slot-taxonomy.js` GRADE_TARGET(A10·B6·C4·R10), 부족분은
+`backfill-library.js` 가 범용 객체(`lib/backfill-prompt.js` THEME_SCENES)로 채운다.
+
 ### Step 3 — 모드별 흐름
 
 #### Mode A. 신규 EP (가장 중요)

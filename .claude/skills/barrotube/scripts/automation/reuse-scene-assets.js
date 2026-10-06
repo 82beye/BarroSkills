@@ -118,7 +118,12 @@ function provenanceText(pick, scene) {
   ].join('\n');
 }
 
-export async function reuseSceneAssets({ scriptPath, only = null, dryRun = false, nowMs = Date.now() }) {
+/**
+ * mode — 'fallback'(기본): 생성 경로가 다 막혀서 쓰는 재사용. 'primary': 「미국 증시 요약」처럼
+ * 라이브러리를 먼저 쓰는 포맷(summary-assets.js). 원장에 남겨 backfill 가드가 둘을 가른다 —
+ * primary 를 폴백으로 세면 요약 포맷이 도는 날마다 「쿼터가 마른 날」로 보여 보강이 영영 막힌다.
+ */
+export async function reuseSceneAssets({ scriptPath, only = null, dryRun = false, nowMs = Date.now(), mode = 'fallback' }) {
   const cfg = loadConfig();
   if (cfg.enabled === false) {
     throw new Error('config/asset-reuse.json 에서 enabled=false — 재사용 폴백이 꺼져 있습니다');
@@ -274,7 +279,7 @@ export async function reuseSceneAssets({ scriptPath, only = null, dryRun = false
       version: 1,
       episode_id: episodeId,
       reused_at: new Date().toISOString(),
-      reason: 'image generation unavailable (all engines exhausted)',
+      reason: mode === 'primary' ? 'library-first format (market-summary)' : 'image generation unavailable (all engines exhausted)',
       scenes: [...bySceneId.values()].sort((a, b) => a.scene_id.localeCompare(b.scene_id)),
       unmatched,
     }, null, 2)}\n`);
@@ -292,6 +297,7 @@ export async function reuseSceneAssets({ scriptPath, only = null, dryRun = false
           used_scene_id: p.sceneId,
           used_at: new Date().toISOString(),
           score: p.score,
+          mode,
         });
       }
       // 쿨다운 상한의 4배를 넘은 기록은 판정에 쓰이지 않는다 — 원장이 무한정 자라는 걸 막는다.

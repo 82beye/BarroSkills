@@ -289,11 +289,21 @@ export function findIndexMoveSubject(narration) {
   return null;
 }
 
+/**
+ * 「미국 증시 요약」 포맷(씬마다 card 지시가 있다 — config/market-summary.json)은 수치가 곧
+ * 내용이다. 벤치마크(오선 「증시 요약」 427편)는 3분에 지수 셋·종목 등락·금리·유가를 다 읽는다.
+ * 쇼츠 훅용 상한(씬 3·전체 씬+1)을 그대로 걸면 모든 편이 Phase 8 에서 멈춘다.
+ */
+export const SUMMARY_SCENE_NUMBER_CAP = 6;
+export const SUMMARY_NUMBERS_PER_SCENE = 4;
+export const isSummaryScript = (scenes) => Array.isArray(scenes) && scenes.some((s) => s && typeof s.card === 'object' && s.card);
+
 export function validateScript(scenes) {
   const issues = [];
   if (!Array.isArray(scenes) || scenes.length === 0) return issues;
 
-  const totalCap = totalSpokenNumberCap(scenes.length);
+  const summary = isSummaryScript(scenes);
+  const totalCap = summary ? scenes.length * SUMMARY_NUMBERS_PER_SCENE : totalSpokenNumberCap(scenes.length);
   const totalSeconds = scenes.reduce((n, sc) => n + (Number(sc.target_seconds) || 0), 0);
   let totalNumbers = 0;
   let totalHedges = 0;
@@ -307,7 +317,7 @@ export function validateScript(scenes) {
     totalNumbers += numbers.length;
     totalHedges += countHedges(narration);
 
-    const cap = spokenNumberCap(scene.target_seconds);
+    const cap = summary ? SUMMARY_SCENE_NUMBER_CAP : spokenNumberCap(scene.target_seconds);
     if (numbers.length > cap) {
       issues.push({
         rule: 'spoken-number-budget', severity: 'error', scene_id: id,

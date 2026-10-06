@@ -114,7 +114,8 @@ export function evaluateGuards({ now, routines, ledger, inFlight, pendingRender,
 
   // 규칙 2 — 폴백 무발생. 폴백이 걸린 날은 이미 쿼터가 마른 날이다.
   const day = today();
-  const usedToday = ledger.filter((r) => String(r.used_at || '').slice(0, 10) === day);
+  // 라이브러리를 먼저 쓰는 포맷의 재사용(mode=primary)은 쿼터가 마른 신호가 아니다.
+  const usedToday = ledger.filter((r) => String(r.used_at || '').slice(0, 10) === day && r.mode !== 'primary');
   if (usedToday.length) {
     blocks.push({ rule: 2, code: 'REUSE_FALLBACK_TODAY',
       message: `오늘 재사용 폴백이 ${usedToday.length}컷 돌았습니다. 쿼터가 마른 날로 봅니다.` });

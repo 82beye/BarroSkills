@@ -25,6 +25,7 @@ import { recordCost } from './lib/cost-tracker.js';
 import { callClaudeCode, callCodex, resolveChain, runEngineChain } from './lib/text-engine.js';
 import { findHeadlineCollision, recentTitles, selectTitle } from './lib/title-select.js';
 import { classifyTitle, TYPE_LABEL } from './lib/title-types.js';
+import { summaryTitle } from './lib/summary-title.js';
 
 export { headlineNumberTokens, findHeadlineCollision } from './lib/title-select.js';
 
@@ -651,6 +652,16 @@ async function main() {
     }
   } catch (e) {
     console.warn(`   ⚠ 제목 충돌 검사 건너뜀: ${e.message}`);
+  }
+
+  // 「미국 증시 요약」(config/market-summary.json) — 제목은 시리즈 틀로 고정한다.
+  // 벤치마크 427편은 제목이 매일 같은 머리말 + 그날 사건 + 날짜라 시청자가 시리즈로 알아본다.
+  // 위의 제목 후보 선별(selectTitle)은 쇼츠 훅용 규칙이라 이 포맷에선 덮어쓴다.
+  if (fm.form === 'market-summary' && fm.title_hook && fm.us_session) {
+    const cfg = JSON.parse(readFileSync(join(import.meta.dirname, '../../config/market-summary.json'), 'utf-8'));
+    meta.title = summaryTitle(cfg.title.template, fm.title_hook, fm.us_session);
+    if (Array.isArray(meta.tags)) meta.tags = [...new Set([cfg.series_label, '미국증시', ...meta.tags])];
+    console.log(`   🗞  요약 포맷 제목: ${meta.title}`);
   }
 
   const outPath = join(baseDir, '70_publish_meta.json');

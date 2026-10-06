@@ -18,6 +18,8 @@
       "label": "미국 증시 마감 브리핑",
       "cron": "06:00",
       "publish_at": "08:00",
+      "form": "market-summary",
+      "_form_note_2026_10_01": "운영자 요청(2026-10-01): 오선 「증시 요약」 427편 벤치마크로 만든 「미국 증시 요약」 포맷(config/market-summary.json) — 세로 3분·마시·씬1 지수 카드·라이브러리 먼저. 화~토 중 전날 미국 종가가 실제로 있는 날만(auto-pipeline Phase 1b). 일요일 결산·월요일 준비·미국 휴장 다음 날·요약 데이터 수집 실패일은 기존 쇼츠로 간다. 끄려면 form 을 지운다.",
       "news_sources": [
         "cnbc_economy",
         "yahoo_finance",

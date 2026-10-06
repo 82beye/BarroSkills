@@ -275,6 +275,9 @@ if [ -n "$SLOT" ]; then
   # 부동산 슬롯(shorts-3min·barro-analyst)도 기본값(shorts 60초·barro-alert)으로 만들어졌다.
   SLOT_FORMAT=$(json_get "$ROUTINES" "d['slots']['$SLOT'].get('format','')")
   SLOT_PERSONA=$(json_get "$ROUTINES" "d['slots']['$SLOT'].get('persona','')")
+  # 「미국 증시 요약」 같은 포맷 전환 (config/market-summary.json). 적용 여부는 Phase 1b 가
+  # 전날 미국 장 종가가 실제로 있는지 보고 정한다 — 일요일 결산·월요일 준비는 원래 쇼츠로 간다.
+  SLOT_FORM=$(json_get "$ROUTINES" "d['slots']['$SLOT'].get('form','')")
   # 씬 수도 슬롯에서 읽는다. 아래 codex 지시문이 '5장·5개' 로 박혀 있어서
   # 7씬 슬롯(realestate)은 두 컷이 빈 채로 렌더까지 갔다 (2026-08-31 dry-run 에서 발견).
   SLOT_SCENES=$(json_get "$ROUTINES" "d['slots']['$SLOT'].get('scene_count') or d.get('defaults',{}).get('scene_count',5)")
@@ -342,6 +345,39 @@ if [ -z "$RESUME_EP" ] && [ -z "$FORCE_TOPIC" ] && [ -n "$SLOT" ]; then
         || echo "⚠️  경쟁 채널 수집 실패 (OAuth 만료 가능) — 없이 진행"
       run_or_echo node scripts/automation/analyze-competitors.js --date "$TODAY" \
         || echo "⚠️  경쟁 인텔 분석 실패 — 없이 진행"
+    fi
+  fi
+fi
+
+# 「미국 증시 요약」 포맷 (config/market-summary.json, 2026-10-01 오선 「증시 요약」 427편 벤치마크).
+# 화면은 쇼츠와 같다(세로·마시) — 씬 1 지수 카드 + 마시 컷 6장(라이브러리 먼저). 수집이 하나라도
+# 실패하면 이 회차는 원래 쇼츠 포맷으로 간다 — 포맷 때문에 회차를 잃지 않는다.
+SUMMARY_FORM=0
+SUMMARY_CFG="${BARROTUBE_HOME}/config/market-summary.json"
+if [ -z "${RESUME_EP:-}" ] && [ -z "$FORCE_TOPIC" ] && [ "${SLOT_FORM:-}" = "market-summary" ] && [ "$DRY_RUN" = "0" ]; then
+  # 판정은 content_mode 가 아니라 **전날 미국 종가가 실제로 있는가**로 한다. content_mode 는
+  # 토요일을 일괄 closed_market_issue 로 두지만 토요일 06:00 에는 금요일 종가가 막 나와 있다
+  # (벤치마크도 화~토 발행). 미국 휴장 다음 날은 세션이 어긋나 기존 쇼츠로 간다.
+  KST_DOW=$(date +%u)   # 1=월 … 7=일
+  YESTERDAY=$(python3 -c "import datetime,sys;d=datetime.date.fromisoformat(sys.argv[1]);print(d-datetime.timedelta(days=1))" "$TODAY")
+  if [ "$KST_DOW" = "1" ] || [ "$KST_DOW" = "7" ]; then
+    echo "  ⏭  요약 포맷 미적용 (일·월요일 편성) — 기존 쇼츠 포맷"
+  else
+    log_stage "🗞  Phase 1b — 미국 증시 요약 데이터 (일정·84종목·종목 이유)"
+    node scripts/automation/fetch-econ-calendar.js --date "$TODAY" \
+      || echo "  ⚠ 경제 일정 수집 실패 — 일정 없이 진행"
+    SUMMARY_JSON="${BARROTUBE_HOME}/workspace/daily-news/${TODAY}/summary-us.json"
+    if node scripts/automation/collect-summary-data.js --date "$TODAY" \
+        && [ "$(json_get "$SUMMARY_JSON" "d.get('us_session','')")" = "$YESTERDAY" ]; then
+      node scripts/automation/research-movers.js --date "$TODAY" || true
+      SUMMARY_FORM=1
+      SLOT_FORMAT=$(json_get "$SUMMARY_CFG" "d['format']")
+      SLOT_SCENES=$(json_get "$SUMMARY_CFG" "len(d['scenes'])")
+      SLOT_PERSONA="barro-teacher"
+      audit "summary_form_on" "INFO" "slot=$SLOT session=$YESTERDAY"
+    else
+      echo "  ⚠ 전날(${YESTERDAY}) 미국 종가가 없거나 수집 실패 — 이 회차는 기존 쇼츠 포맷으로 진행"
+      audit "summary_form_skip" "WARN" "slot=$SLOT reason=no_fresh_session"
     fi
   fi
 fi
@@ -538,12 +574,27 @@ echo "▶ 디렉토리: $EP_DIR"
 log_stage "✍️  Phase 4 — S4 대본 생성 (Gemini)"
 
 SCRIPT_PATH="${EP_DIR}/platforms/${PLATFORM}/30_script.md"
+# 재개 회차는 대본이 정한다 — 요약 포맷으로 만든 EP 는 재개해도 요약 포맷이다.
+if [ -n "$RESUME_EP" ] && [ -s "$SCRIPT_PATH" ] && grep -q '^form: market-summary' "$SCRIPT_PATH"; then
+  SUMMARY_FORM=1
+  SLOT_SCENES=$(json_get "$SUMMARY_CFG" "len(d['scenes'])")
+fi
+# 대본 생성기 — 요약 포맷이 실패하면 같은 EP(3분 세로)를 일반 대본으로 살린다.
+generate_episode_script() {
+  if [ "$SUMMARY_FORM" = "1" ]; then
+    node scripts/automation/generate-summary-script.js --episode "$EP_ID" --date "$TODAY" && return 0
+    echo "  ⚠ 요약 대본 실패 — 같은 EP 를 일반 대본으로 진행"
+    audit "summary_script_fallback" "WARN" "ep=$EP_ID"
+    SUMMARY_FORM=0
+  fi
+  node scripts/automation/generate-script.js --episode "$EP_DIR" --platform "$PLATFORM" --slot "$SLOT" "$@"
+}
 if [ -n "$RESUME_EP" ] && [ -s "$SCRIPT_PATH" ]; then
   echo "⏭  RESUME: 기존 대본 유지 — $SCRIPT_PATH"
+elif [ "$DRY_RUN" = "1" ]; then
+  echo "[DRY_RUN] 대본 생성 ($([ "$SUMMARY_FORM" = "1" ] && echo generate-summary-script.js || echo generate-script.js))"
 else
-  run_or_echo node scripts/automation/generate-script.js \
-    --episode "$EP_DIR" --platform "$PLATFORM" --slot "$SLOT" \
-    || fail_with_alert "Phase 4 script" "generate-script.js 실패"
+  generate_episode_script || fail_with_alert "Phase 4 script" "대본 생성 실패"
 fi
 
 # ─────────────────────────────────────────────────
@@ -557,7 +608,7 @@ else
   if ! node scripts/automation/validate-image-prompts.js --episode "$EP_DIR" --platform "$PLATFORM"; then
     echo "⚠️  계약 위반 — 대본 1회 재생성 후 재검사"
     audit "auto_pipeline_prompt_retry" "WARN" "slot=$SLOT ep=$EP_ID"
-    node scripts/automation/generate-script.js --episode "$EP_DIR" --platform "$PLATFORM" --slot "$SLOT" --force \
+    generate_episode_script --force \
       || fail_with_alert "Phase 5 rewrite" "대본 재생성 실패"
     node scripts/automation/validate-image-prompts.js --episode "$EP_DIR" --platform "$PLATFORM" \
       || halt_for_human "Phase 5 계약" "재생성 후에도 image_prompt 계약 위반 — 이미지를 굽지 않고 멈췄습니다. 대본을 손보고 재개하세요."
@@ -751,6 +802,18 @@ if [ "$DRY_RUN" = "0" ] && [ -s "$FACTCHECK_PATH" ]; then
   fi
 fi
 
+# 「미국 증시 요약」 자산 — 씬 1 지수 카드를 굽고, 마시 컷은 라이브러리에서 먼저 채운다.
+# 비는 씬만 아래 Phase 7 이 대본의 범용 프롬프트로 굽는다(구운 컷은 다음 분류 때 라이브러리로).
+SUMMARY_MEDIA_NOTE=""
+if [ "$SUMMARY_FORM" = "1" ] && [ "$DRY_RUN" = "0" ]; then
+  log_stage "🃏 Phase 6b — 요약 카드 + 라이브러리 마시 컷"
+  node scripts/automation/render-summary-cards.js --episode "$EP_ID" --platform "$PLATFORM" \
+    || fail_with_alert "Phase 6b summary card" "지수 요약 카드 렌더 실패"
+  node scripts/automation/summary-assets.js --script "$SCRIPT_PATH" \
+    || echo "  ⚠ 라이브러리 채우기 실패 — 마시 컷을 전부 새로 굽습니다"
+  SUMMARY_MEDIA_NOTE="★ 이 회차는 「미국 증시 요약」이다. scene_001.png(지수 카드)와 이미 있는 씬 이미지는 라이브러리에서 고른 정본이니 절대 다시 만들거나 덮어쓰지 마라. 비어 있는 씬 이미지만 만든다. 대본의 image_prompt 는 다른 날에도 다시 쓸 범용 장면이다 — 회사명·숫자·로고를 덧붙이지 말고 그대로 그려라."
+fi
+
 # ─────────────────────────────────────────────────
 # Stage B — Phase 7: media-render (브라우저, 하이브리드)
 # ─────────────────────────────────────────────────
@@ -903,6 +966,7 @@ ${MOTION_PATH_LINE}
   인트로     ${MEDIA_BASE_REAL}/45_intro.png
   썸네일     ${MEDIA_BASE_REAL}/47_thumbnail.png
 
+${SUMMARY_MEDIA_NOTE}
 순서를 바꾸지 마라:
 1. Chrome의 ChatGPT에서 씬 이미지 ${SLOT_SCENES}장, 인트로, 썸네일을 한 번에 하나씩 생성·저장·검증한다.
    매 요청 전에 컴포저 도구 메뉴에서 【이미지 만들기】를 선택해 칩이 붙은 것을 스크린샷으로
