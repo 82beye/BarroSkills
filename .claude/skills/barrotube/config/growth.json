@@ -140,6 +140,66 @@
       }
     ]
   },
+  "remedies": {
+    "_comment": "KPI 진단(growth-diagnose.js)이 찾은 원인 → 처방. auto 는 콘텐츠 레버라 자동으로 켜고 eval 로 효과를 재서 유지(adopted)하거나 되돌린다(reverted). propose 는 근거를 붙인 설계서(workspace/growth/proposals/)를 남기고 알리며, notify 는 알림만 한다. 런타임 상태는 workspace/growth/remediations.json. 운영자가 정한 포맷과 코드는 자동으로 바꾸지 않는다 — propose 까지다.",
+    "R-LIKE-CTA": {
+      "label": "마무리 좋아요 요청",
+      "mode": "auto",
+      "target": "closing",
+      "closing_cta": "도움이 됐다면 좋아요를 눌러 주세요.",
+      "directive": "마지막 씬에 「도움이 됐다면 좋아요를 눌러 주세요.」를 문구 그대로 넣고, 그 뒤에 팔로우 안내와 면책 문장을 둔다. 좋아요 문장은 바꾸거나 늘리지 마라.",
+      "evidence": "2026-10-06 진단: 좋아요율 0.61%(RED)인데 최근 39편 마무리에 좋아요 요청 0편, 팔로우 요청 36편.",
+      "eval": {
+        "metric": "like_rate",
+        "min_episodes": 6,
+        "max_episodes": 14,
+        "keep_if_lift": 1.15
+      },
+      "cooldown_days": 14
+    },
+    "R-LONG-FORMAT": {
+      "label": "긴 포맷 길이 재검토",
+      "mode": "propose",
+      "proposal": "90초 넘는 회차(미국 요약형·부동산 3분)의 48h 조회가 60초 쇼츠보다 크게 낮다. 운영자가 정한 포맷이라 자동으로 바꾸지 않는다. 선택지: ① 미국 요약형 목표 길이를 줄인다(config/market-summary.json target_total_seconds) ② 해당 슬롯을 쇼츠로 되돌린다(config/routines.json slots.<slot>.form 삭제) ③ 2주 더 표본을 모은다.",
+      "resend_days": 7
+    },
+    "R-ZERO-DIST": {
+      "label": "배포 안 된 공개 영상",
+      "mode": "notify",
+      "proposal": "공개·처리 완료인데 48시간 조회가 거의 없다. YouTube Studio 에서 해당 영상의 제한·저작권 상태를 확인한다. 재업로드는 중복 콘텐츠로 묶일 수 있어 자동으로 하지 않는다.",
+      "resend_days": 7
+    },
+    "R-BURIED": {
+      "label": "비공개로 묻힌 업로드",
+      "mode": "notify",
+      "proposal": "보드의 '비공개' 칩으로 확인하고, 열 편은 set-video-privacy.js --episode <EP> --privacy public 으로 연다. 일부러 접은 회차일 수 있어 자동으로 공개하지 않는다.",
+      "resend_days": 7
+    },
+    "R-LATE": {
+      "label": "지각 발행",
+      "mode": "notify",
+      "proposal": "목표 공개 시각보다 1시간 넘게 늦은 회차의 48h 조회가 낮다. 늦어진 원인(LLM 한도·절전·재실행)을 발행 누락 진단과 함께 본다.",
+      "resend_days": 7
+    },
+    "R-MISS-REPORT": {
+      "label": "발행 누락 내역",
+      "mode": "notify",
+      "proposal": "편성 대비 누락 회차와 원인. 같은 원인이 2번 이상이면 수정 설계서가 따로 나간다.",
+      "resend_days": 3
+    },
+    "R-FIX-BRIEF": {
+      "label": "반복 장애 수정 설계서",
+      "mode": "propose",
+      "proposal": "같은 단계에서 반복해 멈췄다. 설계서의 근거(감사 이벤트·로그·관련 코드)로 원인을 고치고, 고친 뒤 workspace/growth/remediations.json 의 resolved 에 원인과 시각을 적으면 그 뒤의 재발만 다시 센다.",
+      "resend_days": 3
+    },
+    "R-ENV": {
+      "label": "실행 환경 문제",
+      "mode": "notify",
+      "proposal": "회차가 시작되지 않았거나 도중에 끊겼다. 대개 덮개 닫힘·배터리 절전(DarkWake)이다. 전원 연결과 덮개 열림을 확인한다(pmset -g log).",
+      "resend_days": 3
+    }
+  },
   "quota": {
     "units_per_run": 3,
     "runs_per_day": 2,

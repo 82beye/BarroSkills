@@ -26,6 +26,7 @@ import { callClaudeCode, callCodex, resolveChain, runEngineChain } from './lib/t
 import { findHeadlineCollision, recentTitles, selectTitle } from './lib/title-select.js';
 import { classifyTitle, TYPE_LABEL } from './lib/title-types.js';
 import { summaryTitle } from './lib/summary-title.js';
+import { readActiveRemedies, remediesApplied } from './lib/growth-remediation.js';
 
 export { headlineNumberTokens, findHeadlineCollision } from './lib/title-select.js';
 
@@ -438,7 +439,7 @@ async function main() {
     '',
     refs ? `[NEWS REFERENCES]\n${refs}\n` : '',
     recentBlock,
-    growthDirectives ? `[GROWTH DIRECTIVES]\n제목 작성 시 아래 '제목 패키징' 지시와, '이번 주 실험' 중 적용 대상이 제목(메타데이터)인 것을 반영하라.\n표기 규칙·공인 인물 SEO 정책·클릭베이트 금지 규칙과 충돌하면 그쪽이 항상 우선이다:\n${growthDirectives}\n` : '',
+    growthDirectives ? `[GROWTH DIRECTIVES]\n제목 작성 시 아래 '제목 패키징' 지시와, '이번 주 실험'·'자동 처방' 중 적용 대상이 제목(메타데이터)인 것을 반영하라.\n표기 규칙·공인 인물 SEO 정책·클릭베이트 금지 규칙과 충돌하면 그쪽이 항상 우선이다:\n${growthDirectives}\n` : '',
     `[TASK]`,
     `위 에피소드의 YouTube${format.startsWith('shorts') ? '/TikTok/Reels' : ''} 배포 메타데이터를 JSON으로 작성하라.`,
   ].filter(Boolean).join('\n');
@@ -639,6 +640,9 @@ async function main() {
 
   // 어느 엔진이 만들었는지 남긴다 — 폴백이 일어난 EP 를 사후에 가릴 수 있어야 한다.
   meta.generated_by = `metadata-writer (${engineUsed})`;
+  // 제목 처방 판정은 이 기록이 있는 회차만 센다 — 이 회차 프롬프트에 들어간 제목 처방
+  const titleRemedies = remediesApplied(readActiveRemedies(SKILL_ROOT), { targets: ['metadata'], prompt: growthDirectives });
+  if (titleRemedies.length) meta.growth_remedies = titleRemedies;
 
   // EXP-02-distinct-headline: 최근 3일 제목과 같은 수치를 또 쓰면 표시해 둔다.
   try {

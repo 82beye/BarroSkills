@@ -45,6 +45,7 @@ import { formatToPlatform } from './paths.js';
 import { TEMPLATE, BOUNDS, KNOWN_PALETTES, CANONICAL_TAIL, MASCOT_CLAUSE, checkEpisodePrompts } from './lib/image-prompt-contract.js';
 import { callClaudeCode, callCodex, resolveChain, runEngineChain } from './lib/text-engine.js';
 import { buildAnalystContractBlock, validateScript, formatIssue, INDEX_MOVE_PCT_FLOOR } from './lib/script-quality-contract.js';
+import { readActiveRemedies, closingCtaOf, ensureClosingCta, remediesApplied } from './lib/growth-remediation.js';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const DEFAULT_MODEL = process.env.GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
@@ -490,7 +491,7 @@ async function main() {
   if (strategy) userPromptParts.push(`[CONTENT STRATEGY]`, strategy, '');
   if (deskBrief) userPromptParts.push(`[DESK BRIEFING — 기자단 원본 근거·출처]`, deskBrief, '');
   if (growthDirectives) userPromptParts.push(
-    `[GROWTH DIRECTIVES — 채널 성장 지시. 훅·소재 선택에만 반영하고, '이번 주 실험'은 적용 대상이 대본(훅)일 때만 따르라. 사실·수치의 근거는 DESK BRIEFING 이며, 이 지시로 사실을 왜곡하지 마라]`,
+    `[GROWTH DIRECTIVES — 채널 성장 지시. 훅·소재 선택에만 반영하고, '이번 주 실험'은 적용 대상이 대본(훅)일 때만 따르라. 단 '자동 처방' 중 적용 대상이 대본·마무리 문장인 것은 적힌 대로 반영하라(제목 대상은 무시). 사실·수치의 근거는 DESK BRIEFING 이며, 이 지시로 사실을 왜곡하지 마라]`,
     growthDirectives, '');
   if (refs) userPromptParts.push(`[NEWS REFERENCES]`, refs, '');
   if (brand) userPromptParts.push(`[CHANNEL BRAND]`, brand, '');
@@ -602,6 +603,14 @@ async function main() {
     console.warn('   ↻ 품질 계약 위반 — 위반 목록을 붙여 한 번 재작성한다');
   }
 
+  // KPI 진단이 켠 마무리 처방(좋아요 요청 등)은 결정론으로 넣는다 — 모델이 지시를 빼먹어도
+  // 처방이 실제 회차에 반영돼야 효과를 잴 수 있다(growth-diagnose.js 가 이후 발행분으로 판정).
+  const remedies = readActiveRemedies(ROOT, { slot: values.slot });
+  const closingCta = closingCtaOf(remedies);
+  if (ensureClosingCta(scenes, closingCta)) console.log(`   🩹 자동 처방 마무리 문장 반영: 「${closingCta}」`);
+  // 처방 판정은 이 기록이 있는 회차만 센다 — 지시가 프롬프트에 들어간 대본 처방과 실제로 넣은 마무리 문장
+  const growthRemedies = remediesApplied(remedies, { targets: ['script', 'closing'], prompt: growthDirectives, scenes });
+
   const total = scenes.reduce((a, s) => a + (s.target_seconds || (spec.target_total_seconds / spec.scene_count)), 0);
 
   // Frontmatter 조립
@@ -626,6 +635,7 @@ async function main() {
   if (qualityIssues.length) {
     outFM.quality_issues = qualityIssues.map((i) => `${i.severity}: ${i.rule} ${i.message}`);
   }
+  if (growthRemedies.length) outFM.growth_remedies = growthRemedies;
   outFM.scenes = scenes;
 
   const scriptBody = [

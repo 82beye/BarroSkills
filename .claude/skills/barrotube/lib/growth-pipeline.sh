@@ -89,6 +89,19 @@ if [ "$HOUR" -lt 12 ]; then
   fi
 fi
 
+# [진단·처방] KPI 가 RED·YELLOW 면 최근 발행분에서 원인을 찾아 처방을 켜고, 켜 둔 처방의 효과를
+# 판정한다(유지·되돌림). directives *앞*에 돌아야 오늘 켠 처방이 오늘 지시문 맨 위에 실린다.
+# 진단이 실패해도 처방 생성은 계속한다 — 원인 분석이 빠져도 기존 지시는 나가야 한다.
+DIAG_LINE=""
+if [ "${DRY_RUN:-0}" = "1" ]; then
+  echo "  [DRY_RUN] node scripts/automation/growth-diagnose.js --date ${DATE}"
+else
+  DIAG_OUT="$(node scripts/automation/growth-diagnose.js --date "$DATE" 2>&1)" \
+    || { echo "$DIAG_OUT"; audit "growth_diagnose_fail" "WARN" "date=${DATE}"; }
+  echo "$DIAG_OUT" | grep -v '^DIAG=' || true
+  DIAG_LINE="$(echo "$DIAG_OUT" | grep '^DIAG=' | head -1 | cut -d= -f2-)"
+fi
+
 run_step "directives" node scripts/automation/growth-directives.js --date "$DATE" || exit 1
 
 # 알림 정책: 아침 회차는 요약 1건, 오후 회차는 RED 일 때만. 월요일엔 주간 요약 추가.
@@ -97,10 +110,19 @@ if [ "${DRY_RUN:-0}" != "1" ] && [ -n "$OVERALL_LINE" ]; then
   OVERALL_GRADE="${OVERALL_LINE%%|*}"
   OVERALL_BRIEF="${OVERALL_LINE#*|}"
   if [ "$HOUR" -lt 12 ] || [ "$OVERALL_GRADE" = "RED" ]; then
+    KPI_SENT=1
     notify_telegram "🌱 <b>성장 KPI $(tg_escape "$OVERALL_GRADE")</b> — ${DATE}
-$(tg_escape "$OVERALL_BRIEF")"
+$(tg_escape "$OVERALL_BRIEF")${DIAG_LINE:+
+
+$(tg_escape "$DIAG_LINE")}"
   fi
   audit "growth_kpi" "INFO" "date=${DATE} overall=${OVERALL_GRADE}"
+fi
+# 진단이 새로 켜거나 판정한 처방, 새 설계서는 등급과 상관없이 알린다. 오후 회차는 RED 일 때만
+# KPI 를 보내서, YELLOW 인 날 처방이 유지·되돌림으로 바뀌어도 알림이 없었다. DIAG 줄은 새 소식이
+# 있을 때만 채워진다(growth-diagnose.js 가 같은 진단을 resend_days 안에 다시 내지 않는다).
+if [ "${DRY_RUN:-0}" != "1" ] && [ -n "$DIAG_LINE" ] && [ "${KPI_SENT:-0}" != "1" ]; then
+  notify_telegram "$(tg_escape "$DIAG_LINE")"
 fi
 if [ -n "$WEEKLY_LINE" ]; then
   notify_telegram "📒 <b>주간 성장 회고</b>

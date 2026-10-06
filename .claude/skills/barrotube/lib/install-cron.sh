@@ -145,6 +145,14 @@ cmd_install() {
       script_path="${BARROTUBE_HOME}/lib/growth-pipeline.sh"
       extra_args=""
       ;;
+    growth-manager)
+      # 성장 매니저(LLM): KPI·영상 성과·처방 결과를 읽고 가설·처방을 갱신한다 — 하루 1회.
+      # 국장 회차 공개(18:00)·석간 마켓맵 뒤, 새벽 회차와 AI 한도를 나눠 쓰지 않는 저녁에 돈다.
+      # 켠 처방은 다음 날 05:40 growth 회차의 처방 지시에 실린다.
+      #   bash install-cron.sh install growth-manager "19:40"
+      script_path="${BARROTUBE_HOME}/scripts/automation/growth-manager.js"
+      extra_args=""
+      ;;
     doctor-daily)
       script_path="${BARROTUBE_HOME}/lib/doctor-cli.sh"
       extra_args=""
@@ -168,7 +176,7 @@ cmd_install() {
       ;;
     *)
       echo "❌ 알 수 없는 routine: $routine" >&2
-      echo "사용 가능: us-close | kr-close | omnibus | realestate | market-map | market-map-krclose | competitor-scan | growth | weekly-marketing | doctor-daily | telegram-bot | publish-resume"
+      echo "사용 가능: us-close | kr-close | omnibus | realestate | market-map | market-map-krclose | competitor-scan | growth | growth-manager | weekly-marketing | doctor-daily | telegram-bot | publish-resume"
       exit 1
       ;;
   esac

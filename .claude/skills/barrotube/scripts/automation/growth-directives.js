@@ -27,6 +27,7 @@ import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { competitorAgenda, formatAgenda } from './lib/competitor-agenda.js';
 import { classifyTitle, TYPE_LABEL } from './lib/title-types.js';
+import { readActiveRemedies, remedySection } from './lib/growth-remediation.js';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const INTEL_DIR = join(ROOT, 'workspace', 'intel', 'competitors');
@@ -110,8 +111,12 @@ export function exhaustedTopics(outliers, limit = 3) {
     .map((o) => `- ${cut(o.title, 45)}… (${o.channel}, ${o.multiple ?? o.vpd_multiple ?? ''}× 소진)`);
 }
 
-export function buildDirective({ date, slot, analysis, kpi, experiment, policy, agenda }) {
+export function buildDirective({ date, slot, analysis, kpi, experiment, policy, agenda, remedies }) {
   const lines = [`# 성장 지시 — ${date} · ${slot}`, ''];
+
+  // 0) KPI 진단이 켠 자동 처방 — 실험보다 위. 진단이 원인을 짚은 것이고(growth-diagnose.js),
+  // 대본 프롬프트가 이 파일 앞 3000자만 읽으므로 맨 앞에 둬야 잘리지 않는다.
+  lines.push(...remedySection(remedies));
 
   // 1) 실험 — 최우선. 주 1개 실험이 로테이션의 핵심이라 맨 위.
   if (experiment?.directive) {
@@ -238,7 +243,9 @@ function main() {
     const agenda = snap
       ? competitorAgenda(snap, asOf, { slot, minChannels: 2, limit: 6 })
       : null;
-    const md = buildDirective({ date, slot, analysis, kpi, experiment: expState.current, policy, agenda });
+    // 켜진 처방 중 이 슬롯에 적용되는 것(진단기·성장 매니저가 켠 것). 없거나 깨지면 빈 목록.
+    const remedies = readActiveRemedies(ROOT, { slot });
+    const md = buildDirective({ date, slot, analysis, kpi, experiment: expState.current, policy, agenda, remedies });
     const outPath = join(OUT_DIR, `${date}-${slot}.md`);
     writeFileSync(outPath, md);
     console.log(`✓ ${outPath.replace(ROOT + '/', '')} (${md.length}자${analysis ? '' : ' · 경쟁 분석 없음'})`);
