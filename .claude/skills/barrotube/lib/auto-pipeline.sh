@@ -802,6 +802,15 @@ if [ "$DRY_RUN" = "0" ] && [ -s "$FACTCHECK_PATH" ]; then
   fi
 fi
 
+# 공인 인물 캐리커처 보강 (2026-09-29 — lib/ensure-caricature.js). 대본이 CHARACTERIZE 인물
+# (외국 정치인·CEO·경제 인사)을 불렀는데 캐리커처 씬이 없으면 QA(정책 §6.2.1)가 자산을 다 만든
+# 뒤에야 게시를 막는다 — 09-29 us-close 가 06:27 에 그렇게 멈춰 08:00 편이 수동 복구됐다.
+# 팩트체크 재작성까지 끝난 최종 대본에, 이미지를 굽기 전에 채운다. 못 맞춰도 QA 가 여전히 판정한다.
+if [ "$DRY_RUN" = "0" ] && [ "$SUMMARY_FORM" = "0" ]; then
+  node scripts/automation/ensure-caricature.js --episode "$EP_DIR" --platform "$PLATFORM" \
+    || echo "  ⚠ 캐리커처 보강이 정책을 못 맞췄습니다 — QA 가 판정합니다"
+fi
+
 # 「미국 증시 요약」 자산 — 씬 1 지수 카드를 굽고, 마시 컷은 라이브러리에서 먼저 채운다.
 # 비는 씬만 아래 Phase 7 이 대본의 범용 프롬프트로 굽는다(구운 컷은 다음 분류 때 라이브러리로).
 SUMMARY_MEDIA_NOTE=""

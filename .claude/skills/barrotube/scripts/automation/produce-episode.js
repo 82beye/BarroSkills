@@ -45,6 +45,7 @@ import { updateIssueStatus } from './register-paperclip-issue.js';
 import { resolvePaths, formatToPlatform } from './paths.js';
 import { getSecret } from './config-loader.js';
 import { acquireLock, releaseLock, heartbeat as lockHeartbeat } from './in-flight-lock.js';
+import { ensureCaricature } from './lib/ensure-caricature.js';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const LOGS = join(ROOT, 'logs');
@@ -312,6 +313,19 @@ async function main() {
         '--script', scriptArg,
         '--tts-dir', ttsDirArg,
       ]);
+
+    // 공인 인물 캐리커처 보강 — 이미지를 굽기 전에 (lib/ensure-caricature.js, 2026-09-29).
+    // auto-pipeline 도 Phase 7 전에 같은 것을 돌린다. 수동 실행(/barrotube)도 QA 에서 막히지 않게 하고,
+    // 이미 구운 씬이면 스틸·클립을 치워 다시 굽게 한다(QA 판정이 프롬프트 글자라 거짓 통과를 막는다).
+    if (!DRY_RUN) {
+      try {
+        const fix = ensureCaricature({ epDir: absEp, platform });
+        for (const c of fix.changes || []) console.log(`\n🎭 씬 ${c.sceneId}: ${c.figureId} 캐리커처 절 추가 — 정책 §2 CHARACTERIZE`);
+        if (fix.needed && !fix.resolved) console.warn('   ⚠ 캐리커처 보강 뒤에도 정책 §6.2.1 에 걸린다 — QA 가 막을 것이다');
+      } catch (e) {
+        console.warn(`   ⚠ 캐리커처 점검 건너뜀: ${e.message}`);
+      }
+    }
 
     // S6c Images — 기본: media-render(브라우저, PD 사전 생성) / 레거시: API(gemini|openai)
     const scriptFrontmatter = parseYAML(readFileSync(p.script, 'utf-8').match(/^---\n([\s\S]*?)\n---/)?.[1] || '') || {};
