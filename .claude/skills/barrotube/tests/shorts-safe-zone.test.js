@@ -8,7 +8,8 @@ import { SHORTS_SAFE, safeTop, CANVAS_H } from '../scripts/automation/lib/thumbn
 const ROOT = join(import.meta.dirname, '..');
 
 /** 안전구역 도입(2026-08-27) 전에 발행돼 되돌릴 수 없는 회차. 새로 추가되면 회귀다. */
-const KNOWN_VIOLATIONS = new Set(['EP-2026-0117', 'EP-2026-0118']);
+// 2026-10-01 EP-2026-0202(kr-close 재실행): 브라우저 경로 인트로가 12.3% 에서 시작 — 발행 후 발견.
+const KNOWN_VIOLATIONS = new Set(['EP-2026-0117', 'EP-2026-0118', 'EP-2026-0202']);
 
 // 2026-08-27 EP-2026-0118(운영자 스크린샷): 인트로 타이틀이 상단 5.8% 에서 시작해
 // Shorts 의 상태바·뒤로가기·검색·⋮ 아이콘이 첫 줄 위에 얹혔다. EP-0117 도 8.6%.

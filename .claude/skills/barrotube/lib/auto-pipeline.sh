@@ -228,7 +228,9 @@ if [ -n "$SLOT" ]; then
   [ -f "$ROUTINES" ] || { echo "❌ config/routines.json 없음" >&2; exit 2; }
   python3 -c "import json;d=json.load(open('$ROUTINES'));exit(0 if '$SLOT' in d.get('slots',{}) else 1)" \
     || { echo "❌ 알 수 없는 슬롯: $SLOT" >&2; exit 2; }
-  CRON_LOG_NAME="routine-${SLOT}"
+  # install-cron 이 plist 에 박는 경로(logs/cron/<routine>.log)와 같아야 한다 — 예전 "routine-<slot>"
+  # 은 없는 파일이라, 실패 알림의 tail 명령을 그대로 치면 "No such file" 이었다 (2026-09-30).
+  CRON_LOG_NAME="${SLOT}"
   SLOT_LABEL=$(json_get "$ROUTINES" "d['slots']['$SLOT']['label']")
   NEWS_SOURCES=$(json_get "$ROUTINES" "','.join(d['slots']['$SLOT']['news_sources'])")
   PUBLISH_AT=$(json_get "$ROUTINES" "d['slots']['$SLOT']['publish_at']")
@@ -293,14 +295,19 @@ TODAY=$(date +%Y-%m-%d)
 NEWS_DIR="${BARROTUBE_HOME}/workspace/daily-news/${TODAY}"
 # Phase 2a 산출물. Phase 3 이 에피소드로 복사하므로 RESUME·FORCE_TOPIC 경로(= Phase 2 를
 # 통째로 건너뛰는 경로)에서도 정의돼 있어야 한다 — set -u 라 미정의면 그 자리에서 죽는다.
-# 슬롯별 파일이 정본. 예전 이름은 2026-08-30 이전 산출물 폴백이다.
+# 슬롯별 파일만 정본이다. 여기서 [ -f ] 로 예전 이름(desk-briefing.md)에 폴백하던 동안은
+# 파일이 Phase 2a 에서야 생기므로 매번 폴백으로 떨어졌고, 08-31 부터 4주 동안
+# 05_desk_briefing.md 가 한 번도 설치되지 않았다(2026-09-28 발견). 예전 이름은 더 생기지 않는다.
 DESK_BRIEF_MD="${NEWS_DIR}/desk-briefing-${SLOT}.md"
 DESK_TOPIC_JSON="${NEWS_DIR}/desk-topic-${SLOT}.json"
-[ -f "$DESK_BRIEF_MD" ]  || DESK_BRIEF_MD="${NEWS_DIR}/desk-briefing.md"
-[ -f "$DESK_TOPIC_JSON" ] || DESK_TOPIC_JSON="${NEWS_DIR}/desk-topic.json"
 # 성장 처방 (growth-pipeline.sh 05:40/15:40 산출). 슬롯별 파일만 정본 — 없으면 없는 것.
 # DESK_BRIEF_MD 와 같은 이유로 Phase 0 에서 정의한다 (set -u + RESUME 경로).
 GROWTH_DIRECTIVES_MD="${BARROTUBE_HOME}/workspace/growth/directives/${TODAY}-${SLOT}.md"
+
+# 덮개가 닫힌 채 DarkWake 틈에 시작하면 네트워크가 없다 — 알림·수집 전에 기다린다 (guards.sh).
+if [ "$DRY_RUN" = "0" ]; then
+  wait_for_network || echo "⚠️  네트워크 응답 없음 — 그대로 진행합니다 (수집이 비면 헤드라인 폴백)"
+fi
 
 audit "auto_pipeline_start" "INFO" "slot=$SLOT dry_run=$DRY_RUN force_topic=$FORCE_TOPIC resume=$RESUME_EP"
 notify_telegram "🤖 <b>${SLOT_LABEL} 시작</b>$([ "$DRY_RUN" = "1" ] && echo " (DRY_RUN)")"

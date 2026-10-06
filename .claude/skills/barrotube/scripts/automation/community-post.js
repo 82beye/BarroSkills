@@ -92,7 +92,13 @@ async function verifyPublished(cardsDir, { waitMs = 180_000 } = {}) {
   for (let attempt = 1; ; attempt += 1) {
     const stale = [];
     for (const w of want) {
-      const r = await fetch(w.url, { cache: 'no-store', headers: { 'Cache-Control': 'no-cache' } });
+      // 네트워크 오류도 「아직 옛 판」과 같이 다시 본다. 2026-10-01 08:04 조간이 대기 도중
+      // fetch 한 번이 던진 "fetch failed" 로 게시 전체가 죽었다.
+      const r = await fetch(w.url, { cache: 'no-store', headers: { 'Cache-Control': 'no-cache' } }).catch((e) => e);
+      // 크기는 헤더로 본다. 본문을 버리지 않으면 소켓이 열린 채 남아 프로세스가 게시 뒤에도
+      // 끝나지 않는다 — 2026-09-29 18:01 석간: 게시 완료 후 10분 넘게 launchd 작업이 살아 있었다.
+      await r.body?.cancel();
+      if (r instanceof Error) { stale.push(`${w.name} ${r.message}`); continue; }
       if (!r.ok) { stale.push(`${w.name} HTTP ${r.status}`); continue; }
       const remote = Number(r.headers.get('content-length'));
       if (remote !== w.size) stale.push(`${w.name} 공개 ${remote}B ≠ 로컬 ${w.size}B`);

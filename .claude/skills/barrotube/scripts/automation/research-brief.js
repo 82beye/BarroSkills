@@ -212,7 +212,10 @@ function newestAnalysisPath(date, maxAge) {
 function writeFallbackAnalysis({ slotName, slot, skeleton, date, inputs, outDir }) {
   const market = readJson(inputs['시세 스냅샷'].path, {});
   const news = readJson(inputs['뉴스'].path, {});
-  const items = (news.sources || []).flatMap((source) => source.items || []).slice(0, 3);
+  // 12자 미만은 기사 제목이 아니라 사이트 메뉴다 — 2026-10-01 kr-close: 데스크까지 죽은 날
+  // 네이버 수집분 "홈"·"국내"·"미국 · 글로벌" 이 그대로 토픽이 돼 EP-2026-0201 이 "홈" 으로 만들어졌다.
+  const items = (news.sources || []).flatMap((source) => source.items || [])
+    .filter((item) => String(item.title || '').trim().length >= 12).slice(0, 3);
   const quotes = market.quotes || [];
   // 데스크가 고른 토픽이 있으면 그걸 쓴다.
   // 폴백은 "리서치 LLM 이 죽었을 때" 도는 경로인데, 그렇다고 **데스크까지 죽은 것은 아니다**.

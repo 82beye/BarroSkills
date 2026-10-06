@@ -180,7 +180,13 @@ const CLICK_JS = `(function(){
   var btns = Array.from(document.querySelectorAll('button,[role="button"]'));
   var go = btns.find(function(b){ var t=textOf(b); return (t==='계속'||t==='Continue') && b.offsetParent!==null; });
   if (go) { go.click(); return 'CONTINUE'; }
-  return 'WAIT';
+  // 못 누른 화면을 남긴다 — 09-19 이후 매 주기 "동의 대기 시간 초과"만 찍히고 어느 화면에서
+  // 멈췄는지는 한 줄도 없었다.
+  var seen = btns.concat(rows.filter(function(e){ return e.hasAttribute('data-identifier'); }))
+    .filter(function(e){ return e.offsetParent !== null; })
+    .map(function(e){ return textOf(e).replace(/\\s+/g,' ').slice(0,40); })
+    .filter(Boolean).slice(0,8);
+  return 'WAIT ' + location.pathname + ' | ' + seen.join(' / ');
 })()`;
 
 function findFreePort() {
@@ -285,6 +291,7 @@ async function main() {
   try {
     openTab(authUrl.toString());
     // 동의 화면은 단계마다 로딩이 있다. 화면을 판별해 누르고, 리디렉트될 때까지 반복한다.
+    let lastWait = '';
     for (let i = 0; i < 60; i++) {
       await sleep(2000);
       const url = currentAuthUrl();
@@ -292,7 +299,8 @@ async function main() {
       if (!url) continue;
       try {
         const r = chromeJS('accounts.google.com', CLICK_JS);
-        if (r !== 'WAIT') console.log(`   ▶ ${r}`);
+        if (!r.startsWith('WAIT')) console.log(`   ▶ ${r}`);
+        else if (r !== lastWait) { console.log(`   … ${r}`); lastWait = r; }
       } catch { /* 탭이 아직 없거나 전환 중 */ }
     }
 

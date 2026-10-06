@@ -182,7 +182,7 @@ fi
 # (publish_left_private 등)를 읽지 않으면 doctor 는 고장을 코앞에 두고도 통과시킨다 —
 # 2026-09-16~20 에 다섯 편이 비공개로 묻히는 동안 실제로 그랬다.
 RUNTIME_RESULTS=$(python3 - "$BARROTUBE_HOME" <<'PY'
-import datetime, json, os, pathlib, re, subprocess, sys
+import datetime, json, os, pathlib, plistlib, re, subprocess, sys
 
 root = pathlib.Path(sys.argv[1])
 UID = os.getuid()
@@ -192,42 +192,12 @@ NOW = datetime.datetime.now(datetime.timezone.utc)
 def emit(key, status, detail):
     print(json.dumps(key) + ': ' + json.dumps({'status': status, 'detail': detail}, ensure_ascii=False))
 
-# ── cron: 설치된 plist 를 열거한다 (고정 목록 금지) ──────────────────────────
-# doctor 자신은 뺀다. RED 를 찾으면 exit 1 로 끝나도록 설계돼 있어서, 자기 종료코드를
-# 자기가 감시하면 한 번 RED 가 난 뒤로는 영원히 RED 가 된다.
-SELF = 'doctor-daily'
-agents = pathlib.Path.home() / 'Library' / 'LaunchAgents'
-labels = sorted(f.name[:-len('.plist')] for f in agents.glob('com.barroskills.barrotube.*.plist'))
-if not labels:
-    emit('cron_installed', 'YELLOW', 'com.barroskills.barrotube.* plist 가 하나도 없다 — on-demand 모드')
-for label in labels:
-    routine = label.rsplit('.', 1)[-1]
-    if routine == SELF:
-        continue
-    r = subprocess.run(['launchctl', 'print', f'gui/{UID}/{label}'], capture_output=True, text=True)
-    if r.returncode:
-        emit('cron_' + routine, 'RED', 'plist 는 있는데 launchd 에 적재되지 않았다 — 이 루틴은 돌지 않는다')
-        continue
-    if re.search(r'^\s*state = running$', r.stdout, re.M):
-        emit('cron_' + routine, 'GREEN', 'running')
-        continue
-    code = re.search(r'last exit code = (-?\d+)', r.stdout)
-    runs = re.search(r'runs = (\d+)', r.stdout)
-    n_runs = int(runs[1]) if runs else 0
-    if code:
-        emit('cron_' + routine, 'GREEN' if code[1] == '0' else 'RED', 'last exit=' + code[1])
-    elif n_runs:
-        # 정상 종료했으면 launchd 가 종료코드를 남긴다. 돈 적은 있는데 코드가 없으면
-        # 시그널로 죽은 것이다(2026-09-18 realestate 가 SIGTERM 으로 11:08 에 끊겼다).
-        # 옛 검사는 이걸 'not yet observed' → GREEN 으로 삼켰다.
-        emit('cron_' + routine, 'YELLOW', f'{n_runs}회 실행됐으나 종료코드 없음 — 시그널로 중단된 회차가 있다')
-    else:
-        emit('cron_' + routine, 'GREEN', 'not yet observed')
-
-# ── 감사 로그 24시간 창 ────────────────────────────────────────────────────
 def audit_events(hours=24):
     out = []
-    for day in (NOW.astimezone(KST).date(), NOW.astimezone(KST).date() - datetime.timedelta(days=1)):
+    # 파일은 KST 날짜별이다. 창이 하루를 넘으면(금요일 회차를 월요일 아침에 볼 때) 그만큼 거슬러 연다.
+    today = NOW.astimezone(KST).date()
+    first = (NOW - datetime.timedelta(hours=hours)).astimezone(KST).date()
+    for day in (today - datetime.timedelta(days=n) for n in range((today - first).days + 1)):
         f = root / 'logs' / 'audit' / f'{day}.jsonl'
         if not f.is_file():
             continue
@@ -249,6 +219,96 @@ def audit_events(hours=24):
                 out.append((t, d))
     return out
 
+# ── cron: 설치된 plist 를 열거한다 (고정 목록 금지) ──────────────────────────
+# launchd 의 'last exit code' 는 그 라벨이 다시 돌 때까지 남는다. 실패한 회차를 다른 경로
+# (일회성 plist·RESUME)로 다시 돌려 발행까지 마쳐도 다음 정규 회차 전까지 그대로다 —
+# 2026-10-02 07:10 doctor 가 전날 16:00 kr-close 실패(EP-0201, LLM 한도)로 RED 를 울렸는데,
+# 그 슬롯은 20:06 에 EP-0202 로 이미 발행돼 있었다. 회차 시각도 없어 아침에 받은 사람은
+# 방금 끝난 미국장 회차가 깨진 줄 알았다. 그래서 어느 회차의 코드인지 적고, 그 회차 뒤
+# 같은 슬롯이 마지막 실패 이후 발행까지 갔으면 YELLOW 로 낮춘다 (텔레그램은 RED 만 울린다).
+def last_fire(plist):
+    """StartCalendarInterval 기준 지금 이전의 마지막 정시(로컬 시각). 정할 수 없으면 None."""
+    try:
+        sci = plistlib.loads(plist.read_bytes()).get('StartCalendarInterval')
+    except Exception:   # 깨진 plist 하나로 런타임 검사 전체가 죽으면 안 된다
+        return None
+    now = NOW.astimezone()
+    best = None
+    for e in sci if isinstance(sci, list) else [sci]:
+        if not isinstance(e, dict) or 'Hour' not in e or 'Minute' not in e:
+            continue   # 시·분이 빠진 항목은 매시·매분이라 회차가 하나로 안 정해진다
+        for n in range(366):
+            day = (now - datetime.timedelta(days=n)).date()
+            wd = (day.weekday() + 1) % 7   # launchd 요일: 0·7=일, 1=월
+            if e.get('Month', day.month) != day.month or e.get('Day', day.day) != day.day \
+                    or e.get('Weekday', wd) % 7 != wd:
+                continue
+            t = datetime.datetime.combine(day, datetime.time(e['Hour'], e['Minute']), now.tzinfo)
+            if t <= now:
+                best = max(best or t, t)
+                break
+    return best
+
+def slot_recovery(routine, fired):
+    """fired 회차 이후 이 슬롯의 (첫 실패 단계, 마지막 실패 뒤의 발행 (시각, EP))."""
+    eps, stage, pub = set(), None, None
+    for t, d in sorted(audit_events((NOW - fired).total_seconds() / 3600), key=lambda x: x[0]):
+        det = str(d.get('detail') or '')
+        if det.startswith(f'slot={routine} '):
+            ep = re.search(r'\bep=(EP-\d{4}-\d{4})', det)
+            if ep:
+                eps.add(ep[1])
+            if d.get('event') == 'auto_pipeline_fail':
+                st = re.search(r'stage=(.+?) detail=', det)
+                stage = stage or (st[1] if st else None)
+                pub = None   # 발행 뒤에 다시 깨졌으면 복구가 아니다
+            elif d.get('event') == 'auto_pipeline_published' and ep:
+                pub = (t, ep[1])
+        elif d.get('action') == 'published' and d.get('episode_id') in eps:
+            pub = (t, d['episode_id'])   # 손으로 이어 붙인 발행(RESUME·publish-resume)도 센다
+    return stage, pub
+
+# doctor 자신은 뺀다. RED 를 찾으면 exit 1 로 끝나도록 설계돼 있어서, 자기 종료코드를
+# 자기가 감시하면 한 번 RED 가 난 뒤로는 영원히 RED 가 된다.
+SELF = 'doctor-daily'
+agents = pathlib.Path.home() / 'Library' / 'LaunchAgents'
+labels = sorted(f.name[:-len('.plist')] for f in agents.glob('com.barroskills.barrotube.*.plist'))
+if not labels:
+    emit('cron_installed', 'YELLOW', 'com.barroskills.barrotube.* plist 가 하나도 없다 — on-demand 모드')
+for label in labels:
+    routine = label.rsplit('.', 1)[-1]
+    if routine == SELF:
+        continue
+    r = subprocess.run(['launchctl', 'print', f'gui/{UID}/{label}'], capture_output=True, text=True)
+    if r.returncode:
+        emit('cron_' + routine, 'RED', 'plist 는 있는데 launchd 에 적재되지 않았다 — 이 루틴은 돌지 않는다')
+        continue
+    if re.search(r'^\s*state = running$', r.stdout, re.M):
+        emit('cron_' + routine, 'GREEN', 'running')
+        continue
+    code = re.search(r'last exit code = (-?\d+)', r.stdout)
+    runs = re.search(r'runs = (\d+)', r.stdout)
+    n_runs = int(runs[1]) if runs else 0
+    fired = last_fire(agents / f'{label}.plist') if code and code[1] != '0' else None
+    if fired:
+        stage, pub = slot_recovery(routine, fired)
+        what = (f"last exit={code[1]} — {fired:%m/%d}({'월화수목금토일'[fired.weekday()]}) {fired:%H:%M} 회차"
+                + (f' {stage} 실패' if stage else ''))
+        if pub:
+            emit('cron_' + routine, 'YELLOW', f'{what} → {pub[1]} {pub[0].astimezone():%m/%d %H:%M} 발행으로 복구됨')
+        else:
+            emit('cron_' + routine, 'RED', what)
+    elif code:
+        emit('cron_' + routine, 'GREEN' if code[1] == '0' else 'RED', 'last exit=' + code[1])
+    elif n_runs:
+        # 정상 종료했으면 launchd 가 종료코드를 남긴다. 돈 적은 있는데 코드가 없으면
+        # 시그널로 죽은 것이다(2026-09-18 realestate 가 SIGTERM 으로 11:08 에 끊겼다).
+        # 옛 검사는 이걸 'not yet observed' → GREEN 으로 삼켰다.
+        emit('cron_' + routine, 'YELLOW', f'{n_runs}회 실행됐으나 종료코드 없음 — 시그널로 중단된 회차가 있다')
+    else:
+        emit('cron_' + routine, 'GREEN', 'not yet observed')
+
+# ── 감사 로그 24시간 창 ────────────────────────────────────────────────────
 events = audit_events()
 def detail_of(d):
     return str(d.get('detail') or '')
@@ -268,6 +328,18 @@ else:
 # 24시간 창은 **사건**만 잡는다. 묻힌 영상은 다음 날이면 창 밖으로 나가 다시 보이지
 # 않게 되는데, 정작 영상은 그대로 비공개로 남아 있다 — 2026-09-16~20 에 다섯 편이
 # 그렇게 쌓이는 동안 아무 신호도 없었다. 산출물 자체를 세서 잔고를 본다.
+#
+# 결과 파일은 **업로드 시점**의 기록이다. 나중에 사람이 공개로 바꾼 편(set-video-privacy.js·Studio)
+# 까지 비공개로 세면 7일 창이 끝날 때까지 가짜 RED 가 난다 — 2026-09-29 EP-0176·0177 이 그랬다
+# (실제 공개, 조회 755·1,025). 위에서 방금 동기화한 youtube-state.json 이 싱싱하면 그 판정이 정본이다.
+live = {}
+try:
+    ys = json.loads((root / 'workspace' / 'youtube-state.json').read_text(encoding='utf-8'))
+    checked = datetime.datetime.fromisoformat(str(ys.get('checked_at', '')).replace('Z', '+00:00'))
+    if (NOW - checked).total_seconds() <= 48 * 3600:
+        live = ys.get('videos') or {}
+except (OSError, ValueError, TypeError):
+    live = {}
 backlog = []
 for res in sorted((root / 'workspace' / 'episodes').glob('EP-*/platforms/*/80_publish_result.json')):
     try:
@@ -278,6 +350,9 @@ for res in sorted((root / 'workspace' / 'episodes').glob('EP-*/platforms/*/80_pu
         continue
     # 예약(scheduled)은 publishAt 에 스스로 공개된다. 비공개로 '올라가 버린' 것만 센다.
     if yt.get('privacyStatus') == 'private' and yt.get('status') != 'scheduled':
+        now_privacy = (live.get(yt.get('videoId')) or {}).get('privacy')
+        if now_privacy and now_privacy != 'private':
+            continue   # 지금은 공개(또는 삭제)다 — 방치가 아니다
         backlog.append(f"{res.parent.parent.parent.name}:{yt.get('videoId', '?')}")
 emit('publish_private_backlog', 'RED' if backlog else 'GREEN',
      f'최근 7일 비공개 방치 {len(backlog)}편 — ' + ', '.join(backlog) if backlog
@@ -347,6 +422,8 @@ for ep in sorted((root / 'workspace' / 'episodes').glob('EP-*')):
         status = json.loads(st.read_text(encoding='utf-8')).get('status', '?')
     except (OSError, ValueError):
         status = '?'
+    if status in ('cancelled', 'archived'):   # 접은 회차 — status-local.js TERMINAL_STATUSES
+        continue
     stale.append(f'{ep.name}({status}, {age_h:.0f}h)')
 emit('stale_episodes', 'YELLOW' if stale else 'GREEN',
      ', '.join(stale) + ' — 재개하거나 접어야 한다' if stale else '미완 에피소드 없음')

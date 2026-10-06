@@ -51,7 +51,19 @@ echo "🌱 성장 루프 — ${DATE} (${HOUR}시 회차)"
 # 관측·판정·처방 파일 생성은 읽기 전용 성격이고 아무것도 발행하지 않는다.
 # 처방을 실제로 소비하는 것은 auto-pipeline 이며 그쪽 게이트가 살아 있다.
 
-run_step "fetch" node scripts/automation/fetch-channel-stats.js || exit 1
+# 덮개가 닫힌 채 DarkWake(몇 초~45초) 틈에 뜨면 네트워크가 아직 없거나, 요청 도중 다시
+# 잠들어 연결이 끊긴다 — 2026-09-29 15:40 회차가 15:55 DarkWake 에서 fetch timeout 으로
+# 빠져 doctor 가 RED 를 띄웠다. 네트워크를 기다렸다가 수집하고, 실패하면 한 번 더 기다렸다 재시도한다.
+fetch_stats() {
+  node scripts/automation/fetch-channel-stats.js && return 0
+  echo "  ↻ fetch 실패 — 네트워크를 다시 기다렸다가 한 번 더 시도합니다"
+  wait_for_network 20
+  node scripts/automation/fetch-channel-stats.js
+}
+if [ "${DRY_RUN:-0}" != "1" ]; then
+  wait_for_network 20 || echo "  ⚠️  네트워크 응답 없음 — 그대로 시도합니다"
+fi
+run_step "fetch" fetch_stats || exit 1
 
 KPI_OUT=""
 if [ "${DRY_RUN:-0}" = "1" ]; then

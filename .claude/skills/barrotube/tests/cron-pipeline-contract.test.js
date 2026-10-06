@@ -587,6 +587,32 @@ test('파이프라인이 스스로 슬립을 막는다 — 래퍼에 의존하�
   assert.match(src, /BT_NO_CAFFEINATE/, '끄는 스위치도 있어야 한다');
 });
 
+test('잠에서 막 깬 회차는 네트워크가 닿을 때까지 기다렸다가 수집한다', (t) => {
+  // 2026-09-28 점심 옴니버스: 덮개가 닫힌 채 DarkWake 틈에 시작해 시세 0/18·뉴스 0건으로
+  // 진행했고, 리서치 폴백이 "값 없음" 뿐인 문서를 만들었다. 실제로 깨어난 건 42분 뒤였다.
+  const dir = mkdtempSync(join(tmpdir(), 'bt-net-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const bin = join(dir, 'bin');
+  mkdirSync(bin);
+  const count = join(dir, 'count');
+  // 처음 두 번은 연결 실패, 세 번째에 닿는 curl. sleep 은 곧바로 돌아온다.
+  writeFileSync(join(bin, 'curl'), `#!/bin/bash\nn=$(( $(cat "${count}" 2>/dev/null || echo 0) + 1 ))\necho "$n" > "${count}"\n[ "$n" -ge 3 ]\n`, { mode: 0o755 });
+  writeFileSync(join(bin, 'sleep'), '#!/bin/bash\nexit 0\n', { mode: 0o755 });
+  const run = (tries) => spawnSync('/bin/bash', ['-c', `source "${join(ROOT, 'lib', 'guards.sh')}"\nwait_for_network ${tries}`], {
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, BARROTUBE_HOME: dir }, encoding: 'utf8', timeout: 10_000,
+  });
+  assert.equal(run(5).status, 0, '세 번째 시도에 닿으면 통과');
+  assert.equal(readFileSync(count, 'utf8').trim(), '3', '닿은 뒤에는 더 두드리지 않는다');
+  rmSync(count);
+  assert.equal(run(2).status, 1, '시도를 다 쓰면 1 — 진행 여부는 호출자가 정한다');
+
+  const src = readFileSync(AUTO, 'utf8');
+  const waitAt = src.indexOf('wait_for_network');
+  assert.ok(waitAt > 0, '파이프라인이 수집 전에 기다려야 한다');
+  assert.ok(waitAt < src.indexOf('notify_telegram "🤖 <b>${SLOT_LABEL} 시작</b>'), '시작 알림보다 앞이어야 한다');
+  assert.ok(waitAt < src.indexOf('node scripts/automation/fetch-market-snapshot.js'), '시세 수집보다 앞이어야 한다');
+});
+
 test('install-cron expands a weekday range without bash 4 associative arrays', () => {
   // macOS 기본 bash 는 3.2 다. declare -A 를 쓰면 조용히 분기를 건너뛴다 (실측).
   const src = readFileSync(INSTALL, 'utf8');
@@ -845,6 +871,115 @@ test('doctor 는 설치된 plist 를 열거하고, 파이프라인이 남긴 RED
   }
   // 자기 종료코드를 자기가 감시하면 한 번 RED 가 난 뒤 영원히 RED 가 된다.
   assert.match(src, /SELF = 'doctor-daily'/, 'doctor 는 자신을 감시 대상에서 뺀다');
+
+  // 비공개 잔고는 업로드 시점 기록이 아니라 지금 상태로 센다 — 사람이 나중에 공개한 편을
+  // 7일 내내 RED 로 세던 오탐(2026-09-29 EP-0176·0177, 실제 공개).
+  const backlog = src.slice(src.indexOf('backlog = []') - 900, src.indexOf("emit('publish_private_backlog'"));
+  assert.match(backlog, /youtube-state\.json/, '방금 동기화한 실제 상태를 봐야 한다');
+  assert.match(backlog, /now_privacy != 'private'[\s\S]{0,40}continue/);
+});
+
+/**
+ * launchd 의 last exit code 는 그 라벨이 다시 돌 때까지 남는다. 2026-10-02 07:10 doctor 가
+ * 전날 16:00 kr-close 실패로 RED 를 울렸다 — 그 슬롯은 20:06 재실행으로 이미 발행돼 있었고,
+ * 메시지에 회차 시각이 없어 아침에 받은 운영자는 방금 끝난 미국장 회차가 깨진 줄 알았다.
+ */
+test('doctor 는 남은 실패 종료코드에 회차를 적고, 발행으로 복구된 회차로는 RED 를 울리지 않는다', () => {
+  const src = readFileSync(join(ROOT, 'lib', 'doctor-cli.sh'), 'utf8');
+  const py = src.slice(src.indexOf("<<'PY'\n") + "<<'PY'\n".length, src.indexOf('\nPY\n'));
+  const tmp = mkdtempSync(join(tmpdir(), 'bt-doctor-cron-'));
+  try {
+    // 가짜 launchctl — kr-close 의 마지막 회차는 exit 1 로 끝났다.
+    const bin = join(tmp, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'launchctl'),
+      '#!/bin/sh\nprintf "\\tstate = not running\\n\\truns = 4\\n\\tlast exit code = 1\\n"\n', { mode: 0o755 });
+    // 매일 3시간 전 정시에 도는 회차 — 마지막 회차가 그 시각 하나로 정해진다.
+    const fired = new Date(Date.now() - 3 * 3600_000);
+    fired.setSeconds(0, 0);
+    const agents = join(tmp, 'home', 'Library', 'LaunchAgents');
+    mkdirSync(agents, { recursive: true });
+    writeFileSync(join(agents, 'com.barroskills.barrotube.kr-close.plist'),
+      '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>'
+      + '<key>Label</key><string>com.barroskills.barrotube.kr-close</string><key>StartCalendarInterval</key>'
+      + `<dict><key>Hour</key><integer>${fired.getHours()}</integer><key>Minute</key><integer>${fired.getMinutes()}</integer></dict>`
+      + '</dict></plist>');
+
+    const krClose = (events) => {
+      const audit = join(tmp, 'root', 'logs', 'audit');
+      rmSync(audit, { recursive: true, force: true });
+      mkdirSync(audit, { recursive: true });
+      for (const [min, ev] of events) {
+        const at = new Date(fired.getTime() + min * 60_000);
+        const day = new Date(at.getTime() + 9 * 3600_000).toISOString().slice(0, 10);   // 감사 로그는 KST 날짜별
+        writeFileSync(join(audit, `${day}.jsonl`), JSON.stringify({ at: at.toISOString(), ...ev }) + '\n', { flag: 'a' });
+      }
+      const r = spawnSync('python3', ['-', join(tmp, 'root')], {
+        input: py, encoding: 'utf8', timeout: 60_000,
+        env: { ...process.env, HOME: join(tmp, 'home'), PATH: `${bin}:${process.env.PATH}` },
+      });
+      assert.equal(r.status, 0, r.stderr);
+      const line = r.stdout.split('\n').find((l) => l.startsWith('"cron_kr-close"'));
+      return JSON.parse(`{${line}}`)['cron_kr-close'];
+    };
+    const hhmm = `${String(fired.getHours()).padStart(2, '0')}:${String(fired.getMinutes()).padStart(2, '0')}`;
+    const failed = [10, { event: 'auto_pipeline_fail', detail: 'slot=kr-close ep=EP-2099-0001 stage=Phase 6 factcheck detail=run-factcheck.js 실패' }];
+    const rerun = [60, { event: 'auto_pipeline_ep_created', detail: 'slot=kr-close ep=EP-2099-0002 topic=재실행' }];
+    const published = [120, { action: 'published', episode_id: 'EP-2099-0002' }];   // RESUME 을 손으로 이어 붙인 발행
+
+    // 복구 안 된 회차: RED 그대로, 다만 어느 회차인지 적는다.
+    let c = krClose([failed]);
+    assert.equal(c.status, 'RED', c.detail);
+    assert.match(c.detail, new RegExp(`${hhmm} 회차 Phase 6 factcheck 실패`));
+
+    // 같은 슬롯이 그 뒤 발행까지 갔으면 알림(RED) 대상이 아니다.
+    c = krClose([failed, rerun, published]);
+    assert.equal(c.status, 'YELLOW', c.detail);
+    assert.match(c.detail, /EP-2099-0002 .*발행으로 복구됨/);
+
+    // 발행 뒤에 다시 깨졌으면 복구가 아니다.
+    c = krClose([failed, rerun, published,
+      [150, { event: 'auto_pipeline_fail', detail: 'slot=kr-close ep=EP-2099-0003 stage=Phase 8 produce detail=x' }]]);
+    assert.equal(c.status, 'RED', c.detail);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('노드 루틴은 잠에서 막 깬 틈에도 네트워크를 기다린 뒤 돈다', () => {
+  // 2026-09-28 weekly-marketing(월 09:00): DarkWake 틈에 RSS 가 전부 fetch failed → 0건 → exit 5.
+  const src = readFileSync(join(ROOT, 'lib', 'run-node.sh'), 'utf8');
+  assert.ok(src.indexOf('wait_for_network') > 0 && src.indexOf('wait_for_network') < src.indexOf('exec node'),
+    'run-node.sh 가 node 를 띄우기 전에 네트워크를 기다려야 한다');
+});
+
+test('수집·게시하는 셸 루틴은 모두 네트워크를 기다린 뒤 첫 요청을 낸다', () => {
+  // 2026-09-29: 덮개가 닫힌 채 DarkWake 틈에 뜬 growth 15:40 회차가 fetch timeout 으로 빠졌다.
+  // auto-pipeline·run-node·krclose 에만 대기가 있었고, 셸 루틴 넷은 곧바로 요청을 냈다.
+  const cases = [
+    ['growth-pipeline.sh', 'run_step "fetch"'],
+    ['competitor-pipeline.sh', 'check-oauth-expiry.js'],
+    ['publish-resume.sh', 'node scripts/automation/run-episode.js --episode "$ep_id"'],
+    ['market-map-cron.sh', 'node scripts/automation/market-map.js'],
+  ];
+  for (const [file, firstRequest] of cases) {
+    const src = readFileSync(join(ROOT, 'lib', file), 'utf8');
+    const wait = src.indexOf('wait_for_network');
+    assert.ok(wait > 0, `${file}: 네트워크 대기가 없다`);
+    assert.ok(src.indexOf(firstRequest) > wait, `${file}: 첫 요청보다 대기가 앞이어야 한다`);
+  }
+  assert.match(readFileSync(join(ROOT, 'lib', 'market-map-cron.sh'), 'utf8'), /source "\$\{BARROTUBE_HOME\}\/lib\/guards\.sh"/,
+    'market-map-cron 은 guards.sh 를 불러야 wait_for_network 를 쓸 수 있다');
+});
+
+test('실패 알림이 안내하는 로그 경로가 크론이 실제로 쓰는 파일이다', () => {
+  // 2026-09-30 kr-close 알림: "tail -50 …/logs/cron/routine-kr-close.log" — 없는 파일이었다.
+  // install-cron 은 plist StandardOutPath 에 logs/cron/<routine>.log 를 박는다.
+  const install = readFileSync(INSTALL, 'utf8');
+  assert.match(install, /logs\/cron\/\$\{routine\}\.log/, 'install-cron 의 로그 이름 규칙');
+  const src = readFileSync(AUTO, 'utf8');
+  assert.match(src, /CRON_LOG_NAME="\$\{SLOT\}"/, '슬롯 회차의 알림 로그 이름은 루틴 이름과 같아야 한다');
+  assert.match(src, /logs\/cron\/\$\{CRON_LOG_NAME\}\.log/);
 });
 
 test('install-cron 이 문서·코드가 가리키는 wake 하위명령을 실제로 갖는다', () => {

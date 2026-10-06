@@ -65,3 +65,13 @@ test('게시 확인은 DOM 으로 이미지를 센다 — __data 만 믿지 않�
   assert.match(verify, /querySelectorAll\('ytd-backstage-image-renderer'\)/,
     '게시 확인이 DOM 으로 이미지를 세지 않는다');
 });
+
+test('공개본 크기 확인은 받은 본문을 버린다 — 안 버리면 게시 뒤에도 프로세스가 안 끝난다', () => {
+  // 헤더(content-length)만 보고 본문을 두면 GitHub Pages 연결이 열린 채 남는다.
+  // 2026-09-29 18:01 석간: 게시 완료 후 10분 동안 launchd 작업이 살아 있었다
+  // (실측 재현: 본문을 두면 카드 10장 조회 뒤 60초 넘게 안 끝나고, 버리면 5초에 끝난다).
+  const src = readFileSync(join(ROOT, 'scripts', 'automation', 'community-post.js'), 'utf-8');
+  const verify = src.slice(src.indexOf('async function verifyPublished'), src.indexOf('/* ── 페이지에서'));
+  assert.match(verify, /const r = await fetch\([^\n]*\);[\s\S]{0,200}await r\.body\?\.cancel\(\);/,
+    'fetch 직후 본문을 취소해야 한다');
+});

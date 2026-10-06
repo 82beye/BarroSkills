@@ -22,6 +22,10 @@ BARROTUBE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$BARROTUBE_HOME"
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
+# 덮개가 닫힌 채 DarkWake 틈에 뜨면 네트워크가 없다 — 수집·게시 전에 올라올 때까지 기다린다.
+source "${BARROTUBE_HOME}/lib/guards.sh"
+wait_for_network 20 || echo "⚠ 네트워크 응답 없음 — 그대로 시도" >&2
+
 ED="${1:-$(node -e "import('./scripts/automation/lib/market-map.js').then(m=>console.log(m.resolveEdition()))")}"
 echo "🗞  마켓맵 ${ED}판 시작 $(date '+%F %H:%M')"
 

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, rmSync, existsSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir, hostname } from 'node:os';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { runInNewContext } from 'node:vm';
 import test from 'node:test';
 import { getSecret } from '../scripts/automation/config-loader.js';
@@ -225,12 +225,14 @@ test('growth fetch failure is visible and cannot stamp stale KPI files as fresh'
   copyFileSync(join(ROOT, 'lib/growth-pipeline.sh'), join(dir, 'lib/growth-pipeline.sh'));
   const bin = join(dir, 'bin'); mkdirSync(bin);
   writeFileSync(join(bin, 'node'), '#!/bin/bash\nprintf "%s\\n" "$*" >> "$BT_TEST_TRACE"\nexit 1\n', { mode: 0o700 });
+  writeFileSync(join(bin, 'curl'), '#!/bin/bash\nexit 0\n', { mode: 0o700 });
   const out = spawnSync('/bin/bash', ['lib/growth-pipeline.sh'], {
     cwd: dir, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, BARROTUBE_HOME: dir, BT_TEST_TRACE: trace, BT_NO_NOTIFY: '1', DRY_RUN: '0' }, encoding: 'utf8', timeout: 10_000,
   });
   assert.equal(out.status, 1, out.stderr);
   const calls = readFileSync(trace, 'utf8');
-  assert.match(calls, /fetch-channel-stats/);
+  // DarkWake 에서 요청 도중 잠들면 첫 시도가 끊긴다 — 네트워크를 다시 기다렸다가 한 번 더 한다.
+  assert.equal(calls.match(/fetch-channel-stats/g)?.length, 2, '실패하면 한 번 재시도한다');
   assert.doesNotMatch(calls, /growth-kpi|growth-weekly|growth-directives/);
 });
 
@@ -242,6 +244,7 @@ test('publish resume preserves pending uploads and reports failure or missing re
   copyFileSync(join(ROOT, 'lib/publish-resume.sh'), join(dir, 'lib/publish-resume.sh'));
   const result = join(base, '80_publish_result.json'), trace = join(dir, 'attempts.txt'), bin = join(dir, 'bin');
   mkdirSync(bin);
+  writeFileSync(join(bin, 'curl'), '#!/bin/bash\nexit 0\n', { mode: 0o700 });
   writeFileSync(join(bin, 'node'), '#!/bin/bash\nif [[ "$1" == scripts/automation/run-episode.js ]]; then\n  echo attempted >> "$BT_TEST_TRACE"\n  if [[ "${BT_TEST_CREATE_RESULT:-0}" == 1 ]]; then echo \'{"videoId":"fixture"}\' > "$BT_TEST_RESULT"; fi\n  exit "${BT_TEST_EXIT:-1}"\nfi\nexit 1\n', { mode: 0o700 });
   const run = (extra = {}) => spawnSync('/bin/bash', ['lib/publish-resume.sh'], {
     cwd: dir, env: { ...process.env, BARROTUBE_HOME: dir, PATH: `${bin}:${process.env.PATH}`, BT_NO_NOTIFY: '1', DRY_RUN: '0', BT_TEST_TRACE: trace, BT_TEST_RESULT: result, ...extra }, encoding: 'utf8', timeout: 10_000,
@@ -250,6 +253,17 @@ test('publish resume preserves pending uploads and reports failure or missing re
   assert.equal(run().status, 1);
   assert.equal(existsSync(trace), false, 'pending upload must not invoke S11 again');
   assert.equal(readFileSync(`${result}.lock`, 'utf8'), '{"pid":999999}');
+
+  // 파이프라인이 지금 올리는 중인 락은 실패가 아니다 (2026-09-28 17:30 EP-2026-0192 오탐).
+  const uploader = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)', 'run-episode.js'], { stdio: 'ignore' });
+  t.after(() => uploader.kill());
+  writeFileSync(`${result}.lock`, JSON.stringify({ pid: uploader.pid, created_at: 'now' }, null, 2));
+  const live = run();
+  assert.equal(live.status, 0, live.stdout + live.stderr);
+  assert.match(live.stdout, /업로드 진행 중/);
+  assert.equal(existsSync(trace), false, 'a live upload must not be started twice');
+  assert.ok(existsSync(`${result}.lock`), '살아 있는 업로드의 락은 건드리지 않는다');
+  uploader.kill();
   rmSync(`${result}.lock`);
   assert.equal(run().status, 1, 'child failure must reach launchd');
   assert.equal(run({ BT_TEST_EXIT: '0' }).status, 1, 'exit 0 without a result is not publication');

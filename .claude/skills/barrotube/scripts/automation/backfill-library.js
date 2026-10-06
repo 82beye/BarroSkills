@@ -244,6 +244,9 @@ function episodesPendingRender(windowDays = 7) {
   const cutoff = Date.now() - windowDays * 86400000;
   for (const ep of readdirSync(EPISODES)) {
     if (!/^EP-/.test(ep)) continue;
+    // 접은 회차(cancelled·archived)는 재개되지 않는다 — 기다리면 백필이 7일씩 막힌다.
+    const st = join(EPISODES, ep, '.episode_status.json');
+    if (existsSync(st) && /"status":\s*"(cancelled|archived)"/.test(readFileSync(st, 'utf8'))) continue;
     const dirs = [join(EPISODES, ep)];
     const plat = join(EPISODES, ep, 'platforms');
     if (existsSync(plat)) for (const p of readdirSync(plat)) dirs.push(join(plat, p));

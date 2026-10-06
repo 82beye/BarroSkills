@@ -134,6 +134,14 @@ test('데스크 산출물이 대본·팩트체크까지 닿는다', () => {
   assert.ok(defIdx > 0 && defIdx < useIdx, 'DESK_BRIEF_MD 는 Phase 3 사용 지점보다 앞에서 정의돼야 한다');
   assert.ok(!/^\s{2}DESK_BRIEF_MD=/m.test(pipeline), 'Phase 2 블록 안쪽(들여쓰기) 정의가 남아 있으면 RESUME 에서 unbound 로 죽는다');
 
+  // 슬롯별 파일은 Phase 2a 가 만든다. 그보다 앞에서 [ -f ] 로 이름을 고르면 아직 없어서
+  // 예전 이름으로 떨어지고, Phase 3 의 [ -s ] 가 설치를 조용히 건너뛴다.
+  // 2026-09-28 발견: 08-31 부터 4주 동안 05_desk_briefing.md 가 한 번도 설치되지 않았다.
+  const deskRunIdx = pipeline.indexOf('node scripts/automation/desk-briefing.js --slot');
+  const pickIdx = pipeline.search(/\[ -f "\$DESK_(BRIEF_MD|TOPIC_JSON)" \]/);
+  assert.ok(pickIdx === -1 || pickIdx > deskRunIdx,
+    '데스크가 돌기 전에 파일 존재로 경로를 고르면 설치가 매번 빠진다');
+
   assert.match(read('scripts/automation/generate-script.js'), /05_desk_briefing\.md/, '대본이 근거를 봐야 한다');
   assert.match(read('scripts/automation/run-factcheck.js'), /05_desk_briefing\.md/, '팩트체크가 출처를 봐야 한다');
 });

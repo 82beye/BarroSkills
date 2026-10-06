@@ -458,13 +458,33 @@ async function main() {
   };
   const { json: raw, engineUsed } = await runEngineChain(chain, runners, { log: console.error, warn: console.error });
 
+  function firstJsonObject(text) {
+    const start = text.indexOf('{');
+    if (start < 0) return text;
+    let depth = 0, inStr = false, esc = false;
+    for (let i = start; i < text.length; i++) {
+      const c = text[i];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (c === '\\') esc = true;
+        else if (c === '"') inStr = false;
+      } else if (c === '"') inStr = true;
+      else if (c === '{') depth++;
+      else if (c === '}' && --depth === 0) return text.slice(start, i + 1);
+    }
+    return text;
+  }
+
   function safeParse(text) {
     try { return JSON.parse(text); } catch {}
     const fixed = text.replace(/"((?:[^"\\]|\\.)*)"/gs, (m, inner) => {
       const esc = inner.replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
       return `"${esc}"`;
     });
-    try { return JSON.parse(fixed); } catch (e) {
+    try { return JSON.parse(fixed); } catch {}
+    // 객체를 다 닫은 뒤 설명·두 번째 객체가 덧붙어 오면 첫 객체만 쓴다 — 2026-10-01
+    // EP-2026-0202: claude 응답 1874번째 글자부터 붙은 내용 때문에 S9 가 죽었다.
+    try { return JSON.parse(firstJsonObject(fixed)); } catch (e) {
       console.error('❌ JSON parse failed (after fix-up):', e.message);
       console.error(text.slice(0, 500));
       process.exit(1);
