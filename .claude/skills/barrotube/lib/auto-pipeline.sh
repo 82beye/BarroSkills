@@ -97,13 +97,27 @@ run_or_echo() {
   "$@"
 }
 
+# 멈춤·실패를 사람에게 넘기기 전에 원인 분석과 수정 설계서를 붙인다 (2026-10-07).
+# 「대본을 손보고 재개하세요」 한 줄만 받던 사람이 원인을 찾으러 로그를 파지 않게 한다 —
+# EP-2026-0214 의 원인은 대본이 아니라 팩트체커가 요약 원자료를 못 받은 것이었다.
+# 코드는 바꾸지 않는다(설계서까지, scripts/automation/incident-analyze.js). 분석이 실패해도 알림은 나간다.
+incident_analysis() {
+  [ "${DRY_RUN:-0}" = "0" ] && [ "${BT_INCIDENT_ANALYSIS:-1}" = "1" ] || return 0
+  local out
+  out="$(node scripts/automation/incident-analyze.js --ep "${EP_ID:-}" --slot "${SLOT:-}" --kind "$1" \
+    --stage "$2" --detail "$3" --log "logs/cron/${CRON_LOG_NAME:-auto-pipeline}" --timeout 150)" || true
+  printf '%s\n' "$out" | grep -v '^INCIDENT' >&2 || true
+  printf '%s\n' "$out" | sed -n 's/^INCIDENT_SUMMARY=//p' | tail -1 | sed 's/&/\&amp;/g; s/</\&lt;/g'
+}
+
 fail_with_alert() {
   local stage="$1"; local detail="$2"
   echo "❌ FAIL at $stage: $detail" >&2
   # 에피소드 ID 를 싣는다. 예전 알림에는 slot·stage 만 있어서 어느 회차가 죽었는지
   # 로그를 파야 알 수 있었다 (2026-09-23 EP-2026-0175 추적에 그대로 걸렸다).
   audit "auto_pipeline_fail" "ERROR" "slot=$SLOT ep=${EP_ID:-?} stage=$stage detail=$detail"
-  notify_telegram "❌ <b>auto-pipeline 실패</b>\nslot: ${SLOT:-adhoc}\nEP: ${EP_ID:-(에피소드 생성 전)}\nstage: $stage\n$detail\n\n로그: <code>tail -50 ${BARROTUBE_HOME}/logs/cron/${CRON_LOG_NAME}.log</code>"
+  local ia; ia="$(incident_analysis fail "$stage" "$detail")"
+  notify_telegram "❌ <b>auto-pipeline 실패</b>\nslot: ${SLOT:-adhoc}\nEP: ${EP_ID:-(에피소드 생성 전)}\nstage: $stage\n$detail${ia:+\n\n🔎 $ia}\n\n로그: <code>tail -50 ${BARROTUBE_HOME}/logs/cron/${CRON_LOG_NAME}.log</code>"
   exit 1
 }
 
@@ -113,7 +127,8 @@ halt_for_human() {
   local stage="$1"; local detail="$2"
   echo "🖐  $stage: $detail" >&2
   audit "auto_pipeline_halt" "WARN" "slot=$SLOT stage=$stage detail=$detail ep=${EP_ID:-}"
-  notify_telegram "🖐 <b>사람이 필요합니다</b>\nslot: ${SLOT:-adhoc}\nEP: ${EP_ID:-?}\nstage: $stage\n$detail\n\n이어서 진행:\n<code>RESUME_EP=${EP_ID:-EP-...} bash ${BARROTUBE_HOME}/lib/auto-pipeline.sh --slot ${SLOT:-us-close}</code>"
+  local ia; ia="$(incident_analysis halt "$stage" "$detail")"
+  notify_telegram "🖐 <b>사람이 필요합니다</b>\nslot: ${SLOT:-adhoc}\nEP: ${EP_ID:-?}\nstage: $stage\n$detail${ia:+\n\n🔎 $ia}\n\n이어서 진행:\n<code>RESUME_EP=${EP_ID:-EP-...} bash ${BARROTUBE_HOME}/lib/auto-pipeline.sh --slot ${SLOT:-us-close}</code>"
   exit 0
 }
 

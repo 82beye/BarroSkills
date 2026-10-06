@@ -29,7 +29,7 @@
 import { writeFileSync, mkdirSync, appendFileSync, renameSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { diagnose, kstDate } from './lib/growth-diagnosis.js';
+import { diagnose, kstDate, STAGE_CODE } from './lib/growth-diagnosis.js';
 import { planRemediation, emptyState, loadCatalog } from './lib/growth-remediation.js';
 import { loadJSON, loadFacts } from './lib/growth-dossier.js';
 
@@ -37,17 +37,6 @@ const ROOT = resolve(import.meta.dirname, '../..');
 const GROWTH = join(ROOT, 'workspace', 'growth');
 
 // 반복 장애 설계서가 가리킬 코드. 단계 이름의 앞부분("Phase 5")으로 찾는다.
-const STAGE_CODE = {
-  'Phase 1': 'scripts/automation/fetch-market-snapshot.js · collect-summary-data.js',
-  'Phase 2': 'scripts/automation/desk-briefing.js · research-brief.js',
-  'Phase 4': 'scripts/automation/generate-script.js · generate-summary-script.js · lib/text-engine.js',
-  'Phase 5': 'scripts/automation/lib/image-prompt-contract.js · generate-script.js (재작성 루프)',
-  'Phase 6': 'scripts/automation/run-factcheck.js · revise-script-factcheck.js',
-  'Phase 7': 'lib/auto-pipeline.sh (Phase 7) · grok-motion-applescript.js',
-  'Phase 8': 'scripts/automation/produce-episode.js',
-  'Phase 12': 'scripts/automation/run-episode.js · publish-youtube.js',
-};
-
 function writeAtomic(path, text) {
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, text);

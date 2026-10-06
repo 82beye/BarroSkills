@@ -31,6 +31,18 @@ function median(xs) {
 }
 
 /** epoch ms → KST 날짜 'YYYY-MM-DD'. 감사 로그 파일과 편성은 KST 날짜로 나뉜다. */
+/** 단계 → 볼 코드. 진단 설계서와 장애 분석(incident-analyze.js)이 같은 지도를 쓴다. */
+export const STAGE_CODE = {
+  'Phase 1': 'scripts/automation/fetch-market-snapshot.js · collect-summary-data.js',
+  'Phase 2': 'scripts/automation/desk-briefing.js · research-brief.js',
+  'Phase 4': 'scripts/automation/generate-script.js · generate-summary-script.js · lib/text-engine.js',
+  'Phase 5': 'scripts/automation/lib/image-prompt-contract.js · generate-script.js (재작성 루프)',
+  'Phase 6': 'scripts/automation/run-factcheck.js · revise-script-factcheck.js',
+  'Phase 7': 'lib/auto-pipeline.sh (Phase 7) · grok-motion-applescript.js',
+  'Phase 8': 'scripts/automation/produce-episode.js',
+  'Phase 12': 'scripts/automation/run-episode.js · publish-youtube.js',
+};
+
 export function kstDate(ms) {
   return new Date(ms + 9 * 3600_000).toISOString().slice(0, 10);
 }

@@ -2,13 +2,14 @@
 // 2026-10-06 운영자: "KPI 성장 관리가 되지 않고 있다. 분석하고 계속 추적하면서 업데이트가 돼야 한다.
 // 단순 자동화로는 안 될 것 같다." — 판단은 LLM 에 주되, 무엇을 얼마나 바꿀 수 있는지는 여기서 잠근다.
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import { buildPrompt, validatePlan, applyPlan, journalMarkdown, telegramText, LIMITS } from '../scripts/automation/lib/growth-manager.js';
-import { videoAnalyticsIndex } from '../scripts/automation/lib/growth-dossier.js';
+import { recentIncidents, videoAnalyticsIndex } from '../scripts/automation/lib/growth-dossier.js';
 import { planRemediation, emptyState, measure, activeRemedies, remedySection, remediesApplied } from '../scripts/automation/lib/growth-remediation.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -179,4 +180,20 @@ test('자료집: Analytics 영상별 리포트를 영상 id 로 묶어 시청 �
   assert.equal(videoAnalyticsIndex({}).size, 0, '리포트가 없으면 빈 값 — 스코프가 없을 때 자료집이 깨지지 않는다');
   const { system } = buildPrompt({ date: '2026-10-07', videos: [] });
   assert.match(system, /avp\(시청 지속률 %\)/, '매니저가 새 필드의 뜻과 읽는 법을 안다');
+});
+
+test('자료집: 장애 분석에 처리 기록을 붙인다 — 고친 장애를 매니저가 다시 설계서로 올리지 않게', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bt-incidents-'));
+  try {
+    writeFileSync(join(dir, 'incidents.jsonl'), [
+      { id: 'IR-1', at: '2026-10-06T22:14:00Z', ep: 'EP-2026-0214', stage: 'Phase 6 재작성', class: 'code', root_cause: '원자료 미전달' },
+      { id: 'IR-0', at: '2026-09-01T00:00:00Z', ep: 'EP-OLD', stage: 'Phase 4', class: 'code', root_cause: '오래됨' },
+      { type: 'resolution', id: 'IR-1', at: '2026-10-06T22:30:00Z', status: 'fixed', note: 'run-factcheck summaryDataText' },
+    ].map((r) => JSON.stringify(r)).join('\n') + '\n');
+    const rows = recentIncidents(dir, new Date('2026-10-07T10:00:00Z'));
+    assert.deepEqual(rows.map((r) => r.id), ['IR-1'], '14일 밖과 처리 기록 줄은 목록에서 뺀다');
+    assert.equal(rows[0].resolution, 'fixed: run-factcheck summaryDataText');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

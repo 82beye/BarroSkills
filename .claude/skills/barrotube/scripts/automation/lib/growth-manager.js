@@ -46,6 +46,9 @@ export function buildPrompt(dossier) {
 - 처방 효과는 그 처방을 실제로 받은 회차(videos[].rx)로만 잰다. 받은 회차가 없으면 판정도 없다.
 - videos[] 의 avp(시청 지속률 %)·avd(평균 시청 초)·subs(구독 전환)·shares 는 최근 28일 누적이다. v48 이 낮을 때
   avp 가 높으면 「노출·클릭」 쪽, avp 가 낮으면 「도입·전개」 쪽 문제로 갈라 보라. 값이 없으면 수집 전이다.
+- incidents 는 회차가 멈춘 원인 분석이다(설계서 growth/incidents/<id>.md). 발행 일관성이 병목이면 대본 처방으로 메우지 말고,
+  반복되는 원인을 proposals 로 올려 그 설계서 id 를 body 에 적어라. 코드 수정은 레버가 아니다.
+  resolution 이 있는 장애(fixed·already_fixed·mitigated·env)는 처리됐다 — 같은 원인이 그 뒤에 또 났을 때만 다시 올려라.
 
 ## 규칙
 - 근거는 자료집에 있는 숫자로만 댄다. 자료집에 없는 수치·사실·경쟁 정보를 만들지 마라.

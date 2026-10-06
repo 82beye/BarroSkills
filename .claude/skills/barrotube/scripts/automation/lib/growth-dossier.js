@@ -50,6 +50,24 @@ export function videoAnalyticsIndex(report) {
   return out;
 }
 
+/** workspace/growth/incidents.jsonl 최근 days 일 — 장애 분석 요약만(설계서 본문은 incidents/<id>.md). */
+export function recentIncidents(growth, now, days = 14) {
+  const f = join(growth, 'incidents.jsonl');
+  if (!existsSync(f)) return [];
+  const since = now.getTime() - days * 86400_000;
+  const rows = readFileSync(f, 'utf-8').split('\n').filter(Boolean)
+    .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+    .filter(Boolean);
+  // 처리 기록({type:'resolution', id, status, note})은 같은 원장에 덧붙인다 — 고친 장애를 매니저가 다시 올리지 않게.
+  const resolution = new Map(rows.filter((r) => r.type === 'resolution').map((r) => [r.id, r]));
+  return rows
+    .filter((r) => r.type !== 'resolution' && Date.parse(r.at) >= since)
+    .slice(-12)
+    .map((r) => ({ id: r.id, at: r.at?.slice(0, 16), ep: r.ep, slot: r.slot, stage: r.stage, class: r.class,
+      root_cause: String(r.root_cause ?? '').slice(0, 300), files: r.files ?? [],
+      resolution: resolution.has(r.id) ? `${resolution.get(r.id).status}: ${String(resolution.get(r.id).note ?? '').slice(0, 160)}` : null }));
+}
+
 /** 대본에서 훅 첫 문장·마무리 문장·포맷을 뽑는다. */
 function scriptFacts(scriptPath) {
   if (!existsSync(scriptPath)) return {};
@@ -216,6 +234,9 @@ export function buildDossier({ root, date, now, slots }) {
     channel_history: history,
     analytics_daily: daily,
     diagnosis: (diagnosis.findings ?? []).map((f) => ({ id: f.id, kpi: f.kpi, summary: f.summary })),
+    // 회차가 멈출 때마다 incident-analyze.js 가 남긴 원인·수정 설계 (2026-10-07). 발행 일관성 판단이
+    // 「누락 N회」 숫자가 아니라 「무엇이 왜 막혔고 무엇을 고치면 되는지」를 보게 한다.
+    incidents: recentIncidents(growth, now),
     remedies,
     experiments: { current: exp.current ?? null, recent: (exp.history ?? []).slice(-3).map((h) => ({ id: h.id, verdict: h.verdict, directive: h.directive })) },
     hypotheses: Object.values(strategy.hypotheses ?? {}).slice(-20),
