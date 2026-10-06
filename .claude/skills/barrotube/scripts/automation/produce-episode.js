@@ -366,6 +366,16 @@ async function main() {
               '--episode', relEp,
               '--platform', platform,
             ]);
+          // 편당 Grok 예산(lib/grok-budget.js)이 로컬로 배정한 씬은 Grok 이 정상 종료하면서
+          // 비워 둔다. 예전 폴백은 Grok 이 **실패**할 때만 돌아서 여기서 채우지 않으면
+          // 모션이 빈 채로 렌더에 간다. 계획분은 경보 대상이 아니다(_grok_plan.json 의 local).
+          if (!motionExists()) {
+            runTracked(absEp, episodeId, 'S6c', 'S6c Motion Clips (HyperFrames — Grok 예산 밖)', '08-image-generator',
+              'scripts/automation/generate-motion.js', [
+                '--episode', relEp,
+                '--platform', platform,
+              ]);
+          }
         }
       } catch (e) {
         // 엔진이 죽어도 스택만 던지고 끝내지 않는다 — "무엇을 하면 되는지"

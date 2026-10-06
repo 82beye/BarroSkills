@@ -44,6 +44,9 @@ import { fileURLToPath } from 'node:url';
 import { parse as parseYAML } from 'yaml';
 import { chromium } from 'playwright-core';
 import { verifyGrokClip } from './lib/motion-verify.js';
+import {
+  LEDGER_PATH, episodeIdOf, loadGrokBudget, planGrokScenes, readLedger, readPlan, recordSubmission, writePlan,
+} from './lib/grok-budget.js';
 
 const SKILL_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const PROFILE_DIR = process.env.BT_GROK_PROFILE
@@ -342,9 +345,31 @@ async function main() {
   mkdirSync(videosDir, { recursive: true });
 
   const scenes = loadScenes(baseDir);
-  const wanted = values.scene
+  let wanted = values.scene
     ? scenes.filter((s) => String(s.scene_id).padStart(3, '0') === String(values.scene).padStart(3, '0'))
     : scenes;
+
+  // 편당 Grok 예산 (lib/grok-budget.js). 남은 허용량은 원장으로 센다 — 같은 회차에서 실제
+  // Chrome 경로가 낸 제출도 원장에 있어서, 두 경로가 따로 세 상한이 두 배가 되는 일이 없다.
+  // 그 경로가 세운 계획은 덮어쓰지 않는다: 계획의 local 은 '처음부터 로컬로 배정한 컷'이라
+  // 폴백 경보에서 빠지는데, 여기서 덮으면 진짜 Grok 실패까지 경보에서 사라진다.
+  const episodeId = episodeIdOf(epDir);
+  const sid = (s) => String(s.scene_id).padStart(3, '0');
+  if (!values.scene) {
+    const roles = scenes.map((s) => ({ id: sid(s), role: s.role || '' }));
+    const have = new Set(roles.map((s) => s.id).filter((id) => existsSync(join(videosDir, `scene_${id}.mp4`))));
+    const now = planGrokScenes({ scenes: roles, have, episode: episodeId, ledger: readLedger(), budget: loadGrokBudget() });
+    const prior = readPlan(videosDir);
+    const plan = prior && Date.now() - Date.parse(prior.at || '') < 6 * 3_600_000 ? prior : now;
+    if (plan === now) writePlan(videosDir, now);
+    const allow = new Set(plan.grok || []);
+    wanted = wanted.filter((s) => allow.has(sid(s)) && !have.has(sid(s))).slice(0, now.allowed);
+    console.log(`🎯 Grok 예산 ${wanted.length}컷 — ${now.reason}`);
+    if (!wanted.length) {
+      console.log(`\n🎬 Grok 모션: 이번 편 예산 0컷 — 로컬 모션이 채운다 → ${videosDir}`);
+      return;
+    }
+  }
 
   // 이미 있는 클립의 해시를 미리 넣어 둔다 — 재실행이 같은 파일을 다시 받아도 잡힌다.
   const knownHashes = new Set(
@@ -378,12 +403,17 @@ async function main() {
         const info = await renderOne(page, {
           still, prompt: motionPromptFor(scene), outPath, knownHashes,
         });
+        recordSubmission(LEDGER_PATH, { episode: episodeId, scene: id });
         made += 1;
         stalls = 0;   // 하나라도 나왔으면 페이지도 서비스도 살아 있다
         console.log(`  ✅ 씬 ${id} → ${info}`);
       } catch (e) {
         failed += 1;
         console.warn(`  ❌ 씬 ${id}: ${e.message}`);
+        // 렌더 정체는 요청이 나간 뒤의 실패라 쿼터를 썼다. 업로드 칸을 못 찾은 실패는 요청 전이다.
+        if (/준비되지 않았습니다|내려받지 못했습니다/.test(e.message)) {
+          recordSubmission(LEDGER_PATH, { episode: episodeId, scene: id });
+        }
         if (STALL_PATTERN.test(e.message)) stalls += 1; else stalls = 0;
         if (made === 0 && stalls >= STALL_ABORT_AFTER) {
           console.error(`  ⛔ 연속 ${stalls}컷이 같은 사유로 실패했고 성공이 없습니다 — 페이지·세션 문제로 봅니다.`);

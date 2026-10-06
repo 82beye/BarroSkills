@@ -26,6 +26,10 @@ import { homedir } from 'node:os';
 import { parseArgs } from 'node:util';
 import { createHash } from 'node:crypto';
 import { verifyGrokClip } from './lib/motion-verify.js';
+import {
+  LEDGER_PATH, clearExhausted, episodeIdOf, loadGrokBudget, markExhausted, planGrokScenes,
+  readLedger, recordSubmission, writePlan,
+} from './lib/grok-budget.js';
 
 const GROK_URL = 'https://grok.com/imagine';
 /** Finder 가 바빠도 버티게 한다. 기본 AppleEvent 타임아웃(60초)이 -1712 의 원인이었다. */
@@ -54,6 +58,12 @@ const GEN_TIMEOUT_MS = Number(process.env.BT_GROK_TIMEOUT_MS || 6 * 60 * 1000);
 const STALL_ABORT_AFTER = Number(process.env.BT_GROK_STALL_ABORT || 2);
 /** 서비스 정체 신호. 컷 고유 사유(중복·오디오 없음)와 구분해야 한다. */
 const STALL_PATTERN = /준비되지 않았습니다|내려받지 못했습니다/;
+/**
+ * 한도 소진 문구. 뜨면 6분을 기다리지 않고 바로 접는다.
+ * 2026-09-28: 주간 한도가 09-27 16:50 에 바닥난 뒤 이 문구를 못 읽어 컷마다 6분씩 기다렸다.
+ * 세그먼트 라벨 같은 본문 단어에 걸리지 않게 '한도 + 도달/초과/소진' 처럼 짝으로만 잡는다.
+ */
+const QUOTA_PATTERN = /(한도|제한)[^\n]{0,20}(도달|초과|소진|모두 사용)|limit (reached|exceeded)|reached (your|the) [a-z ]{0,20}limit|upgrade to supergrok/i;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const md5 = (p) => createHash('md5').update(readFileSync(p)).digest('hex');
@@ -177,20 +187,28 @@ function navigate(_tab, url) {
 /** 페이지가 쓸 준비가 될 때까지 — file input 이 보일 때까지 */
 async function waitReady(tab, timeoutMs = 45000) {
   const t0 = Date.now();
+  // Chrome 이 스크립트를 못 받은 것과 페이지에 file input 이 없는 것은 다르다. 앞의 것을 삼키면
+  // 둘 다 "file input 미검출" 로 보인다 — 2026-09-30 kr-close: 페이지는 멀쩡했고(file input 3개)
+  // Chrome 이 응답하지 않던 동안 5컷이 모두 이 문구로 떨어져 원인을 못 가렸다.
+  let lastErr = null;
   while (Date.now() - t0 < timeoutMs) {
     await sleep(2500);
     let r;
     try {
       r = JSON.parse(chromeJS(`(function(){var t=document.body.innerText;return JSON.stringify({blocked:/blocked|unable to access/i.test(t),fi:document.querySelectorAll('input[type="file"]').length,login:location.hostname==='accounts.x.ai'||t.indexOf('가입하기')>=0});})()`));
+      lastErr = null;
     } catch (e) {
       if (e.code === 'BROWSER_PERMISSION') throw e;
+      lastErr = e;
       continue;
     }
     if (r.blocked) throw new Error('Cloudflare 차단 — 실제 Chrome 에서도 막혔습니다');
     if (r.login) { const e = new Error('Grok 로그아웃 상태 — Chrome 에서 로그인하세요'); e.code = 'GROK_LOGIN'; throw e; }
     if (r.fi > 0) return true;
   }
-  throw new Error('페이지 준비 실패 (file input 미검출)');
+  throw new Error(lastErr
+    ? `페이지 준비 실패 (Chrome 이 스크립트에 응답하지 않음: ${String(lastErr.message).slice(0, 160)})`
+    : '페이지 준비 실패 (file input 미검출)');
 }
 
 /**
@@ -541,6 +559,14 @@ async function waitForOwnVideo(tab, postPath) {
     if (poster.includes(`/generated/${postId}/`)) {
       return poster.replace('preview_image.jpg', 'generated_video.mp4');
     }
+    let body = '';
+    try { body = chromeJS('document.body.innerText'); } catch { /* 한 번 못 읽어도 다음 폴링이 본다 */ }
+    const quota = String(body).match(QUOTA_PATTERN);
+    if (quota) {
+      const e = new Error(`Grok 한도 소진 — 화면 문구 "${quota[0]}"`);
+      e.code = 'GROK_QUOTA';
+      throw e;
+    }
   }
   throw new Error(`게시물 ${postId} 의 영상이 ${Math.round(GEN_TIMEOUT_MS / 1000)}초 안에 준비되지 않았습니다`);
 }
@@ -776,7 +802,7 @@ async function main() {
   mkdirSync(videosDir, { recursive: true });
 
   const scenes = loadScenes(baseDir);
-  const wanted = values.scene
+  let wanted = values.scene
     ? scenes.filter((s) => s.id === String(values.scene).padStart(3, '0'))
     : scenes;
 
@@ -786,6 +812,24 @@ async function main() {
     if (reaped) console.log(`♻️  지난 회차 정체분 ${reaped}컷 회수`);
   } catch (e) {
     console.warn(`  ⚠ 정체분 회수 건너뜀: ${e.message}`);
+  }
+
+  // 편당 Grok 예산 (lib/grok-budget.js). 주간 한도를 한 편이 다 쓰지 않게, 훅부터 상한만큼만
+  // 맡기고 나머지는 계획된 로컬 모션으로 남긴다. --scene 으로 한 컷을 찍는 수동 실행은
+  // 운영자 판단이라 계획을 적용하지 않는다(원장에는 적는다).
+  const episodeId = episodeIdOf(epDir);
+  const budget = loadGrokBudget();
+  if (!values.scene) {
+    const have = new Set(scenes.map((s) => s.id).filter((id) => existsSync(join(videosDir, `scene_${id}.mp4`))));
+    const plan = planGrokScenes({ scenes, have, episode: episodeId, ledger: readLedger(), budget });
+    writePlan(videosDir, plan);
+    console.log(`🎯 Grok 예산 ${plan.allowed}컷${plan.grok.length ? ` (씬 ${plan.grok.join('·')})` : ''} — ${plan.reason}`
+      + `${plan.local.length ? ` · 로컬 모션 ${plan.local.join('·')}` : ''}`);
+    wanted = plan.grok.map((id) => scenes.find((s) => s.id === id)).filter(Boolean);
+    if (!wanted.length) {
+      console.log(`\n🎬 Grok 모션(실제 Chrome): 이번 편 예산 0컷 — 로컬 모션이 채운다 → ${videosDir}`);
+      process.exit(0);
+    }
   }
 
   const knownHashes = new Set(
@@ -810,6 +854,8 @@ async function main() {
       await requireVideoOptions();
       await attachStill(tab, still);
       postPath = await submitPrompt(tab, motionFor(scene));
+      // 요청이 나간 순간 쿼터를 쓴 것으로 센다 — 정체로 포기해도 Grok 은 나중에 렌더를 끝낸다.
+      recordSubmission(LEDGER_PATH, { episode: episodeId, scene: scene.id, post: postPath });
       const videoUrl = await waitForOwnVideo(tab, postPath);
       // poster 는 인코딩이 끝나기 전에도 뜬다 — 실제로 받아질 때까지가 완료 신호다.
       let fetched = false, lastErr = null;
@@ -837,9 +883,15 @@ async function main() {
       made += 1;
       console.log(`  ✅ 씬 ${scene.id} → ${outPath}`);
       stalls = 0;   // 하나라도 나왔으면 서비스는 살아 있다
+      if (clearExhausted(LEDGER_PATH)) console.log('  ▶ Grok 한도가 다시 열렸다 — 소진 표시를 지운다');
     } catch (e) {
       failed += 1;
       console.warn(`  ❌ 씬 ${scene.id}: ${e.message}`);
+      if (e.code === 'GROK_QUOTA') {
+        markExhausted(LEDGER_PATH, `${e.message} (${episodeId} 씬 ${scene.id})`);
+        console.error(`  ⏸  남은 컷을 시도하지 않는다 — ${budget.exhausted_backoff_hours}시간 동안 Grok 을 건너뛴다.`);
+        break;
+      }
       if (['BROWSER_PERMISSION', 'GROK_LOGIN', 'GROK_PLAN', 'GROK_AGE'].includes(e.code)) break;
       if (STALL_PATTERN.test(e.message)) {
         stalls += 1;
@@ -859,6 +911,15 @@ async function main() {
       console.log(`  ⏳ 다음 컷까지 ${Math.round(CUT_DELAY_MS / 1000)}초 대기`);
       await sleep(CUT_DELAY_MS);
     }
+  }
+
+  // 성공 없이 시도한 컷이 전부 정체면 한도 소진으로 본다. 한도가 막힌 뒤에도 Grok 은 게시물을
+  // 만들어 주고 영상만 안 붙여서, 문구가 없으면 이 신호가 유일하다(2026-09-27 16:56 이후 실측).
+  // 백오프 동안은 Grok 을 건너뛰어 회차마다 헛도는 12분을 없앤다.
+  const attempted = made + failed;
+  if (made === 0 && stalls > 0 && stalls >= Math.min(STALL_ABORT_AFTER, attempted)) {
+    markExhausted(LEDGER_PATH, `연속 ${stalls}컷 생성 정체 — 한도 소진 추정 (${episodeId})`);
+    console.error(`  ⏸  Grok 한도 소진으로 표시 — ${budget.exhausted_backoff_hours}시간 동안 건너뛰고, 그 뒤 첫 회차가 1컷으로 확인한다.`);
   }
 
   console.log(`\n🎬 Grok 모션(실제 Chrome): 신규 ${made}컷${failed ? `, 실패 ${failed}컷` : ''} → ${videosDir}`);

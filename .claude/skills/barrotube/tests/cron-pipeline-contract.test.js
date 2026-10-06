@@ -34,8 +34,11 @@ test('cron pipeline keeps browser assets, render, and publish in fail-closed ord
     '기본 모션 엔진은 Grok(옵션 0)이어야 한다');
   assert.match(source, /local motion_engine="\$\{BT_MOTION_ENGINE:-grok\}"/,
     'media_assets_ready 의 기본값도 같아야 한다 — 어긋나면 게이트가 엇갈린다');
-  assert.ok(source.includes('2. 위 이미지가 모두 저장된 뒤에만 Chrome의 Grok'),
-    'grok 을 명시 지정했을 때의 브라우저 절차는 남아 있어야 한다');
+  // 2026-09-28 운영자 결정(편당 Grok 예산): 브라우저 에이전트는 스틸만 만든다. Grok 영상은
+  // grok-motion-applescript.js 가 lib/grok-budget.js 의 편당 상한 안에서만 만든다 — 에이전트가
+  // 영상 N개를 만들면 주간 한도를 원장 밖에서 쓴다.
+  assert.ok(source.includes('Grok 영상은 다음 단계 스크립트가 편당 예산 안에서 만든다'),
+    'grok 모드에서도 브라우저는 Grok 을 열지 않아야 한다');
   // 브라우저에 클립을 요구하는 건 grok 을 명시했을 때뿐이다. wan 이 기본인데 여기가
   // != local-only 로 남아 있으면, 브라우저가 만들지도 않을 클립을 기다리다 멈춘다.
   assert.ok(!/if \[ "\$MOTION_ENGINE" != "local-only" \]/.test(source),
@@ -52,8 +55,9 @@ test('cron pipeline keeps browser assets, render, and publish in fail-closed ord
     '-select_streams a:0',
     'shasum -a 256',
     'duplicate bytes',
-    'Video audio 버튼이 aria-pressed=true',
-    'Remove image/thumbnail',
+    // 'Video audio 버튼이 aria-pressed=true'·'Remove image/thumbnail' 은 브라우저 Grok 절차의
+    // 문구였다. 그 절차를 뺀 뒤로 오디오는 grok-motion-applescript.js 의 requireVideoOptions 가,
+    // AAC 는 위 media_assets_ready 의 ffprobe(-select_streams a:0) 게이트가 본다.
     // 저장 방법은 "폴백"이 아니라 정본이다 — ChatGPT 미디어 뷰어에 다운로드 버튼이 없어서
     // 버튼을 찾던 에이전트가 marker 만 반복 생성하며 루프에 빠졌다(2026-08-17 EP-0097).
     "i.alt))",

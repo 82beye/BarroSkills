@@ -162,7 +162,12 @@ media_assets_ready() {
   # 바뀐 뒤로 클립은 Phase 8 의 S6c 가 만들므로, 여기서 클립을 요구하는 건 브라우저가
   # 실제로 클립을 굽는 grok 일 때뿐이다. (2026-09-02 기본값 grok → wan)
   local motion_engine="${BT_MOTION_ENGINE:-grok}"
-  for id in 001 002 003 004 005; do
+  # 편당 Grok 예산이 로컬 모션으로 배정한 씬은 Grok 클립을 요구하지 않는다 (lib/grok-budget.js).
+  local planned_local="" plan_file="${base}/40_assets/videos/_grok_plan.json"
+  if [ -s "$plan_file" ]; then
+    planned_local=$(python3 -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1])).get("local",[])))' "$plan_file" 2>/dev/null)
+  fi
+  for id in $(seq -f "%03g" 1 "${SLOT_SCENES:-5}"); do
     path="${base}/40_assets/images/scene_${id}.png"
     if [ ! -s "$path" ]; then
       missing="${missing}${missing:+, }images/scene_${id}.png"
@@ -187,6 +192,7 @@ media_assets_ready() {
     if [ "$mode" = "stills" ] || [ "$motion_engine" != "grok" ]; then
       continue
     fi
+    case " $planned_local " in *" $id "*) continue ;; esac
 
     path="${base}/40_assets/videos/scene_${id}.mp4"
     if [ ! -s "$path" ] || ! ffprobe -v error "$path" >/dev/null 2>&1; then
@@ -758,6 +764,25 @@ fi
 # HyperFrames 0.439 — 피사체가 움직이는 화면이 이 채널의 기준이다.
 MOTION_ENGINE="${BT_MOTION_ENGINE:-grok}"
 
+# Grok 주간 한도를 편마다 나눠 쓴다 (2026-09-28 운영자 결정 — lib/grok-budget.js).
+# 이번 편에 쓸 Grok 컷이 0 이면(한도 소진 백오프·주간 예산 소진) 이 회차는 로컬 모션으로 간다.
+# 그러지 않으면 브라우저가 Grok 용 스틸을 먼저 굽고(09-28 점심 31분) 거절될 요청을 컷마다
+# 6분씩 기다린다. 확인 자체가 실패하면(코드 오류 등) 예전대로 Grok 을 시도한다.
+if [ "$MOTION_ENGINE" = "grok" ] && [ "$DRY_RUN" = "0" ]; then
+  GROK_BUDGET_OUT=$(node scripts/automation/lib/grok-budget.js --episode "$EP_DIR" --platform "$PLATFORM" 2>&1)
+  GROK_BUDGET_RC=$?
+  if [ "$GROK_BUDGET_RC" -eq 3 ]; then
+    echo "  ⏭  ${GROK_BUDGET_OUT} → 이번 회차는 로컬 모션"
+    audit "grok_budget_skip" "INFO" "ep=$EP_ID ${GROK_BUDGET_OUT}"
+    MOTION_ENGINE="local-only"
+    export BT_MOTION_ENGINE="local-only"
+  elif [ "$GROK_BUDGET_RC" -ne 0 ]; then
+    echo "  ⚠ Grok 예산 확인 실패 — 예전대로 Grok 을 시도합니다: ${GROK_BUDGET_OUT}"
+  else
+    echo "  🎯 ${GROK_BUDGET_OUT}"
+  fi
+fi
+
 # 브라우저가 **무엇을 만들 담당인지**는 config/image-engines.json 이 정한다.
 # 예전에는 이 프롬프트가 설정과 무관하게 씬·인트로·썸네일을 항상 요청했다. 2026-08-20 에
 # 세 단계를 전부 codex 로 옮겼는데 여기가 안 따라와서, 시드 대화가 깨져 있던 동안에만
@@ -824,13 +849,12 @@ else
   # 첨부가 막히면 조용히 폴백하지 말고 Phase 7 게이트에서 멈춘다(아래) — 무엇을 켜야 하는지
   # 알려 주는 편이, 덜 사는 화면을 매일 내보내는 것보다 낫다.
   if [ "$MOTION_ENGINE" = "grok" ]; then
-    MOTION_PATH_LINE="  모션 클립  ${MEDIA_BASE_REAL}/40_assets/videos/scene_NNN.mp4"
-    MOTION_STEP_LINE="2. 위 이미지가 모두 저장된 뒤에만 Chrome의 Grok Imagine에서 각 scene_NNN.png를 첨부해 영상 ${SLOT_SCENES}개를 한 번에 하나씩 생성·저장하고 ffprobe한다."
-    MOTION_RULES="Grok은 image-to-video 9:16/720p/10s만 사용한다. 매 컷 전 Video audio 버튼이 aria-pressed=true인지 확인한다.
-Grok 로컬 이미지 선택이 확장 파일 접근 제한으로 막히면 해당 PNG를 macOS 클립보드에 넣어 Cmd+V로 첨부하고 계속한다. 파일 URL 권한 때문에 중단하거나 운영자에게 다시 묻지 마라.
-첨부 완료는 filename이 아니라 Remove image/thumbnail로 판정하고, 다운로드 뒤 H.264 세로 영상+AAC 오디오를 ffprobe한다.
-AAC가 없으면 완료로 세지 말고 Video audio를 켠 뒤 같은 컷을 재생성한다. 결제·구독은 절대 하지 마라.
-영상 ${SLOT_SCENES}개 저장 후 SHA-256을 비교해 중복 바이트가 있으면 해당 뒤쪽 컷을 재생성한다."
+    # 브라우저는 스틸만 만든다. Grok 영상은 아래 grok-motion-applescript.js 가 편당 예산
+    # (lib/grok-budget.js) 안에서만 만든다 — 여기서 에이전트가 영상 N개를 만들면 주간 한도를
+    # 원장 밖에서 쓴다(2026-09-28: 이 지시 때문에 한 편이 5컷을 다 요청할 수 있었다).
+    MOTION_PATH_LINE=""
+    MOTION_STEP_LINE="2. 모션 클립은 만들지 마라. Grok Imagine 을 열지 마라 — Grok 영상은 다음 단계 스크립트가 편당 예산 안에서 만든다."
+    MOTION_RULES=""
   else
     MOTION_PATH_LINE=""
     MOTION_STEP_LINE="2. 모션 클립은 만들지 마라. Grok Imagine 을 열 필요가 없다 — 저장된 스틸로 다음 단계(S6c)가 만든다."
@@ -1365,7 +1389,13 @@ audit "auto_pipeline_produced" "INFO" "slot=$SLOT ep=$EP_ID"
 if [ "$DRY_RUN" = "0" ] && { [ "$MOTION_ENGINE" = "grok" ] || [ "$MOTION_ENGINE" = "wan" ]; }; then
   MOTION_MANIFEST="${MEDIA_BASE}/40_assets/videos/_engines.json"
   if [ -s "$MOTION_MANIFEST" ]; then
-    FALLBACK_CLIPS=$(grep -c '"engine": *"hyperframes"' "$MOTION_MANIFEST" 2>/dev/null || echo 0)
+    # 편당 Grok 예산이 처음부터 로컬로 배정한 씬(_grok_plan.json 의 local)은 폴백이 아니라 계획이다.
+    FALLBACK_CLIPS=$(python3 -c 'import json,sys
+m=json.load(open(sys.argv[1]))
+try: local=set(json.load(open(sys.argv[2])).get("local",[]))
+except Exception: local=set()
+print(sum(1 for k,v in m.items() if isinstance(v,dict) and v.get("engine")=="hyperframes" and k not in local))' \
+      "$MOTION_MANIFEST" "${MEDIA_BASE}/40_assets/videos/_grok_plan.json" 2>/dev/null || echo 0)
     case "${FALLBACK_CLIPS:-0}" in ''|*[!0-9]*) FALLBACK_CLIPS=0 ;; esac
     if [ "$FALLBACK_CLIPS" -gt 0 ]; then
       echo "  ⚠️  모션 ${FALLBACK_CLIPS}컷이 HyperFrames 폴백 — Grok 이 정본이다"
