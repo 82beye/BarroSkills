@@ -31,6 +31,25 @@ export function loadAudit(root, now, days = 31) {
   return rows;
 }
 
+/**
+ * Analytics 영상별 리포트(columnHeaders/rows) → videoId → {avp 시청 지속률 %, avd 평균 시청 초, subs 구독 전환, shares}.
+ * 28일 누적이다. 빈 리포트면 빈 Map.
+ */
+export function videoAnalyticsIndex(report) {
+  const cols = (report?.columnHeaders ?? []).map((c) => c.name);
+  const at = (name) => cols.indexOf(name);
+  const out = new Map();
+  if (at('video') < 0) return out;
+  for (const r of report.rows ?? []) {
+    const num = (name) => (at(name) >= 0 && Number.isFinite(Number(r[at(name)])) ? Number(r[at(name)]) : null);
+    out.set(r[at('video')], {
+      avp: num('averageViewPercentage') == null ? null : Math.round(num('averageViewPercentage') * 10) / 10,
+      avd: num('averageViewDuration'), subs: num('subscribersGained'), shares: num('shares'),
+    });
+  }
+  return out;
+}
+
 /** 대본에서 훅 첫 문장·마무리 문장·포맷을 뽑는다. */
 function scriptFacts(scriptPath) {
   if (!existsSync(scriptPath)) return {};
@@ -129,6 +148,10 @@ export function buildDossier({ root, date, now, slots }) {
   const growth = join(root, 'workspace', 'growth');
   const { videos, episodes } = loadFacts(root, now);
   const epBy = new Map(episodes.map((e) => [e.videoId, e]));
+  const vaFile = existsSync(join(growth, 'channel'))
+    ? readdirSync(join(growth, 'channel')).filter((f) => /^video-analytics-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort().at(-1)
+    : null;
+  const va = videoAnalyticsIndex(vaFile ? loadJSON(join(growth, 'channel', vaFile), {}) : {});
   const cutoff = now.getTime() - 30 * 86400_000;
   const rows = videos
     .filter((v) => Date.parse(v.publishedAt ?? '') >= cutoff)
@@ -145,6 +168,8 @@ export function buildDossier({ root, date, now, slots }) {
         hook: e.hook ? String(e.hook).slice(0, 70) : null,
         cta: e.closing ? { like: LIKE_CTA.test(e.closing), follow: FOLLOW_CTA.test(e.closing) } : null,
         rx: e.remedies?.length ? e.remedies : null,
+        // 28일 누적 영상별 지표 — 있으면만 (Analytics 스코프 없을 때는 빠진다)
+        ...(va.get(v.videoId) ?? {}),
       };
     });
 

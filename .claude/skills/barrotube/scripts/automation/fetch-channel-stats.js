@@ -111,6 +111,21 @@ async function tryAnalytics(token, channelId, date) {
   return res.json();
 }
 
+/**
+ * 영상별 28일 지표 (2026-10-07). 일별 합계만으로는 48h 조회가 낮을 때 「끝까지 안 봤다」와 「봤는데 구독으로
+ * 안 이어졌다」를 영상 단위로 가를 수 없었다. 일별 프로브와 같은 스코프·같은 토큰이라 새 동의가 필요 없다.
+ */
+async function tryVideoAnalytics(token, channelId, date) {
+  const start = new Date(Date.parse(date) - 27 * 86400_000).toISOString().slice(0, 10);
+  const params = new URLSearchParams({
+    ids: `channel==${channelId}`, startDate: start, endDate: date,
+    metrics: 'views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,likes,subscribersGained,shares',
+    dimensions: 'video', sort: '-views', maxResults: '200',
+  });
+  const res = await fetch(`${ANALYTICS_API}?${params}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) });
+  return res.ok ? res.json() : null;
+}
+
 async function main() {
   const { values } = parseArgs({ options: {
     deep: { type: 'boolean', default: false },
@@ -215,13 +230,16 @@ async function main() {
 
   // 4) Analytics 프로브 (스코프 없으면 조용히 건너뜀)
   const an = await tryAnalytics(token, channelId, dateStr);
+  let perVideo = null;
   if (an) {
     saveJSON(join(OUT_DIR, `analytics-${dateStr}.json`), an);
+    perVideo = await tryVideoAnalytics(token, channelId, dateStr).catch(() => null);
+    if (perVideo) saveJSON(join(OUT_DIR, `video-analytics-${dateStr}.json`), perVideo);
   }
 
   console.log(`📊 fetch-channel-stats: ${c.snippet?.title} — subs=${stats.subscriberCount} views=${stats.viewCount} videos=${stats.videoCount}`);
   console.log(`   인덱스 ${Object.keys(index.videos).length}편 (이번 회차 ${fetched}편 갱신${firstRun ? ' · 첫 실행 백필' : ''})`);
-  console.log(`   Analytics API: ${an ? '✓ 수집' : `건너뜀 — ${ANALYTICS_REASON.value || '원인 미상'}`}`);
+  console.log(`   Analytics API: ${an ? `✓ 수집${perVideo ? ` · 영상별 ${perVideo.rows?.length ?? 0}편` : ' · 영상별 실패'}` : `건너뜀 — ${ANALYTICS_REASON.value || '원인 미상'}`}`);
 }
 
 main().catch((e) => {

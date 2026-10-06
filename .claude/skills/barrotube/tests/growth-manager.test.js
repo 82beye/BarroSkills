@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import { buildPrompt, validatePlan, applyPlan, journalMarkdown, telegramText, LIMITS } from '../scripts/automation/lib/growth-manager.js';
+import { videoAnalyticsIndex } from '../scripts/automation/lib/growth-dossier.js';
 import { planRemediation, emptyState, measure, activeRemedies, remedySection, remediesApplied } from '../scripts/automation/lib/growth-remediation.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -163,4 +164,19 @@ test('배선: 저녁 크론·codex 우선·처방 알림은 등급과 무관·�
   assert.match(pipe, /KPI_SENT/, 'KPI 알림이 안 나가는 오후에도 처방 소식은 나간다');
   assert.match(read('scripts/automation/generate-metadata.js'), /'자동 처방' 중 적용 대상이 제목/);
   assert.match(read('scripts/automation/generate-script.js'), /readActiveRemedies\(ROOT, \{ slot: values\.slot \}\)/);
+});
+
+test('자료집: Analytics 영상별 리포트를 영상 id 로 묶어 시청 지속률·구독 전환을 붙인다', () => {
+  // 2026-10-07: 일별 합계만으로는 48h 조회가 낮은 영상이 「끝까지 안 봤는지」 「봤는데 구독으로 안 갔는지」 가를 수 없었다.
+  const report = {
+    columnHeaders: ['video', 'views', 'estimatedMinutesWatched', 'averageViewDuration', 'averageViewPercentage', 'likes', 'subscribersGained', 'shares']
+      .map((name) => ({ name })),
+    rows: [['vidA', 900, 120, 42, 71.234, 9, 3, 1], ['vidB', 200, 10, 15, 22.0, 1, 0, 0]],
+  };
+  const idx = videoAnalyticsIndex(report);
+  assert.deepEqual(idx.get('vidA'), { avp: 71.2, avd: 42, subs: 3, shares: 1 });
+  assert.equal(idx.get('vidB').avp, 22);
+  assert.equal(videoAnalyticsIndex({}).size, 0, '리포트가 없으면 빈 값 — 스코프가 없을 때 자료집이 깨지지 않는다');
+  const { system } = buildPrompt({ date: '2026-10-07', videos: [] });
+  assert.match(system, /avp\(시청 지속률 %\)/, '매니저가 새 필드의 뜻과 읽는 법을 안다');
 });
