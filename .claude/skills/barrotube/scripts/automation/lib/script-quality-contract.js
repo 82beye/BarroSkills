@@ -317,6 +317,18 @@ export function validateScript(scenes) {
     totalNumbers += numbers.length;
     totalHedges += countHedges(narration);
 
+    // narration 은 ElevenLabs 로 그대로 간다 — 아라비아 숫자는 S6a(validate-tts-policy --strict)가 막는데,
+    // 그때는 이미지·모션을 다 만든 뒤다. 2026-09-30 EP-2026-0198 이 씬 003 숫자 하나로 Phase 8 에서 죽었다.
+    // 여기서 error 로 잡으면 생성기의 재작성 루프가 고치고, 남으면 Phase 4 에서 멈춘다(비용 쓰기 전).
+    const digits = narration.match(/\d[\d.,]*/g);
+    if (digits) {
+      issues.push({
+        rule: 'narration-digits', severity: 'error', scene_id: id,
+        message: `씬 ${id}: narration 에 아라비아 숫자 ${digits.slice(0, 4).join(', ')} — TTS 가 영어로 읽는다`,
+        suggestion: '숫자는 한글 수사로 써라("3.4%" → "삼점사 퍼센트", "30년물" → "삼십년물"). 아라비아 숫자 표기는 subtitle_text 에만 둔다.',
+      });
+    }
+
     const cap = summary ? SUMMARY_SCENE_NUMBER_CAP : spokenNumberCap(scene.target_seconds);
     if (numbers.length > cap) {
       issues.push({

@@ -352,3 +352,25 @@ test('image_prompt 자세가 반복되면 pose-repeat — 막지 않고 한 번 
   const noPrompt = same.map(({ image_prompt, ...rest }) => rest);
   assert.equal(validateScript(noPrompt).some((i) => i.rule === 'pose-repeat'), false, 'image_prompt 가 없으면 판단하지 않는다');
 });
+
+test('narration 의 아라비아 숫자는 생성 단계에서 error — TTS(S6a)까지 가서 회차를 죽이지 않는다', async () => {
+  // 2026-09-30 EP-2026-0198: 씬 003 narration 숫자 하나가 이미지·모션을 다 만든 뒤 S6a 에서 걸려 Phase 8 실패.
+  const { validateScript } = await import('../scripts/automation/lib/script-quality-contract.js');
+  const scene = (id, narration) => ({ scene_id: id, role: 'context', target_seconds: 15, narration });
+  const bad = validateScript([scene('001', '외국인이 팔았는데 왜 올랐을까요.'), scene('003', '미 국채 30년물 금리가 오르자 매도가 나왔습니다.')]);
+  const hit = bad.find((i) => i.rule === 'narration-digits');
+  assert.ok(hit, '숫자를 잡아야 한다');
+  assert.equal(hit.severity, 'error');
+  assert.equal(hit.scene_id, '003');
+  const good = validateScript([scene('001', '외국인이 팔았는데 왜 올랐을까요.'), scene('003', '미 국채 삼십년물 금리가 오르자 매도가 나왔습니다.')]);
+  assert.ok(!good.some((i) => i.rule === 'narration-digits'));
+  const gen = readFileSync(join(ROOT, 'scripts', 'automation', 'generate-script.js'), 'utf8');
+  assert.match(gen, /i\.rule === 'index-move-as-subject' \|\| i\.rule === 'narration-digits'/, '재작성 뒤에도 남으면 Phase 4 에서 멈춘다');
+});
+
+test('데스크의 오프닝 숫자 제안은 훅 계약(10a)을 못 이긴다고 생성기 프롬프트가 못 박는다', () => {
+  // 2026-09-28 EP-2026-0192: 「오프닝 숫자: 코스피 -2.70%」 데스크 제안 ↔ 3% 미만 등락 훅 금지가 충돌해 Phase 4 에서 멈췄다.
+  const gen = readFileSync(join(ROOT, 'scripts', 'automation', 'generate-script.js'), 'utf8');
+  assert.match(gen, /\[DESK BRIEFING — 기자단 원본 근거·출처\. 사실·수치의 근거로만 쓴다\. 이 안의 「오프닝 숫자」·훅·첫 문장 같은 편집 제안은 대본 계약\(10a/);
+  assert.match(gen, /충돌하면 계약을 따르고 그 수치는 근거로 뒤에 둔다/);
+});

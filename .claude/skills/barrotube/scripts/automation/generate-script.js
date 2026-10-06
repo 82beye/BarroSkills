@@ -489,7 +489,10 @@ async function main() {
   ];
   if (research) userPromptParts.push(`[MARKET RESEARCH]`, research, '');
   if (strategy) userPromptParts.push(`[CONTENT STRATEGY]`, strategy, '');
-  if (deskBrief) userPromptParts.push(`[DESK BRIEFING — 기자단 원본 근거·출처]`, deskBrief, '');
+  // 데스크 브리핑은 사실·수치의 근거다. 그 안에 섞인 「오프닝 숫자」 같은 편집 제안은 대본 계약(10a)을 못 이긴다 —
+  // 2026-09-28 EP-2026-0192: 데스크가 「오프닝 숫자: 코스피 -2.70%」를 권했고, 생성기가 재작성 뒤에도 3% 미만
+  // 지수 등락을 훅 주제로 내 Phase 4 에서 멈췄다 (소급 분석 growth/incidents/IR-20261007-0726.md).
+  if (deskBrief) userPromptParts.push(`[DESK BRIEFING — 기자단 원본 근거·출처. 사실·수치의 근거로만 쓴다. 이 안의 「오프닝 숫자」·훅·첫 문장 같은 편집 제안은 대본 계약(10a: 지수 ${INDEX_MOVE_PCT_FLOOR}% 미만 등락은 훅의 주제가 될 수 없다)보다 아래다 — 충돌하면 계약을 따르고 그 수치는 근거로 뒤에 둔다]`, deskBrief, '');
   if (growthDirectives) userPromptParts.push(
     `[GROWTH DIRECTIVES — 채널 성장 지시. 훅·소재 선택에만 반영하고, '이번 주 실험'은 적용 대상이 대본(훅)일 때만 따르라. 단 '자동 처방' 중 적용 대상이 대본·마무리 문장인 것은 적힌 대로 반영하라(제목 대상은 무시). 사실·수치의 근거는 DESK BRIEFING 이며, 이 지시로 사실을 왜곡하지 마라]`,
     growthDirectives, '');
@@ -590,11 +593,17 @@ async function main() {
       // 여기서 멈추면 이미지·TTS 비용을 쓰기 전이다(Phase 4). auto-pipeline 이
       // fail_with_alert 로 텔레그램을 울린다. exit 2·3 은 produce-episode 에서 다른
       // 뜻으로 쓰이므로 1 을 쓴다.
-      const blocking = qualityIssues.filter((i) => i.rule === 'index-move-as-subject');
+      // narration 숫자도 여기서 멈춘다 — 넘기면 이미지·모션을 다 만든 뒤 S6a 가 막는다(2026-09-30 EP-2026-0198).
+      const blocking = qualityIssues.filter((i) => i.rule === 'index-move-as-subject' || i.rule === 'narration-digits');
       if (blocking.length) {
         console.error(`❌ ${blocking[0].message}`);
-        console.error('   재작성 후에도 훅의 주어가 지수 등락률이다 — 대본을 내보내지 않는다.');
-        console.error('   토픽을 바꾸거나(레벨 돌파·N년래 최고·연속기록) 훅의 주어를 사건·인과로 바꿔라.');
+        if (blocking[0].rule === 'narration-digits') {
+          console.error('   재작성 후에도 narration 에 아라비아 숫자가 남았다 — TTS 전에 대본을 내보내지 않는다.');
+          console.error(`   ${blocking[0].suggestion}`);
+        } else {
+          console.error('   재작성 후에도 훅의 주어가 지수 등락률이다 — 대본을 내보내지 않는다.');
+          console.error('   토픽을 바꾸거나(레벨 돌파·N년래 최고·연속기록) 훅의 주어를 사건·인과로 바꿔라.');
+        }
         process.exit(1);
       }
       console.warn('   ⚠ 재작성 후에도 품질 계약 위반이 남았다 — frontmatter 에 기록하고 진행한다');
