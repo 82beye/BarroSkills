@@ -178,7 +178,7 @@ function bottombar(n) {
   return `<div style="padding:0 ${M}px 52px">
     <div style="display:flex;gap:5px;margin-bottom:16px">${segs}</div>
     <div style="display:flex;align-items:baseline;justify-content:space-between">
-      <span style="color:${T.faint};font-size:19px">@바로경제 · 매일 08 · 20시</span>
+      <span style="color:${T.faint};font-size:19px">@바로경제 · 매일 08 · 18시</span>
       <span style="color:${T.muted};font-size:20px;font-weight:600;font-variant-numeric:tabular-nums">${String(n).padStart(2, '0')} / ${TOTAL}</span>
     </div>
   </div>`;
@@ -667,7 +667,7 @@ function siteHTML(f, pngs) {
 ${cards}
   </main>
   <footer>
-    갱신 ${esc(stamp)} · 매일 08시(미국 기준) · 20시(국장 기준) 자동 갱신<br>
+    갱신 ${esc(stamp)} · 매일 08시(미국 기준) · 18시(국장 기준) 자동 갱신<br>
     출처 · 미국 Yahoo Finance, 국내 네이버증권 집계<br>
     투자 판단의 책임은 투자자 본인에게 있습니다.
   </footer>
@@ -763,7 +763,7 @@ async function main() {
       {
         id: 'regenerate',
         x: 740, y: -300, w: 520,
-        text: '하루 두 판 · 08:00 조간(미국 기준) / 20:00 석간(국장 기준)\n\n'
+        text: '하루 두 판 · 08:00 조간(미국 기준) / 18:00 석간(국장 기준)\n\n'
           + 'lib/market-map-cron.sh 가 판을 시각으로 정해서:\n'
           + '  market-map.js   --edition <판>            (수집)\n'
           + '  market-magazine.js --edition <판> --render --telegram\n\n'

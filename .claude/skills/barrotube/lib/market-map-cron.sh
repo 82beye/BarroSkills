@@ -3,11 +3,13 @@
 #
 # 하루 두 판 (운영자 지시 2026-09-17):
 #   08:00 조간 — 미국 증시 마감 기준. 이 시각 한국장은 아직 안 열렸다(직전 세션).
-#   20:00 석간 — 국내장 마감 기준. 이 시각 미국장은 아직 안 열렸다(직전 마감).
+#   18:00 석간 — 국내장 마감 기준. 이 시각 미국장은 아직 안 열렸다(직전 마감).
+#            (2026-09-28 운영자 지시로 20:00 → 18:00. 18시 종목 값엔 KRX 시간외 단일가가
+#             섞여 있어, 코스피·테마는 평일 15:45 KRX 종가 스냅샷을 쓴다 — market-map-krclose.sh)
 # 막 닫힌 시장이 표지와 카드 앞머리에 온다. 판은 스크립트가 KST 시각으로 정한다
 # (lib/market-map.js 의 resolveEdition) — 크론 plist 하나로 두 시각을 돌리기 위해서다.
 #
-#   bash install-cron.sh install market-map "08:00,20:00"
+#   bash install-cron.sh install market-map "08:00,18:00"
 #
 # 세션 라벨은 시계가 아니라 응답이 정본이다: 미국은 Yahoo 의 regularMarketTime,
 # 코스피는 네이버의 localTradedAt/marketStatus 를 읽는다. 08시 회차에 KST 날짜로

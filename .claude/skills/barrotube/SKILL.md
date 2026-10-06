@@ -272,7 +272,7 @@ bash $BARROTUBE_HOME/lib/install-cron.sh install omnibus "Mon-Thu,Sat,Sun 10:00"
 bash $BARROTUBE_HOME/lib/install-cron.sh install realestate "Fri 10:00"
 
 # 마켓맵 카드뉴스 (조간·석간)
-bash $BARROTUBE_HOME/lib/install-cron.sh install market-map "08:00,20:00"
+bash $BARROTUBE_HOME/lib/install-cron.sh install market-map "08:00,18:00"
 
 # 승인 후 미게시 EP 회수
 bash $BARROTUBE_HOME/lib/install-cron.sh install publish-resume "07:30,17:30"

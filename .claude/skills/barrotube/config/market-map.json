@@ -263,5 +263,5 @@
     ]
   },
   "site_url": "https://82beye.github.io/BarroSkills/",
-  "_site_comment": "매 판(08:00 조간 / 20:00 석간)마다 lib/market-map-pages.sh 가 gh-pages 브랜치로 강제 푸시해 갱신한다. claude.ai 아티팩트 링크는 세션에서만 발행 가능해서(헤드리스 CLI·클라우드 루틴 모두 Artifact 도구 없음) 무인 갱신 링크는 여기다."
+  "_site_comment": "매 판(08:00 조간 / 18:00 석간)마다 lib/market-map-pages.sh 가 gh-pages 브랜치로 강제 푸시해 갱신한다. claude.ai 아티팩트 링크는 세션에서만 발행 가능해서(헤드리스 CLI·클라우드 루틴 모두 Artifact 도구 없음) 무인 갱신 링크는 여기다."
 }

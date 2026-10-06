@@ -758,19 +758,22 @@ test('발행 쿼터 가드는 uploadedAt 을 인정하고, 날짜 미상 옛 기
  *
  * 2026-09-21 운영자가 `pmset repeat wakeorpoweron ... 15:55` 를 직접 걸면서 전제가 바뀌었다.
  * 기상은 이제 pmset 이 맡고, 다리는 '깨우기' 가 아니라 '다음 작업까지 잠들지 않기' 만 한다.
- * 그래서 16:00 회차에도 다리를 건다 — 20:00 마켓맵 석간판까지다. 저녁 시간대라 대개
- * 전원에 연결돼 있어, 다리를 안 걸던 이유(일과 중 가방 속 발열)가 적용되지 않는다.
+ * 그래서 16:00 회차에도 다리를 건다 — 마켓맵 석간판까지다(2026-09-28 20:00 → 18:00). 저녁
+ * 시간대라 대개 전원에 연결돼 있어, 다리를 안 걸던 이유(일과 중 가방 속 발열)가 적용되지 않는다.
  */
 test('각 회차가 다음 작업까지 슬립을 막는다', () => {
   const r = JSON.parse(readFileSync(ROUTINES, 'utf8'));
   assert.equal(r.slots['us-close'].keep_awake_until, '10:05',
     '10:00 점심 회차 직후까지 — 정확히 10:00 이면 경계에서 놓칠 수 있다');
-  assert.equal(r.slots['kr-close'].keep_awake_until, '20:05',
-    '20:00 마켓맵 석간판 직후까지 (2026-09-21 운영자 지시)');
+  assert.equal(r.slots['kr-close'].keep_awake_until, '18:05',
+    '18:00 마켓맵 석간판 직후까지 (2026-09-28 석간을 18시로 당김)');
+  // 석간 시각의 정본은 lib/market-map.js 의 EDITIONS 다 — 둘이 어긋나면 다리가 엉뚱한 시각에 끊긴다.
+  const mapLib = readFileSync(join(ROOT, 'scripts', 'automation', 'lib', 'market-map.js'), 'utf8');
+  assert.match(mapLib, /evening: \{ label: '석간', at: '18:00'/, '마켓맵 석간 시각과 다리가 같은 시각을 봐야 한다');
 
   // 다리는 다음 작업을 **넘겨야** 의미가 있고, 하루를 통째로 깨워 두면 안 된다.
   const toMin = (s) => Number(s.slice(0, 2)) * 60 + Number(s.slice(3, 5));
-  for (const [slot, nextJob] of [['us-close', '10:00'], ['kr-close', '20:00']]) {
+  for (const [slot, nextJob] of [['us-close', '10:00'], ['kr-close', '18:00']]) {
     const until = toMin(r.slots[slot].keep_awake_until);
     const start = toMin(String(r.slots[slot].cron).slice(-5));
     assert.ok(until > toMin(nextJob), `${slot} 다리가 다음 작업(${nextJob}) 전에 끊긴다`);

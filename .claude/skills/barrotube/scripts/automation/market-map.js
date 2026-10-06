@@ -38,6 +38,7 @@ import { getSecret } from './config-loader.js';
 import {
   num, pctColor, squarify, groupedTreemap, krStocksToItems, themeModel,
   resolveEdition, EDITIONS, krSessionOf, krSessionLabel,
+  KR_CLOSE_FILE, krCloseSnapshotWindow, pickKrForEdition,
 } from './lib/market-map.js';
 
 const ROOT = resolve(import.meta.dirname, '../..');
@@ -83,7 +84,7 @@ async function getJSON(url, { retries = 2, timeoutMs = 12_000 } = {}) {
 }
 
 /** Yahoo: 마지막 마감 기준 등락. */
-async function yahoo(symbol) {
+export async function yahoo(symbol) {
   const d = await getJSON(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d`);
   const m = d?.chart?.result?.[0]?.meta ?? {};
   const price = m.regularMarketPrice; const prev = m.chartPreviousClose;
@@ -96,7 +97,7 @@ async function yahoo(symbol) {
   };
 }
 
-async function mapPool(items, n, fn) {
+export async function mapPool(items, n, fn) {
   const out = new Array(items.length); let i = 0;
   await Promise.all(Array.from({ length: n }, async () => {
     while (i < items.length) { const k = i++; out[k] = await fn(items[k]).catch(() => null); }
@@ -162,7 +163,26 @@ export function priorLeadSession(outRoot, edition, selfPath) {
   return best;
 }
 
-async function collect() {
+/** 코스피 시총 상위 + 테마 랭킹·구성종목. 네이버 최상위 값 = KRX 거래소 시세. */
+async function fetchKr() {
+  const krRaw = await getJSON(`https://m.stock.naver.com/api/stocks/marketValue/KOSPI?page=1&pageSize=${CFG.kr.top_n}`);
+  const kr = krStocksToItems(krRaw.stocks);
+  const krSession = krSessionOf(krRaw.stocks, new Date());
+  const themesRaw = await getJSON('https://m.stock.naver.com/api/stocks/theme?page=1&pageSize=40');
+  const topGroups = (themesRaw.groups ?? [])
+    .filter((g) => num(g.changeRate) !== null)
+    .sort((a, b) => num(b.changeRate) - num(a.changeRate))
+    .slice(0, CFG.themes.top_n);
+  const byNo = {};
+  for (const g of topGroups) {
+    const d = await getJSON(`https://m.stock.naver.com/api/stocks/theme/${g.no}?page=1&pageSize=12`).catch(() => null);
+    byNo[g.no] = d?.stocks ?? [];
+  }
+  const themes = themeModel(themesRaw.groups, byNo, { topN: CFG.themes.top_n, stocksPer: CFG.themes.stocks_per_theme });
+  return { kr, krSession, themes };
+}
+
+async function collect(edition) {
   const date = kstDate();
   // 미국 유니버스 + 지수 4종
   const usTickers = Object.entries(CFG.us.sectors).flatMap(([sec, m]) => Object.keys(m).map((t) => ({ t, sec })));
@@ -172,11 +192,17 @@ async function collect() {
   const idx = {};
   for (const [k, sym] of Object.entries(CFG.indices)) idx[k] = await yahoo(sym).catch(() => null);
 
-  // 코스피 시총 상위
-  const krRaw = await getJSON(`https://m.stock.naver.com/api/stocks/marketValue/KOSPI?page=1&pageSize=${CFG.kr.top_n}`);
-  let kr = krStocksToItems(krRaw.stocks);
+  // 코스피 시총 상위 + 테마. 석간은 15:45 에 떠 둔 KRX 공식 종가 스냅샷을 먼저 쓴다
+  // (lib/market-map.js pickKrForEdition — 18:00 실시간 값에는 시간외 단일가가 섞인다).
+  const live = await fetchKr();
+  const snapPath = join(ROOT, CFG.output_dir, date, KR_CLOSE_FILE);
+  const snapshot = existsSync(snapPath) ? JSON.parse(readFileSync(snapPath, 'utf-8')) : null;
+  const picked = pickKrForEdition({ edition, live, snapshot });
+  if (picked.source === 'krx-close') console.log(`   📌 코스피·테마: KRX 종가 스냅샷 (${picked.fetchedAt})`);
+  if (picked.warn) console.warn(`   ⚠ ${picked.warn}`);
+  let kr = picked.kr;
   // 세션은 시계가 아니라 응답이 정본이다 — 08:00 회차엔 한국장이 안 열려 직전 세션이다.
-  let krSession = krSessionOf(krRaw.stocks, new Date());
+  let krSession = picked.krSession;
   // 아래 테마 주석은 「시총 API 는 직전 종가 등락률을 준다」고 적었지만 실측은 반대였다:
   // 2026-09-17·18 조간에서 58종목의 fluctuationsRatio 가 전부 0 이었다. 라벨은 krSessionOf
   // 가 직전 거래일을 가리키므로, 그대로 두면 「2026-09-17 15:30 마감」 밑에 전 종목 +0.00%
@@ -193,18 +219,7 @@ async function collect() {
     }
   }
 
-  // 테마 랭킹 + 상위 테마 구성종목
-  const themesRaw = await getJSON('https://m.stock.naver.com/api/stocks/theme?page=1&pageSize=40');
-  const topGroups = (themesRaw.groups ?? [])
-    .filter((g) => num(g.changeRate) !== null)
-    .sort((a, b) => num(b.changeRate) - num(a.changeRate))
-    .slice(0, CFG.themes.top_n);
-  const byNo = {};
-  for (const g of topGroups) {
-    const d = await getJSON(`https://m.stock.naver.com/api/stocks/theme/${g.no}?page=1&pageSize=12`).catch(() => null);
-    byNo[g.no] = d?.stocks ?? [];
-  }
-  let themes = themeModel(themesRaw.groups, byNo, { topN: CFG.themes.top_n, stocksPer: CFG.themes.stocks_per_theme });
+  let themes = picked.themes;
   // 08:00 조간 회차에는 한국장이 안 열려(marketStatus=PREOPEN) 네이버 테마 API 가
   // **오늘** 등락률, 즉 0 을 돌려준다. 시총 API 는 직전 종가 등락률을 주기 때문에
   // 종목 카드는 멀쩡한데 테마 카드만 「광통신 +0.00% · 0중 0개 상승」으로 빈다.
@@ -229,7 +244,7 @@ async function collect() {
   console.log(`   미국 세션: ${usSession} · 코스피 세션: ${krSession.date} (${krSession.status})`);
   if (us.length < usTickers.length * 0.8) throw new Error(`미국 시세 누락 과다 (${us.length}/${usTickers.length}) — 이미지를 만들지 않는다`);
   if (kr.length < CFG.kr.top_n * 0.8) throw new Error(`코스피 시세 누락 과다 (${kr.length})`);
-  return { date, usSession, krSession, themesSession, idx, us, kr, themes };
+  return { date, usSession, krSession, themesSession, krSource: picked.source, idx, us, kr, themes };
 }
 
 /* ── 렌더 ───────────────────────────────────────────────────────────── */
@@ -335,7 +350,7 @@ function buildHTML(d) {
       ${usMap.sectors.map((s) => `<div class="sec" style="left:${s.x}px;top:${s.y}px;width:${s.w}px;height:${s.h}px"><div class="sh">${esc(s.name)}</div></div>`).join('')}
       ${usMap.cells.map((c) => cellDiv(c, CFG.us.clamp_pct)).join('')}
     </div>
-    <div class="ft"><span>크기 = 시가총액 · 색 = 등락률</span><span><b>바로경제</b> 매일 08·20시 브리핑</span></div>
+    <div class="ft"><span>크기 = 시가총액 · 색 = 등락률</span><span><b>바로경제</b> 매일 08·18시 브리핑</span></div>
   </div>
 
   <div class="board" id="kr" style="height:1080px">
@@ -345,7 +360,7 @@ function buildHTML(d) {
       ${krMap.sectors.map((sct) => `<div class="sec" style="left:${sct.x}px;top:${sct.y}px;width:${sct.w}px;height:${sct.h}px"><div class="sh">${esc(sct.name)}</div></div>`).join('')}
       ${krMap.cells.map((c) => cellDiv(c, CFG.kr.clamp_pct, { compact: true })).join('')}
     </div>
-    <div class="ft"><span>시총 상위 ${d.kr.length}종목 · 테마별 그룹 · 크기 ∝ 시가총액 · 색 = 등락률</span><span><b>바로경제</b> 매일 08·20시 브리핑</span></div>
+    <div class="ft"><span>시총 상위 ${d.kr.length}종목 · 테마별 그룹 · 크기 ∝ 시가총액 · 색 = 등락률</span><span><b>바로경제</b> 매일 08·18시 브리핑</span></div>
   </div>
 
   <div class="board" id="themes">
@@ -410,8 +425,23 @@ async function main() {
     force: { type: 'boolean', default: false },
     date: { type: 'string' },
     edition: { type: 'string' },
+    'kr-close-snapshot': { type: 'boolean', default: false },
   } });
   const date = values.date || kstDate();
+
+  // KRX 공식 종가 스냅샷만 뜨고 끝낸다 (평일 15:45 — lib/market-map-krclose.sh).
+  // 창 밖(휴장·마감 전·16:10 이후)이면 저장하지 않는다 — 석간이 실시간 값으로 가며 경고한다.
+  if (values['kr-close-snapshot']) {
+    const snap = await fetchKr();
+    const w = krCloseSnapshotWindow(snap.krSession);
+    if (!w.ok) { console.log(`⏭  KRX 종가 스냅샷 건너뜀 — ${w.why}`); return; }
+    const dir = join(ROOT, CFG.output_dir, date);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, KR_CLOSE_FILE), `${JSON.stringify({ fetchedAt: new Date().toISOString(), ...snap }, null, 2)}\n`);
+    console.log(`📌 KRX 종가 스냅샷 — 코스피 ${snap.kr.length}종목 · 테마 ${snap.themes.length}개 · 세션 ${snap.krSession.date}`);
+    return;
+  }
+
   const edition = values.edition || resolveEdition();
   if (!EDITIONS[edition]) throw new Error(`알 수 없는 판: ${edition} (morning | evening)`);
   const outDir = join(ROOT, CFG.output_dir, date, edition);
@@ -423,7 +453,7 @@ async function main() {
     data = JSON.parse(readFileSync(dataPath, 'utf-8'));
     console.log('♻️  기존 data.json 으로 재렌더');
   } else {
-    data = await collect();
+    data = await collect(edition);
     writeFileSync(dataPath, JSON.stringify(data, null, 2));
 
     // 장이 안 열린 날은 직전 판과 **똑같은 마감**을 다시 싣게 된다. 2026-09-19~20 주말에

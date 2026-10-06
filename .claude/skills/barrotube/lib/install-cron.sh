@@ -12,7 +12,8 @@
 #   omnibus               — 월~목·토·일 10:00 점심 옴니버스 (12:00 공개)
 #   realestate            — 금요일 10:00 주간 부동산 브리핑 (12:00 공개)
 #   kr-close              — 매일 16:00 KST 국내 증시 마감 브리핑 (18:00 공개)
-#   market-map            — 매일 08:00,20:00 마켓맵 카드뉴스 (무과금)
+#   market-map            — 매일 08:00,18:00 마켓맵 카드뉴스 (무과금)
+#   market-map-krclose    — 평일 15:45 석간용 KRX 공식 종가 스냅샷 (시간외 단일가 전)
 #   competitor-scan       — 매일 05:20,15:20 경쟁 인텔 수집→분석→핸드오프
 #   growth                — 매일 05:40,15:40 채널 성장 루프 (자체 수집→KPI→처방, 월 회고)
 #   publish-resume        — 매일 07:30,17:30 승인됐는데 미게시인 EP 회수
@@ -118,8 +119,14 @@ cmd_install() {
       ;;
     market-map)
       # 마켓맵 이미지(미국·코스피·테마) 생성 + 텔레그램 발송. LLM 0회, API 무과금.
-      #   bash install-cron.sh install market-map "15:50"
+      #   bash install-cron.sh install market-map "08:00,18:00"
       script_path="${BARROTUBE_HOME}/lib/market-map-cron.sh"
+      extra_args=""
+      ;;
+    market-map-krclose)
+      # 18:00 석간이 쓸 KRX 공식 종가 스냅샷. 첫 시간외 단일가 체결(16:10) 전에 떠야 한다.
+      #   bash install-cron.sh install market-map-krclose "Mon-Fri 15:45"
+      script_path="${BARROTUBE_HOME}/lib/market-map-krclose.sh"
       extra_args=""
       ;;
     competitor-scan)
@@ -161,7 +168,7 @@ cmd_install() {
       ;;
     *)
       echo "❌ 알 수 없는 routine: $routine" >&2
-      echo "사용 가능: us-close | kr-close | omnibus | realestate | market-map | competitor-scan | growth | weekly-marketing | doctor-daily | telegram-bot | publish-resume"
+      echo "사용 가능: us-close | kr-close | omnibus | realestate | market-map | market-map-krclose | competitor-scan | growth | weekly-marketing | doctor-daily | telegram-bot | publish-resume"
       exit 1
       ;;
   esac

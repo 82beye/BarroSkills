@@ -327,7 +327,7 @@ function insertTextJS(text) {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch(async (e) => {
     console.error('❌', e.message);
-    // 08시·20시 무인 실행이라 이 로그를 아무도 보지 않는다. 실패는 텔레그램으로 알린다 —
+    // 08시·18시 무인 실행이라 이 로그를 아무도 보지 않는다. 실패는 텔레그램으로 알린다 —
     // 카드 10장은 직전 메시지로 이미 가 있으니 사람이 손으로 올릴 수 있다.
     const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     try {

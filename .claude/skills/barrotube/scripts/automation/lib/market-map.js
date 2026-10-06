@@ -147,10 +147,13 @@ export function themeModel(groups, byNo, { topN = 6, stocksPer = 5 } = {}) {
 }
 
 /* ── 판(edition) · 세션 ──────────────────────────────────────────────────
-   하루 2회 발행(08:00 조간 / 20:00 석간)을 하면서 생긴 규약이다.
-   한 회차는 **막 닫힌 시장**을 앞세우고, 아직 안 열린 시장은 직전 세션이라고 말한다. */
+   하루 2회 발행(08:00 조간 / 18:00 석간)을 하면서 생긴 규약이다.
+   한 회차는 **막 닫힌 시장**을 앞세우고, 아직 안 열린 시장은 직전 세션이라고 말한다.
+   석간은 2026-09-28 운영자 지시로 20:00 → 18:00. 18시의 네이버 종목 값에는 KRX 시간외
+   단일가가 섞여 있어, 코스피·테마는 15:45 에 떠 둔 KRX 종가 스냅샷을 쓴다(아래 KR_CLOSE_*).
+   지수(야후 ^KS11)는 시간외에 계산되지 않아 영향이 없다. */
 
-/** KST 시각 → 판. 08시 회차는 조간, 20시 회차는 석간. 수동 실행도 시각으로 자연스럽게 갈린다. */
+/** KST 시각 → 판. 08시 회차는 조간, 18시 회차는 석간. 수동 실행도 시각으로 자연스럽게 갈린다. */
 export function resolveEdition(now = new Date()) {
   const hh = Number(new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Asia/Seoul', hour12: false, hour: '2-digit',
@@ -161,7 +164,7 @@ export function resolveEdition(now = new Date()) {
 export const EDITIONS = {
   // leads = 그 회차에 막 마감한 시장. 카드 순서와 표지 문구가 여기를 따른다.
   morning: { label: '조간', at: '08:00', leads: 'us' },
-  evening: { label: '석간', at: '20:00', leads: 'kr' },
+  evening: { label: '석간', at: '18:00', leads: 'kr' },
 };
 
 /**
@@ -195,6 +198,51 @@ export function krSessionOf(stocks, now = new Date()) {
   const open = traded === today && hhmm >= start && hhmm < end;
   // 장이 열리기 전이면 localTradedAt 이 직전 거래일을 가리킨다(실측 확인). 그대로 쓴다.
   return { date: traded, status: s.marketStatus ?? null, open };
+}
+
+/* ── KRX 공식 종가 스냅샷 ────────────────────────────────────────────────
+   네이버 종목 응답의 최상위 값(closePrice·fluctuationsRatio)은 KRX 거래소 시세다 — NXT 는
+   overMarketPriceInfo, 통합은 integratedPriceInfo 로 따로 온다(실시간 폴링 API 로 확인).
+   그런데 KRX 시세 자체가 정규장 마감(15:30) 뒤 **시간외 단일가**(16:00~18:00, 16:10 부터
+   10분마다 체결)로 움직이고, 밤늦게야 공식 종가로 돌아온다. 2026-09-28 18:09 석간은
+   58종목 중 45종목을 공식 종가와 다르게 실었다 — 최대 1.16%p (S-Oil +4.24% vs +5.40%).
+   첫 시간외 체결 전인 15:35~16:09 에는 최상위 값이 곧 공식 종가라 그때 떠 두고,
+   18:00 석간이 그것을 쓴다 (lib/market-map-krclose.sh, 평일 15:45). */
+export const KR_CLOSE_FILE = 'kr-close.json';
+export const KR_CLOSE_WINDOW = { from: 1535, until: 1609 };
+
+function kstNow(now) {
+  const p = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul', hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  }).formatToParts(now).reduce((o, x) => ({ ...o, [x.type]: x.value }), {});
+  return { date: `${p.year}-${p.month}-${p.day}`, hhmm: Number(`${p.hour}${p.minute}`) };
+}
+
+/** 지금 뜬 코스피 값이 공식 종가인가. session 은 krSessionOf 결과. */
+export function krCloseSnapshotWindow(session, now = new Date()) {
+  const k = kstNow(now);
+  if (!session?.date || session.date !== k.date) return { ok: false, why: `오늘(${k.date}) KRX 세션이 없다 — 휴장` };
+  if (session.open || k.hhmm < KR_CLOSE_WINDOW.from) return { ok: false, why: '정규장 종가가 아직 확정되지 않았다' };
+  if (k.hhmm > KR_CLOSE_WINDOW.until) return { ok: false, why: '16:10 이후라 시간외 단일가가 섞였다' };
+  return { ok: true, why: '' };
+}
+
+/**
+ * 판이 실을 코스피·테마 값. 석간은 같은 세션의 종가 스냅샷이 있으면 그것을 쓴다.
+ * 없으면 실시간 값으로 가되, 시간외 단일가가 섞일 시각이면 warn 을 단다 — 조용히 넘기지 않는다.
+ */
+export function pickKrForEdition({ edition, live, snapshot = null, now = new Date() }) {
+  if (edition === 'evening' && snapshot?.krSession?.date && snapshot.krSession.date === live.krSession?.date) {
+    return { kr: snapshot.kr, themes: snapshot.themes, krSession: snapshot.krSession, source: 'krx-close', fetchedAt: snapshot.fetchedAt ?? null, warn: null };
+  }
+  const k = kstNow(now);
+  const afterHours = edition === 'evening' && live.krSession?.date === k.date && k.hhmm > KR_CLOSE_WINDOW.until;
+  return {
+    kr: live.kr, themes: live.themes, krSession: live.krSession,
+    source: afterHours ? 'live-after-hours' : 'live', fetchedAt: null,
+    warn: afterHours ? 'KRX 종가 스냅샷이 없다 — 코스피·테마에 시간외 단일가가 섞였을 수 있다 (15:45 market-map-krclose 확인)' : null,
+  };
 }
 
 /** 코스피 세션 라벨. status 가 OPEN 이면 장중, 아니면 마감. 날짜는 응답이 정본. */
