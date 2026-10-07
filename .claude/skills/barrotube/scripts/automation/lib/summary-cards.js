@@ -26,10 +26,17 @@ export function signPct(p, digits = 2) {
 const tone = (p) => (!Number.isFinite(p) || Math.abs(p) < 0.005 ? C.flat : p > 0 ? C.up : C.down);
 const arrow = (p) => (!Number.isFinite(p) || Math.abs(p) < 0.005 ? '' : p > 0 ? '▲' : '▼');
 
-/** 3대 지수 요약 카드. items: [{name, price_text, change_pct}], dateLabel: "미국 2026.09.30 (수) 마감" */
+/** 기록 배지 — 사상 최고치 지수에만. 그날의 사건이 카드에서도 먼저 보이게 한다(2026-10-07). */
+export function recordBadge(record) {
+  if (!record?.all_time_high) return '';
+  const label = `사상 최고${record.streak >= 2 ? ` · ${record.streak}일 연속` : ''}`;
+  return ` <span style="display:inline-block;margin-left:18px;padding:4px 18px;border-radius:999px;background:${C.accent};color:${C.bg};font-size:36px;font-weight:900;vertical-align:middle">${esc(label)}</span>`;
+}
+
+/** 3대 지수 요약 카드. items: [{name, price_text, change_pct, record?}], dateLabel: "미국 2026.09.30 (수) 마감" */
 export function indicesCard({ items, dateLabel, series = '미국 증시 요약' }) {
   const tiles = items.map((i) => `<div style="background:${C.panel};border-radius:32px;padding:34px 44px;border-left:14px solid ${tone(i.change_pct)}">
-  <div style="font-size:46px;color:${C.sub}">${esc(i.name)}</div>
+  <div style="font-size:46px;color:${C.sub}">${esc(i.name)}${recordBadge(i.record)}</div>
   <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:6px">
     <span style="font-size:84px;font-weight:900;letter-spacing:-1px">${esc(i.price_text)}</span>
     <span style="font-size:64px;font-weight:900;color:${tone(i.change_pct)}">${arrow(i.change_pct)}${signPct(i.change_pct)}</span></div></div>`).join('');

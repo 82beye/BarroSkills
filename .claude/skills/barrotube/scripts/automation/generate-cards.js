@@ -118,6 +118,18 @@ function parseCardJson(raw) {
  * 잘린다 — "AMD는 정규장에서 7% 올랐습니다. 그런데 실적을" 같은 식이다. 그래서 모델에게
  * 카드용으로 다시 쓰게 한다. 엔진이 다 죽으면 위의 잘라쓰기로 떨어진다.
  */
+/**
+ * 카드 문안의 주제. 「미국 증시 요약」은 대본이 정한 그날의 사건(제목 훅·기록)이 주제다 — 브리프 토픽은
+ * 데스크가 잡은 한·미 대비라, 2026-10-07 EP-2026-0214 인트로가 나스닥·S&P500 사상 최고치인 날
+ * 「외국인은 1조 7,661억 원 던졌다」(전날 한국장)를 걸었다. 다른 포맷은 예전처럼 브리프 토픽.
+ */
+export function cardTopic(meta, briefFM) {
+  if (meta?.form === 'market-summary' && meta.title_hook) {
+    return [meta.title_hook, ...(Array.isArray(meta.events) ? meta.events : [])].join(' · ');
+  }
+  return briefFM?.topic || meta?.topic || '';
+}
+
 export async function writeCardCopy({ briefFM, scenes, topic }) {
   const { callClaudeCode, callCodex, resolveChain, runEngineChain } = await import('./lib/text-engine.js');
   const digest = scenes.map(s => `[${s.role || '?'}] ${s.subtitle_text || s.narration || ''}`).join('\n');
@@ -245,7 +257,7 @@ export async function generateCards({ episodeDir, platform = null, kind = 'both'
   const needsCopy = !(th.intro_headline_text && th.outro_definition);
   if (needsCopy) {
     try {
-      copy = await writeCardCopy({ briefFM, scenes, topic: briefFM.topic || meta.topic });
+      copy = await writeCardCopy({ briefFM, scenes, topic: cardTopic(meta, briefFM) });
       console.log(`   문안 생성: intro="${copy.intro}" / outro="${copy.outro}"`);
     } catch (e) {
       console.warn(`   ⚠ 문안 생성 실패 (${String(e.message).slice(0, 80)}) — 대본에서 잘라 쓴다`);

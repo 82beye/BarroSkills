@@ -421,12 +421,16 @@ async function main() {
   // v2 spec composition — brief frontmatter > series.json entry > defaults
   // headline_text 존재 시 v2 모드: Gemini가 NO TEXT base 생성 → composer가 텍스트·로고·인용 합성
   const briefThumb = (briefFM && briefFM.thumbnail && typeof briefFM.thumbnail === 'object') ? briefFM.thumbnail : {};
+  // 대본이 정한 썸네일 문안(「미국 증시 요약」은 제목 훅 = 그날의 사건). brief 가 정한 게 있으면 그게 이긴다.
+  // 없으면 아래 파생 경로가 첫 씬 자막을 쓰는데, 요약 포맷의 첫 씬은 지수 카드라 등락률이 헤드라인이 됐다
+  // (2026-10-07 EP-2026-0214: 나스닥·S&P500 사상 최고치인 날 「다우 +0.49% 나스닥 +0.45% S&P500」).
+  const scriptThumb = (fm && fm.thumbnail && typeof fm.thumbnail === 'object') ? fm.thumbnail : {};
   const v2spec = {
     episode: seriesN || undefined,
     keyword: keywordResolved || undefined,
     palette: paletteName,
-    headline_text: briefThumb.headline_text || specSeriesEntry?.headline_text || null,
-    keyword_number: briefThumb.keyword_number || specSeriesEntry?.keyword_number || null,
+    headline_text: briefThumb.headline_text || scriptThumb.headline_text || specSeriesEntry?.headline_text || null,
+    keyword_number: briefThumb.keyword_number || scriptThumb.keyword_number || specSeriesEntry?.keyword_number || null,
     accent_color: briefThumb.accent_color || specSeriesEntry?.accent_color || 'yellow',
     background_style: briefThumb.background_style || specSeriesEntry?.background_style || 'dark',
     mascot_emotion: briefThumb.mascot_emotion || specSeriesEntry?.mascot_emotion || null,

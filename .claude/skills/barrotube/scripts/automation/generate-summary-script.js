@@ -68,7 +68,10 @@ export function paletteFitsSlot(prompt, slot) {
  * 요약 포맷 계약. 문제 목록(문자열)을 돌려준다 — 비면 통과.
  * extraCta: KPI 진단이 켠 마무리 처방 문장(좋아요 요청 등). 있으면 마지막 씬에 그대로 있어야 한다.
  */
-export function checkSummary(out, extraCta = null) {
+/** 대본이 그날의 기록(사상 최고치 등)을 말했는지 — 「사상 최고」·「최고치」·「신고가」 중 하나. */
+const RECORD_WORDS = /사상 최고|최고치|신고가/;
+
+export function checkSummary(out, extraCta = null, events = []) {
   const problems = [];
   const roles = CFG.scenes.map((s) => s.role);
   const scenes = out?.scenes;
@@ -98,6 +101,13 @@ export function checkSummary(out, extraCta = null) {
   const hook = String(out.title_hook || '');
   if (!hook || hook.length > CFG.title.hook_max_chars) problems.push(`title_hook 은 1~${CFG.title.hook_max_chars}자 (받은 ${hook.length}자)`);
   if (/[[\]【】()]/.test(hook)) problems.push('title_hook 에 괄호·대괄호 태그를 쓰지 마라');
+  // 기록이 있는 날은 기록이 주제다 — 2026-10-07 EP-2026-0214: 나스닥 2연속·S&P500 사상 최고치인 날
+  // 씬 1 이 지수 등락률부터 읽고 신고가는 세 번째 문장에, 나스닥 기록은 아예 빠졌다.
+  if (events.length) {
+    const opening = String(scenes[0]?.narration || '').split(/(?<=[.!?])\s+/).slice(0, 2).join(' ');
+    if (!RECORD_WORDS.test(opening)) problems.push(`씬 1 은 「…요약입니다.」 바로 다음 문장에서 오늘의 기록을 먼저 말해야 한다: ${events.join(' · ')}`);
+    if (!RECORD_WORDS.test(hook)) problems.push(`title_hook 은 오늘의 기록을 이름으로 써야 한다 (예: 「나스닥·S&P500 나란히 사상 최고치」): ${events.join(' · ')}`);
+  }
   return problems;
 }
 
@@ -162,6 +172,13 @@ ${roles}
 ${buildImagePromptContractBlock(MASCOT_CLAUSE)}
 - 캐리커처(WITH: 절)는 쓰지 않는다 — 범용 컷이어야 한다.
 
+## 그날의 주제 — 기록이 먼저
+- [데이터] 오늘의_기록(사상 최고치·연속 기록)은 그날 미국장의 사건이다. 있으면 그것이 주제다:
+  씬 1 은 「…요약입니다.」 바로 다음 문장에서 그 기록을 먼저 말하고(여러 지수면 함께, 연속이면 며칠째인지),
+  3대 지수 등락률은 그 뒤에 근거로 붙인다. title_hook 도 그 기록을 이름으로 쓴다. 등락률만으로 열지 마라.
+- 이 영상은 밤사이 끝난 미국장 정리다. 전날 한국장(코스피·외국인 수급)을 주제나 비교 축으로 끌어오지 마라 —
+  [선정 토픽]·[데스크]가 한·미 대비로 잡혀 있어도 그렇다. 한국장은 마지막 쪽에서 오늘 볼 대목 한 문장까지만.
+
 ## 제목
 - title_hook: 그날을 대표하는 사건 하나, ${CFG.title.hook_max_chars}자 이내. 괄호 태그 금지. 짧을수록 좋다 — 사건의 크기가 조회수를 정한다(대비 구조 「A에도 B」 허용).
 
@@ -179,7 +196,7 @@ function userPrompt(date, data, extra) {
     .map((s) => `${s.t}(${s.name}) ${s.pct > 0 ? '+' : ''}${s.pct.toFixed(2)}% [${s.sec}]`);
   const d = {
     발행일_KST: date, 미국_장_날짜: data.us_session, 요일: DOW[new Date(`${data.us_session}T12:00:00Z`).getUTCDay()],
-    지수: data.indices, 금리_원자재_환율: data.macro,
+    지수: data.indices, 오늘의_기록: data.events?.length ? data.events : '(없음)', 금리_원자재_환율: data.macro,
     섹터_시총가중_등락: data.sectors.map((s) => `${s.sec} ${s.pct > 0 ? '+' : ''}${s.pct.toFixed(2)}%`),
     상승_상위: data.movers.up.map((m) => `${m.t}(${m.name}) +${m.pct.toFixed(2)}%`),
     하락_상위: data.movers.down.map((m) => `${m.t}(${m.name}) ${m.pct.toFixed(2)}%`),
@@ -203,6 +220,10 @@ function toMarkdown(epId, date, data, out, engine, growthRemedies = []) {
     target_total_seconds: CFG.target_total_seconds, language: 'ko', writer: `summary-writer (${engine})`,
     created_at: new Date().toISOString(), revision: 1, summary_date: date, us_session: data.us_session,
     title_hook: out.title_hook, angle_summary: out.angle_summary || '',
+    ...(data.events?.length ? { events: data.events } : {}),
+    // 썸네일 헤드라인은 제목 훅(그날의 사건)이다. 없으면 생성기가 씬 1 자막(지수 등락률)을 걸었다 —
+    // 2026-10-07 EP-2026-0214 썸네일이 「다우 +0.49% 나스닥 +0.45% S&P500」이었다.
+    thumbnail: { headline_text: out.title_hook },
     ...(growthRemedies.length ? { growth_remedies: growthRemedies } : {}),
     scenes: out.scenes.map((s, i) => ({
       scene_id: String(i + 1).padStart(3, '0'), role: s.role, narration: s.narration, subtitle_text: s.subtitle_text,
@@ -248,7 +269,7 @@ async function main() {
     if (out) {
       normalizeSeconds(out.scenes || [], CFG.target_total_seconds);
       ensureClosingCta(out.scenes, extraCta);
-      problems = checkSummary(out, extraCta);
+      problems = checkSummary(out, extraCta, data.events || []);
       const q = validateScript((out.scenes || []).map((s, i) => ({ ...s, scene_id: String(i + 1).padStart(3, '0') })))
         .filter((i) => i.severity === 'error');
       problems.push(...q.map((i) => formatIssue(i).trim()));

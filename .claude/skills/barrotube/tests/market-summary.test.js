@@ -5,7 +5,9 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import { titleKo, pickEvents } from '../scripts/automation/fetch-econ-calendar.js';
-import { nyInstant, afterHoursFromChart, sectorAverages, topMovers } from '../scripts/automation/collect-summary-data.js';
+import { nyInstant, afterHoursFromChart, sectorAverages, topMovers, recordFromHistory, recordEvents } from '../scripts/automation/collect-summary-data.js';
+import { indicesCard } from '../scripts/automation/lib/summary-cards.js';
+import { cardTopic } from '../scripts/automation/generate-cards.js';
 import { checkSummary, normalizeSeconds, paletteFitsSlot, firstJsonObject, retryPrompt } from '../scripts/automation/generate-summary-script.js';
 import { splitPicks } from '../scripts/automation/summary-assets.js';
 import { summaryTitle } from '../scripts/automation/lib/summary-title.js';
@@ -163,4 +165,64 @@ test('요약 대본은 수치가 내용이라 쇼츠 상한 대신 요약 상한
   assert.ok(validateScript(shorts).some((i) => i.rule === 'spoken-number-budget'));
   const summary = [{ ...shorts[0], card: { type: 'indices' } }];
   assert.ok(!validateScript(summary).some((i) => i.rule === 'spoken-number-budget'));
+});
+
+test('지수 사상 최고치·연속 기록을 일별 종가로 센다 — 오래된 구간은 장중 고가 상한으로 보수적으로', () => {
+  // 2026-10-06 미국장 실측: 나스닥 2거래일 연속·S&P500 사상 최고치, 다우는 아님.
+  const day = (date, close) => ({ date, close });
+  // 9월에 더 높은 종가가 있어 10-01·10-02 는 기록이 아니다 — 연속은 10-05·10-06 두 날.
+  const nasdaq = [day('2026-09-25', 27300), day('2026-10-01', 26872), day('2026-10-02', 27190.86), day('2026-10-05', 27477.31), day('2026-10-06', 27599.89)];
+  assert.deepEqual(recordFromHistory(nasdaq, 26800, '2026-10-06'), { all_time_high: true, streak: 2, prior_high: 27477.31 });
+  const spx = [day('2026-09-25', 7798.99), day('2026-10-02', 7723), day('2026-10-05', 7774), day('2026-10-06', 7818.93)];
+  assert.deepEqual(recordFromHistory(spx, 7000, '2026-10-06'), { all_time_high: true, streak: 1, prior_high: 7798.99 }, '10-05 는 기록이 아니어서 연속은 1');
+  const dow = [day('2026-09-20', 54349.12), day('2026-10-06', 51521.28)];
+  assert.equal(recordFromHistory(dow, 40000, '2026-10-06').all_time_high, false);
+  assert.equal(recordFromHistory(spx, 7900, '2026-10-06').all_time_high, false, '예전 장중 고가 상한을 못 넘으면 기록이라 하지 않는다');
+  assert.equal(recordFromHistory(spx, 7000, '2026-10-07'), null, '마지막 날이 세션이 아니면 판정하지 않는다');
+  const idx = [{ name: '다우존스', record: { all_time_high: false, streak: 0 } }, { name: '나스닥', record: { all_time_high: true, streak: 2 } },
+    { name: 'S&P 500', record: { all_time_high: true, streak: 1 } }, { name: '기록 없음' }];
+  assert.deepEqual(recordEvents(idx), ['나스닥 사상 최고치 마감 (2거래일 연속)', 'S&P 500 사상 최고치 마감']);
+});
+
+test('기록이 있는 날은 씬 1 두 번째 문장과 제목 훅이 기록을 먼저 말한다', () => {
+  // 2026-10-07 EP-2026-0214: 씬 1 이 지수 등락률부터 읽고 신고가는 세 번째 문장, 나스닥 기록은 빠졌다.
+  const events = ['나스닥 사상 최고치 마감 (2거래일 연속)', 'S&P 500 사상 최고치 마감'];
+  const plain = validOut();
+  const p1 = checkSummary(plain, null, events);
+  assert.ok(p1.some((p) => p.includes('씬 1 은 「…요약입니다.」 바로 다음 문장에서 오늘의 기록')), '등락률로 열면 되돌린다');
+  assert.ok(p1.some((p) => p.includes('title_hook 은 오늘의 기록을 이름으로')));
+  assert.deepEqual(checkSummary(plain), [], '기록이 없는 날은 예전과 같다');
+  const led = validOut();
+  led.scenes[0].narration = '시월 육일 화요일 미국 증시 요약입니다. 나스닥이 이틀 연속, 에스앤피 오백이 사상 최고치로 마감했습니다. 다우도 올랐습니다.';
+  led.title_hook = '나스닥·S&P500 나란히 사상 최고치';
+  assert.deepEqual(checkSummary(led, null, events), []);
+  const late = validOut();
+  late.scenes[0].narration = '시월 육일 화요일 미국 증시 요약입니다. 다우와 나스닥이 올랐습니다. 에스앤피 오백은 사상 최고치로 마감했습니다.';
+  late.title_hook = '나스닥·S&P500 나란히 사상 최고치';
+  assert.ok(checkSummary(late, null, events).some((p) => p.includes('바로 다음 문장')), '세 번째 문장에 묻히면 안 된다');
+});
+
+test('기록은 데이터·지시문·카드·썸네일까지 이어진다 — 썸네일 헤드라인은 지수 등락률이 아니라 제목 훅', () => {
+  const gen = readFileSync(join(ROOT, 'scripts', 'automation', 'generate-summary-script.js'), 'utf8');
+  assert.match(gen, /오늘의_기록: data\.events\?\.length \? data\.events : '\(없음\)'/, '대본 작가가 기록을 데이터로 받는다');
+  assert.match(gen, /전날 한국장\(코스피·외국인 수급\)을 주제나 비교 축으로 끌어오지 마라/, '새벽 미국장 영상의 주제는 미국장');
+  assert.match(gen, /thumbnail: \{ headline_text: out\.title_hook \}/);
+  const thumb = readFileSync(join(ROOT, 'scripts', 'automation', 'generate-thumbnail.js'), 'utf8');
+  assert.match(thumb, /headline_text: briefThumb\.headline_text \|\| scriptThumb\.headline_text \|\|/, '대본이 정한 헤드라인이 첫 씬 자막 파생보다 먼저');
+  const card = indicesCard({ items: [
+    { name: '나스닥', price_text: '27,599.79', change_pct: 0.45, record: { all_time_high: true, streak: 2 } },
+    { name: '다우존스', price_text: '51,521.28', change_pct: 0.49, record: { all_time_high: false, streak: 0 } },
+  ], dateLabel: '미국 2026.10.06 (화) 마감' });
+  assert.match(card, /사상 최고 · 2일 연속/);
+  assert.equal((card.match(/사상 최고/g) || []).length, 1, '기록이 아닌 지수에는 배지가 없다');
+  const cfg = JSON.parse(readFileSync(join(ROOT, 'config', 'market-summary.json'), 'utf8'));
+  assert.match(cfg.scenes[0].intent, /오늘의_기록/);
+});
+
+test('요약 포맷 인트로 카드는 브리프의 한·미 대비 토픽이 아니라 대본이 정한 그날의 사건으로 쓴다', () => {
+  // 2026-10-07 EP-2026-0214 인트로: 「S&P 사상 최고치인데 외국인은 1조 7,661억 원 던졌다」 — 전날 한국장이 섞였다.
+  const brief = { topic: '…서울은 외국인 1조 7,661억 원 순매도를 먼저 맞았고, …S&P500이 사상 최고치로 마감했다' };
+  const summary = { form: 'market-summary', title_hook: '나스닥·S&P500 나란히 사상 최고치', events: ['나스닥 사상 최고치 마감 (2거래일 연속)', 'S&P 500 사상 최고치 마감'] };
+  assert.equal(cardTopic(summary, brief), '나스닥·S&P500 나란히 사상 최고치 · 나스닥 사상 최고치 마감 (2거래일 연속) · S&P 500 사상 최고치 마감');
+  assert.equal(cardTopic({ form: 'shorts', topic: 'x' }, brief), brief.topic, '다른 포맷은 예전처럼 브리프 토픽');
 });

@@ -26,6 +26,8 @@ const ROOT = resolve(import.meta.dirname, '../..');
 const readJSON = (p, fb = null) => (existsSync(p) ? JSON.parse(readFileSync(p, 'utf-8')) : fb);
 
 const INDEX_SYMBOLS = ['.DJI', '.IXIC', '.INX'];
+// 사상 최고치 판정용 야후 기호 (시세 스냅샷은 자체 기호를 쓴다)
+const INDEX_HISTORY = { '.DJI': '^DJI', '.IXIC': '^IXIC', '.INX': '^GSPC' };
 const MACRO = [
   ['BOND:US10YT=RR', '미 국채 10년물', (q) => `${q.price.toFixed(3)}%`],
   ['CMDT:CLcv1', 'WTI 유가', (q) => `$${q.price_text}`],
@@ -67,6 +69,55 @@ async function afterHours(symbol, session) {
 }
 
 /** 섹터별 시총 가중 평균 등락. */
+/**
+ * 지수 종가가 사상 최고치인지, 며칠 연속인지 (2026-10-07).
+ *
+ * 그날 미국장의 사건이 「나스닥 2거래일 연속·S&P500 사상 최고치」였는데 요약 영상은 지수 등락률
+ * (다우 +0.49%·나스닥 +0.45%)을 썸네일·첫 문장에 걸었다 — 기록이 데이터에 없고 리서치 문장 속에만
+ * 있었기 때문이다. 그래서 기록을 결정론으로 세어 대본·제목·썸네일·카드가 먼저 말하게 한다.
+ *
+ * daily: [{date, close}] 최근 몇 년 일별. olderBound: 그 이전 월별 **장중 고가**의 최댓값 — 종가보다
+ * 크거나 같으므로 오래된 기록을 놓칠 수는 있어도 없는 기록을 만들지는 않는다.
+ * 마지막 일별 날짜가 session 이 아니면(휴장·지연) 판정하지 않는다(null).
+ */
+export function recordFromHistory(daily, olderBound, session) {
+  const rows = (daily || []).filter((r) => Number.isFinite(r.close));
+  if (!rows.length || rows.at(-1).date !== session) return null;
+  let run = Number.isFinite(olderBound) ? olderBound : -Infinity;
+  const rec = rows.map((r) => { const hit = r.close > run; run = Math.max(run, r.close); return hit; });
+  let streak = 0;
+  for (let i = rows.length - 1; i >= 0 && rec[i]; i -= 1) streak += 1;
+  const prior = Math.max(Number.isFinite(olderBound) ? olderBound : -Infinity, ...rows.slice(0, -1).map((r) => r.close));
+  return { all_time_high: rec.at(-1), streak, prior_high: Math.round(prior * 100) / 100 };
+}
+
+/** 지수 기록 → 대본·제목·썸네일이 먼저 말할 사건 문구. */
+export function recordEvents(indices) {
+  return (indices || []).filter((i) => i.record?.all_time_high)
+    .map((i) => `${i.name} 사상 최고치 마감${i.record.streak >= 2 ? ` (${i.record.streak}거래일 연속)` : ''}`);
+}
+
+export async function indexHistory(symbol) {
+  const get = async (query) => {
+    const r = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?${query}`,
+      { headers: { 'User-Agent': 'Mozilla/5.0 BarroTube/1.0' }, signal: AbortSignal.timeout(20_000) });
+    if (!r.ok) return null;
+    const d = (await r.json())?.chart?.result?.[0];
+    const tz = d?.meta?.exchangeTimezoneName || 'America/New_York';
+    const qq = d?.indicators?.quote?.[0] || {};
+    return (d?.timestamp || []).map((t, i) => ({
+      date: new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date(t * 1000)), close: qq.close?.[i], high: qq.high?.[i],
+    }));
+  };
+  // 야후는 range=max 에 일별을 주지 않는다(월별로 바꿔 준다) — 최근 5년 일별 + 그 이전 월별 고가.
+  const daily = await get('range=5y&interval=1d');
+  const monthly = await get('range=max&interval=1mo');
+  const start = daily?.find((r) => Number.isFinite(r.close))?.date;
+  if (!start || !monthly?.length) return null;
+  const older = monthly.filter((m) => m.date <= start).map((m) => (Number.isFinite(m.high) ? m.high : m.close)).filter(Number.isFinite);
+  return { daily, olderBound: older.length ? Math.max(...older) : null };
+}
+
 export function sectorAverages(stocks, weights) {
   const byT = new Map(stocks.map((s) => [s.t, s]));
   return Object.entries(weights).map(([sec, m]) => {
@@ -111,14 +162,22 @@ async function main() {
     return { ...u, name: names[u.t] || u.t, price: x?.price ?? null, pct, ah_pct: ah };
   });
 
-  const indices = INDEX_SYMBOLS.map((s) => q[s]).filter(Boolean)
-    .map((x) => ({ name: x.name, price_text: x.price_text, change_pct: x.change_pct }));
+  const indices = INDEX_SYMBOLS.filter((s) => q[s])
+    .map((s) => ({ sym: s, name: q[s].name, price_text: q[s].price_text, change_pct: q[s].change_pct }));
+  // 사상 최고치·연속 기록. 이력을 못 받으면 그 지수는 판정 없이 간다(기록이 없는 날과 같게).
+  const histories = session ? await mapPool(indices, 3, (i) => indexHistory(INDEX_HISTORY[i.sym])) : [];
+  indices.forEach((i, k) => {
+    const h = histories[k];
+    const r = h ? recordFromHistory(h.daily, h.olderBound, session) : null;
+    if (r) i.record = r;
+    delete i.sym;
+  });
   const macro = MACRO.map(([s, name, fmt]) => q[s] && ({ name, value: fmt(q[s]), pct: q[s].change_pct })).filter(Boolean);
   const calendar = readJSON(join(dir, 'econ-calendar.json'), { events: [] });
 
   const out = {
     date, us_session: session, stale: !!market.stale, content_mode: market.content_mode,
-    indices, macro, stocks, sectors: sectorAverages(stocks, weights), movers: topMovers(stocks),
+    indices, events: recordEvents(indices), macro, stocks, sectors: sectorAverages(stocks, weights), movers: topMovers(stocks),
     after_hours: stocks.filter((s) => Math.abs(s.ah_pct ?? 0) >= 2).sort((a, b) => Math.abs(b.ah_pct) - Math.abs(a.ah_pct)).slice(0, 5),
     calendar: calendar.events || [],
     missing: stocks.filter((s) => s.pct === null).map((s) => s.t),
@@ -127,6 +186,7 @@ async function main() {
   writeFileSync(path, JSON.stringify(out, null, 2));
   console.log(`📦 요약 데이터 ${date} (미국 세션 ${session}) — 종목 ${stocks.length - out.missing.length}/${stocks.length} · 일정 ${out.calendar.length}건`);
   console.log(`   지수: ${indices.map((i) => `${i.name} ${i.change_pct > 0 ? '+' : ''}${i.change_pct}%`).join(' · ')}`);
+  console.log(`   기록: ${out.events.length ? out.events.join(' · ') : '없음'}`);
   console.log(`   상승: ${out.movers.up.map((m) => `${m.name} ${m.pct.toFixed(1)}%`).join(', ')}`);
   console.log(`   하락: ${out.movers.down.map((m) => `${m.name} ${m.pct.toFixed(1)}%`).join(', ')}`);
   console.log(`   ${path}`);
