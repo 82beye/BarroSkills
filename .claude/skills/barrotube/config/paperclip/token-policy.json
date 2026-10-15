@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "_comment": "토큰 거버너(scripts/automation/paperclip/token-governor.js) 기준. 구독 한도 창은 운영자 본인의 대화 세션과 자동화가 같이 쓴다. 2026-10-14부터 주간 65%에서 절약·타 공급자 우선, 85%에서 새 LLM 작업을 대체·보류해 최소 15%를 총괄·긴급 복구에 남긴다. 단위는 한도 창 사용률(%). 내려갈 때는 hysteresis 만큼 더 내려가야 한 단계 회복한다.",
+  "providers": {
+    "claude": {
+      "quota_provider": "anthropic",
+      "label": "Claude"
+    },
+    "codex": {
+      "quota_provider": "openai",
+      "label": "Codex"
+    }
+  },
+  "thresholds": {
+    "session": {
+      "yellow": 70,
+      "red": 90
+    },
+    "week": {
+      "yellow": 65,
+      "red": 85
+    },
+    "week_pace_margin": 10,
+    "week_pace_min": 20,
+    "hysteresis": 5,
+    "stale_minutes": 120
+  },
+  "routing": {
+    "_comment": "파이프라인 엔진 순서(BT_*_ENGINE_CHAIN). 여기 값은 각 스크립트의 기본 순서와 같다. 한 공급자가 RED 이고 다른 쪽이 아니면 RED 쪽을 뒤로 보낸다. 둘 다 GREEN 이면 아무것도 쓰지 않는다(스크립트 기본값).",
+    "chains": {
+      "BT_SCRIPT_ENGINE_CHAIN": "claude,codex,gemini",
+      "BT_METADATA_ENGINE_CHAIN": "claude,codex,gemini",
+      "BT_CARD_ENGINE_CHAIN": "claude,codex",
+      "BT_FACTCHECK_ENGINE_CHAIN": "claude,gemini,codex",
+      "BT_GROWTH_MANAGER_CHAIN": "codex,claude",
+      "BT_INCIDENT_ENGINE_CHAIN": "codex,claude"
+    },
+    "yellow_prefers_other": true,
+    "_yellow_prefers_other": "한쪽이 YELLOW 이고 다른 쪽이 GREEN 이면 GREEN 쪽을 앞에 둔다 — 노랑일 때 미리 덜어 두면 RED 까지 안 간다."
+  },
+  "routine_tiers": {
+    "_comment": "0 = 늘 돈다(생산·수집·진단). 1 = 두 공급자 모두 RED 면 보류(경쟁 인텔·성장 매니저·주간 마케팅). 2 = 담당 에이전트의 기본 공급자가 YELLOW 이상이면 보류(주간 CMO·CEO). 다른 공급자의 RED 만으로 담당 에이전트를 멈추지 않는다. 보류된 루틴은 풀리면 놓친 회차가 한 번 돈다."
+  },
+  "notify": {
+    "on_level_change": true,
+    "daily_report_at": "21:00"
+  },
+  "cost_estimate_per_mtok": {
+    "_comment": "실행 기록에 환산 비용(costUsd)이 없는 공급자(Codex — 2026-10-07 실측: usageJson 에 토큰만 온다)의 하루 상한·리포트용 추정 단가(USD/백만 토큰). 청구액이 아니라 한도 소모를 Claude 쪽 환산값과 같은 눈금으로 보려는 대리 지표다.",
+    "codex": {
+      "input": 1.25,
+      "cached": 0.125,
+      "output": 10.0
+    }
+  }
+}
