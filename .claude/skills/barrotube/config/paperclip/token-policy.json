@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "_comment": "토큰 거버너(scripts/automation/paperclip/token-governor.js) 기준. 구독 한도 창은 운영자 본인의 대화 세션과 자동화가 같이 쓴다. 2026-10-14부터 주간 65%에서 절약·타 공급자 우선, 85%에서 새 LLM 작업을 대체·보류해 최소 15%를 총괄·긴급 복구에 남긴다. 단위는 한도 창 사용률(%). 내려갈 때는 hysteresis 만큼 더 내려가야 한 단계 회복한다.",
+  "_comment": "2026-10-26 전 회사 중앙 구독 한도 정책. 주간 60%부터 절약, 70%부터 신규 LLM 실행 중단으로 최소 30%를 보존한다. 진행 중 예약·모델별 예상 소비·5%p 안전 여유와 15분 이내 관측을 적용한다. P0·CEO·PM 예외 없이 구독 연결만 사용하며 외부 세션 소비에 대한 공급자 측 절대 보장은 아니다.",
   "providers": {
     "claude": {
       "quota_provider": "anthropic",
@@ -17,13 +17,13 @@
       "red": 90
     },
     "week": {
-      "yellow": 65,
-      "red": 85
+      "yellow": 60,
+      "red": 70
     },
     "week_pace_margin": 10,
     "week_pace_min": 20,
     "hysteresis": 5,
-    "stale_minutes": 120
+    "stale_minutes": 15
   },
   "routing": {
     "_comment": "파이프라인 엔진 순서(BT_*_ENGINE_CHAIN). 여기 값은 각 스크립트의 기본 순서와 같다. 한 공급자가 RED 이고 다른 쪽이 아니면 RED 쪽을 뒤로 보낸다. 둘 다 GREEN 이면 아무것도 쓰지 않는다(스크립트 기본값).",
@@ -52,5 +52,15 @@
       "cached": 0.125,
       "output": 10.0
     }
+  },
+  "global_reserve": {
+    "enabled": true,
+    "reserve_percent": 30,
+    "safety_buffer_percent": 5,
+    "_comment": "token-governor.js는 전 회사 quota-switch.js에 위임한다. 실제 실행 직전 quota-cli가 공유 예약을 확인한다. 개별 가드는 중앙 상태 활성 시 설정을 변경하지 않는다. 2026-11-02 생산 회차 호출(dispatch 의 BT_QUOTA_CLASS=production)은 호출당 0.6% 로 예약하고 에이전트 예약에 막히지 않으며 70% 까지 간다 — 에이전트는 그대로 65% 에서 멈추므로 30% 보존선은 유지된다. 값은 quota-reserve-policy.js PIPELINE_CALL_PERCENT."
+  },
+  "barrojo_unblock": {
+    "enabled": true,
+    "_comment": "2026-10-28 바로조 막힘 지휘(barrojo unblock)가 전 회사의 막힌 이슈를 가르고 CEO 를 호출한다. 켜져 있으면 token-governor 의 BarroTube 막힘 점검(triage.js) 자동 열기를 건너뛴다 — 같은 CEO 를 두 곳이 깨우지 않게. 끄려면 enabled=false."
   }
 }

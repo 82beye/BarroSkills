@@ -19,11 +19,14 @@
  *
  * 종료코드: 0 = 성공 · 2 = 입력 오류 · 4 = 리서치 실패(폴백 권장)
  */
-import { existsSync, readFileSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, realpathSync, writeFileSync, readdirSync } from 'node:fs';
 import { extractEvidenceUrls, verifyEvidenceUrls, findStaleCitations } from './lib/evidence-verify.js';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
 import { parseArgs } from 'node:util';
 import { spawnSync } from 'node:child_process';
+import { cleanHeadline, isRepeatTopic, isRepeatStory, marketShockTopic, rankFallbackNews } from './lib/topic-fallback.js';
+import { directiveBlock, readOperatorDirective } from './lib/operator-directive.js';
+import { spineGaps } from './lib/editorial-spine.js';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 
@@ -87,8 +90,11 @@ function buildPrompt({ slotName, slot, defaults, skeleton, date, inputs, outDir 
       + `데스크 리포트 원문은 같은 폴더의 desk-*.md 에 있다.\n`
     : '\n## 데스크 브리핑\n  (없음 — 네가 직접 조사해라)\n';
 
+  const directive = directiveBlock(readOperatorDirective(ROOT, date, slotName),
+    '리서처: topic·story_spine 을 이 주제로 정한다. 데스크 브리핑이 다른 이야기를 골랐으면 그 자료는 이 주제의 근거·보강으로만 쓴다.');
+
   return `너는 바로경제(econ-daily) 채널의 리서처다. 오늘(${date}, ${weekday}) "${slot.label}" 쇼츠 1편의 리서치를 완성한다.
-${deskBlock}
+${deskBlock}${directive}
 ## 입력 (경로다. 직접 읽어라)
 ${inputLines}
 
@@ -120,6 +126,7 @@ ${slot.timing_caveat}
 1. ${join(outDir, `research-${slotName}.md`)}
    - 시세 요약(스냅샷의 수치를 그대로. 임의로 지어내지 마라)
    - 오늘의 핵심 사건 3개와 각각의 근거 링크
+   - 각 사건에서 확인된 사실, 매체가 제시한 원인, 아직 모르는 부분을 분리한다. 링크가 단순히 열리는 것과 그 주장을 뒷받침하는 것은 다르므로 본문·발행시각을 확인한다.
    - 소셜 반응 요약 (검색 실패 시 "소셜 검색 불가"라고 명시)
    - 경쟁 채널이 이미 다룬 주제 (아래 "경쟁 인텔" 절 참조)
    - ${slot.target_seconds || defaults.target_seconds || 60}초 안에 다룰 수 있는 범위로 좁힌 결론
@@ -127,6 +134,7 @@ ${slot.timing_caveat}
 2. ${join(outDir, `strategy-${slotName}.md`)}
    - 선정 토픽과 한 문장 앵글
    - 시청자가 얻어갈 핵심 1개
+   - 후보마다 「시청자가 풀고 싶은 질문 → 확인된 새 사실 → 경제적 전달 경로 → 시청자에게 중요한 결과 → 해석이 성립하지 않을 조건 → 다음 확인 신호」를 비교한다. 전달 경로를 설명할 자료가 없는 후보는 헤드라인이 화려해도 낮춘다. 이 항목을 대본에 같은 표현으로 기계적으로 반복하지 않는다.
    - **분석 명제** — 아래 네 줄을 반드시 이 이름 그대로 쓴다. 대본의 인과는 여기서만 나온다.
      * 관찰: 오늘 데이터에서 확인되는 사실 (지수 등락률 말고, 통념과 어긋나는 쪽)
      * 메커니즘: 왜 그렇게 됐는지 한 문장. "A 때문에 B"
@@ -142,6 +150,7 @@ ${slot.timing_caveat}
         KB증권 메모리 재고 진단이었고 그날 시황 기사 전체가 그것만 지목했다.)
      * 함의: 한국 시청자가 이 때문에 다르게 봐야 할 것 하나
      * 반증: 이 해석이 틀렸다면 내일 무엇이 보일지
+   - 관찰/메커니즘/함의/반증 각각에 근거 URL 또는 시세 스냅샷 항목을 붙인다. 메커니즘은 출처의 설명인지 제작자의 조건부 추론인지 표시한다. 확인 신호는 실제 발표·실적·시장 자료 중 현재 논점을 판별할 것을 고르고, 근거가 없으면 시각·숫자를 지어내지 않는다.
    - 아래 ${skeleton.length}컷 구조에 맞춘 씬별 메시지
    - 단정하면 안 되는 주장과 팩트체크 우선순위
      근거가 약할 때 "두루뭉술하게 쓰라" 고 지시하지 마라. 그건 대본을 아무 말도 안 하는
@@ -157,7 +166,8 @@ ${slot.timing_caveat}
      "angle": "<이 토픽을 어떤 각도로 풀지>",
     "content_mode": "market_close|closed_market_issue|sunday_preopen|weekly_recap|weekly_preview",
      "key_numbers": ["<대본에 반드시 들어갈 수치>", "..."],
-     "candidates": [{"topic":"...","why":"..."}, ...],
+     "candidates": [{"topic":"...","why":"선정 또는 탈락 이유","source_url":"https://...","published_at":"ISO 8601","viewer_relevance":"시청자에게 미치는 경로"}, ...],
+     "story_spine": {"question":"<시청자가 풀 질문>","new_fact":"<이번 자료에서 확인된 새 사실>","observation":"<확인 사실>","mechanism":"<출처의 원인 또는 미확인>","transmission":"<실물경제·금융 경로>","viewer_result":"<조건부 결과>","failure_condition":"<해석이 성립하지 않을 조건>","watch_signal":"<논점을 판별할 확인 신호>","evidence_urls":["https://..."]},
      "social_searched": true|false,
      "competitor_gap_used": "<반영한 content_gaps 의 term. 연결점이 없으면 null>",
      "avoided_duplicates": ["<outliers 에 있어 피한 주제>", "..."],
@@ -176,6 +186,10 @@ ${slot.timing_caveat}
    (예: has_number 의 lift 가 1.3 이상이면 앵글에 구체 수치를 넣는다)
 
 경쟁 채널의 제목·문장을 그대로 베끼지 마라. 다루는 '주제'만 참고한다.
+우리 채널의 최근 topic-*.json 과 이전 영상도 살펴 같은 사건·같은 결론을 재방송하지 마라.
+후보는 최소 3개를 비교하고, 왜 지금인지(기사 발행시각), 근거 URL, 한국 시청자에게 닿는 경제 경로,
+선택·탈락 이유를 남겨라. 근거가 빈약하거나 주간 결산·전망을 만들 재료가 없으면 토픽을 억지로 만들지 마라.
+지수 자체의 등락이나 이미 사용한 주제의 말바꾸기는 새 주제가 아니다. 같은 사건이라도 새 자료가 이전 결론을 바꾸거나 새로운 질문·전달 경로가 확인됐을 때는 다룰 수 있다. 전망의 출처가 없으면 '가능성'이라는 말만 붙여 채우지 마라.
 
 ## 대본이 따를 구조 (참고 — 토픽을 이 ${skeleton.length}컷에 담을 수 있어야 한다)
 ${skeletonLines}
@@ -209,13 +223,26 @@ function newestAnalysisPath(date, maxAge) {
   return null;
 }
 
+/** 같은 날짜의 다른 슬롯과 최근 7일 선정 토픽. 테스트용 --out-dir 도 격리된다. */
+function recentTopics(outDir, date) {
+  const parent = dirname(outDir);
+  const earliest = new Date(Date.parse(`${date}T00:00:00Z`) - 7 * 86400_000).toISOString().slice(0, 10);
+  const prior = [];
+  for (const day of readdirSync(parent, { withFileTypes: true })) {
+    if (!day.isDirectory() || day.name < earliest || day.name > date || !/^\d{4}-\d{2}-\d{2}$/.test(day.name)) continue;
+    for (const file of readdirSync(join(parent, day.name))) {
+      if (!/^topic-[\w-]+\.json$/.test(file)) continue;
+      const saved = readJson(join(parent, day.name, file), {});
+      if (saved.topic) prior.push({ topic: saved.topic, source_url: saved.source_url,
+        story_spine: saved.story_spine, date: day.name, file });
+    }
+  }
+  return prior;
+}
+
 function writeFallbackAnalysis({ slotName, slot, skeleton, date, inputs, outDir }) {
   const market = readJson(inputs['시세 스냅샷'].path, {});
   const news = readJson(inputs['뉴스'].path, {});
-  // 12자 미만은 기사 제목이 아니라 사이트 메뉴다 — 2026-10-01 kr-close: 데스크까지 죽은 날
-  // 네이버 수집분 "홈"·"국내"·"미국 · 글로벌" 이 그대로 토픽이 돼 EP-2026-0201 이 "홈" 으로 만들어졌다.
-  const items = (news.sources || []).flatMap((source) => source.items || [])
-    .filter((item) => String(item.title || '').trim().length >= 12).slice(0, 3);
   const quotes = market.quotes || [];
   // 데스크가 고른 토픽이 있으면 그걸 쓴다.
   // 폴백은 "리서치 LLM 이 죽었을 때" 도는 경로인데, 그렇다고 **데스크까지 죽은 것은 아니다**.
@@ -226,21 +253,50 @@ function writeFallbackAnalysis({ slotName, slot, skeleton, date, inputs, outDir 
   const scopedDeskTopic = join(outDir, `desk-topic-${slotName}.json`);
   const deskTopicPath = existsSync(scopedDeskTopic) ? scopedDeskTopic : join(outDir, 'desk-topic.json');
   const desk = existsSync(deskTopicPath) ? readJson(deskTopicPath, {}) : {};
-  const topicSource = desk.topic ? 'desk' : (items[0]?.title ? 'headline' : 'quotes');
-  const topic = desk.topic || items[0]?.title || (quotes.length ? `${slot.label}: 주요 지수와 환율 흐름` : '');
-  const angle = desk.angle || slot.angle;
-  if (!topic) return false;
-
   const weekday = new Date(`${date}T12:00:00+09:00`).getUTCDay();
-  const contentMode = market.content_mode
+  let contentMode = market.content_mode
     || (slotName === 'us-close' && weekday === 0 ? 'weekly_recap'
       : slotName === 'us-close' && weekday === 1 ? 'weekly_preview'
         : weekday === 6 ? 'closed_market_issue' : weekday === 0 ? 'sunday_preopen' : 'market_close');
+  const prior = recentTopics(outDir, date);
+  const asOf = news.fetched_at || market.fetched_at || new Date().toISOString();
+  const candidates = rankFallbackNews(news, { asOf, slotName, priorTopics: prior });
+  const eligible = candidates.filter((item) => item.status === 'eligible');
+  const shock = marketShockTopic(market, { slotName, date });
+  const deskUrl = (desk.evidence || []).map((e) => e.source || e.url).find((url) => /^https?:\/\//i.test(url || ''));
+  const deskUsable = cleanHeadline(desk.topic).length >= 12 && !!deskUrl
+    && !isRepeatTopic(desk.topic, deskUrl, prior);
+  const recordIdle = (reason) => writeFileSync(join(outDir, `topic-review-${slotName}.json`),
+    JSON.stringify({ date, slot: slotName, as_of: asOf, decision: 'idle', reason,
+      desk_usable: deskUsable, candidates: candidates.slice(0, 20) }, null, 2));
+  const picked = eligible[0];
+  // 기사 한 건으로 한 주를 쓸 수는 없다 — 작가에게 주간 서사를 지어내게 하지 않는다. 다만 그날을 비우지도 않는다.
+  // 데스크가 없어도 신선한 기사가 있으면 토요일과 같은 「최신 이슈」 편으로 내보내고, 그것도 없을 때만 idle 이다.
+  // (2026-10-26 월: 세션 한도로 데스크·리서치가 비어 idle → 그날 아침 편이 없었다.)
+  if (!deskUsable && ['weekly_recap', 'weekly_preview', 'sunday_preopen'].includes(contentMode)) {
+    if (!picked && !shock) {
+      recordIdle(`weekly_mode_requires_sourced_desk_topic:${contentMode}`);
+      console.error(`❌ ${contentMode}: 근거 있는 데스크 토픽도 신선한 기사도 없어 안전하게 idle`);
+      return false;
+    }
+    contentMode = 'closed_market_issue';
+  }
+  if (!deskUsable && !picked && !shock) {
+    recordIdle('no_fresh_sourced_distinct_economic_headline');
+    console.error(`❌ 신선한 근거 URL과 새 각도를 갖춘 기사 없음 (${candidates.length}개 검토)`);
+    return false;
+  }
+  const topic = shock?.topic ?? (deskUsable ? cleanHeadline(desk.topic) : picked.topic);
+  const angle = shock ? '오늘 국내 증시 급락의 확인된 수치와 해석의 경계' : deskUsable ? desk.angle || slot.angle : slot.angle;
+  const topicSource = shock ? 'market_shock' : deskUsable ? 'desk' : 'headline';
+  const sourceUrl = shock?.source_url ?? (deskUsable ? deskUrl : picked.source_url);
+  const publishedAt = shock || deskUsable ? null : picked.published_at;
+  const items = eligible.slice(0, 3);
   const quoteLines = quotes.length
     ? quotes.map((q) => `- ${q.name || q.symbol}: ${q.price_text ?? q.price ?? '값 없음'} (${q.change_pct == null ? '변동률 없음' : `${q.change_pct}%`}, ${q.traded_at || '거래시각 없음'})`).join('\n')
     : '- 시세 스냅샷 없음 — 수치 단정 금지';
   const newsLines = items.length
-    ? items.map((item) => `- [${item.title}](${item.link || ''})${item.description ? ` — ${item.description}` : ''}`).join('\n')
+    ? items.map((item) => `- [${item.topic}](${item.source_url}) (${item.published_at})${item.summary ? ` — ${item.summary}` : ''}`).join('\n')
     : '- 뉴스 없음';
   const sceneLines = skeleton.map((scene) => `- ${scene.n}. ${scene.role}: ${scene.intent}`).join('\n');
 
@@ -250,10 +306,15 @@ function writeFallbackAnalysis({ slotName, slot, skeleton, date, inputs, outDir 
     topic,
     angle,
     topic_source: topicSource,
+    source_url: sourceUrl,
+    published_at: publishedAt,
+    selected_at: asOf,
+    selected_reason: shock ? '당일 코스피 종가 3% 이상 급락을 우선 반영' : deskUsable ? '데스크 근거·해석 유지' : '신선한 경제 기사, 출처 확인, 최근 선정과 중복 없음',
+    viewer_relevance: slot.audience_context,
     content_mode: contentMode,
     key_numbers: quotes.filter((q) => q.price_text != null || q.price != null)
       .map((q) => `${q.name || q.symbol} ${q.price_text ?? q.price}`).slice(0, 5),
-    candidates: items.map((item) => ({ topic: item.title, why: '수집 뉴스 헤드라인' })),
+    candidates: candidates.slice(0, 12).map((item) => ({ ...item, why: item.status === 'eligible' ? '선정 가능' : item.reasons.join(', ') })),
     social_searched: false,
     // 폴백은 LLM 없이 도는 경로라 경쟁 인텔을 해석할 주체가 없다.
     // 필드는 유지해 스키마를 일관되게 두되 값은 비워 둔다 (소비 측이 분기 없이 읽는다).
@@ -331,7 +392,7 @@ async function main() {
     if (!writeFallbackAnalysis({
       slotName: values.slot, slot, skeleton, date, inputs, outDir: realOutDir,
     })) {
-      console.error('❌ 폴백 분석에 사용할 시세·뉴스가 없습니다.');
+      console.error('❌ 안전한 폴백 토픽이 없습니다. topic-review 파일의 탈락 사유를 확인하세요.');
       process.exit(4);
     }
     console.log(`\n⚠️  결정론적 폴백 분석 완료\n   ${researchPath}\n   ${strategyPath}\n   ${topicPath}`);
@@ -392,6 +453,10 @@ async function main() {
   // 같은 검증을 여기서 하면 대본에 토큰을 쓰기 전에 걸러진다. 팩트체크와 같은 모듈을 쓴다.
   const researchText = readFileSync(researchPath, 'utf-8');
   const citedUrls = extractEvidenceUrls(researchText);
+  if (!citedUrls.length) {
+    console.error('\n❌ 리서치에 근거 URL 이 없습니다 — 대본 작성 전에 폴백 후보를 검사합니다.');
+    process.exit(4);
+  }
   if (citedUrls.length) {
     const verification = await verifyEvidenceUrls(citedUrls, { timeoutMs: 12_000 });
     const dead = (verification.results ?? []).filter((v) => v.verdict === 'fabricated');
@@ -424,6 +489,23 @@ async function main() {
   }
   if (!topic.topic || typeof topic.topic !== 'string' || topic.topic.trim().length < 5) {
     console.error('\n❌ topic.topic 이 비어 있거나 너무 짧습니다.');
+    process.exit(4);
+  }
+  const spine = topic.story_spine;
+  const gaps = spineGaps(spine, researchText);
+  if (gaps.length) {
+    // 이 게이트에 걸리면 리서치를 통째로 버리고 폴백으로 간다. 무엇이 빠졌는지와 버린 파일을 남긴다 —
+    // 2026-11-01 일요일 편은 이유가 안 남은 채 주간 결산 리서치가 일간 데스크 토픽으로 덮여 팩트체크에서 멈췄다.
+    writeFileSync(topicPath.replace(/\.json$/, '.rejected.json'), `${JSON.stringify(topic, null, 2)}\n`);
+    console.error(`\n❌ 주제에 질문·새 사실·전달 경로·반증·다음 신호 및 리서치에 있는 근거 URL이 빠졌습니다: ${gaps.join(', ')}`);
+    process.exit(4);
+  }
+  // 운영자가 주제를 정한 날은 최근 회차와 소재가 겹쳐도 통과시킨다 — 연속 소재를 알고 정한 것이다.
+  const directed = Boolean(readOperatorDirective(ROOT, date, values.slot));
+  const repeated = !directed && recentTopics(outDir, date).filter((t) => t.date !== date || t.file !== `topic-${values.slot}.json`)
+    .find((t) => isRepeatTopic(topic.topic, topic.source_url, [t]) || isRepeatStory(spine, [t]));
+  if (repeated) {
+    console.error(`\n❌ 최근 선정과 같은 토픽 (${repeated.date}/${repeated.file}) — 다른 후보를 골라야 합니다.`);
     process.exit(4);
   }
 

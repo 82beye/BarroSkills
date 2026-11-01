@@ -29,7 +29,9 @@
 /** 응답 본문에서 http(s) URL 을 뽑는다. evidence 필드는 자유 서술이라 정규식이 유일한 경로다. */
 export function extractEvidenceUrls(text) {
   if (!text) return [];
-  const re = /https?:\/\/[^\s"'<>)]+/g;
+  // 백틱·표 구분자·한글에서 끊는다 — 마크다운에서 「`https://…`」「https://…의 기사」로 쓰인 URL 에 군더더기가 붙으면
+  // 실존 검사가 빗나가고, 주제 근거 URL 과의 대조도 어긋난다.
+  const re = /https?:\/\/[^\s"'<>)`|가-힣]+/g;
   const urls = new Set();
   let m;
   while ((m = re.exec(text)) !== null) {

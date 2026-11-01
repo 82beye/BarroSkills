@@ -177,3 +177,8 @@ test('the factcheck gate is not bound to a single provider', () => {
   assert.match(src, /escalateFabricatedEvidence\(result\.claims, verification\)/);
   assert.match(src, /backend: \$\{backend\}/, 'the report must name the engine that produced it');
 });
+
+test('마크다운 표기에 붙은 백틱·표 구분자·한글은 URL 에 넣지 않는다', () => {
+  assert.deepEqual(extractEvidenceUrls('근거 `https://a.example/x?syn=1` | https://b.example/y|\nhttps://c.example/z의 기사'),
+    ['https://a.example/x?syn=1', 'https://b.example/y', 'https://c.example/z']);
+});
