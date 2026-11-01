@@ -150,7 +150,7 @@ function expressionRule(sensitivity) {
  * @param {number} [opts.maxCompanies=2]  화면에 올릴 기업 수 상한 (로고가 3개 넘어가면 카드가 지저분해진다)
  * @param {string} [opts.logoPosition='top-right']  로고를 놓을 모서리. **합성기마다 다르다**:
  *   - thumbnail-composer 의 인트로 모드는 헤드라인을 y=80 부터 그린다 → 'bottom-right'
- *   - HyperFrames 카드는 타이틀이 화면 30% 지점이라 위가 비어 있다 → 'top-right'
+ *   - HyperFrames 카드(generate-cards)도 'bottom-right' — 타이틀이 3줄이면 화면 18% 까지 올라와 위가 안 빈다(2026-10-09)
  *   - 썸네일은 배지가 없고 헤드라인이 y=240 부터다 → 'top-right'
  *   프롬프트의 "이 모서리를 비워라" 문장도 이 값을 따라간다 — 둘이 어긋나면 로고가 그림 위에 얹힌다.
  *

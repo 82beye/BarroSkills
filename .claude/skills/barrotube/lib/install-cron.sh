@@ -21,6 +21,10 @@
 #   weekly-marketing      — 매주 월요일 09:00 마케팅 인텔리전스 fetch
 #   doctor-daily          — 매일 07:10 자동 진단 (silent failure 탐지)
 #   telegram-bot          — 상시 데몬 (거부창·/pause 수신)
+#   deadman-<slot>        — 페이퍼클립 폴백: 정시+20분에 회차 마커가 없을 때만 직접 실행 (2026-10-07~)
+#
+# 2026-10-07 부터 위 정기 잡(텔레그램 봇 제외)은 페이퍼클립 루틴이 띄운다 — 정본 config/paperclip/company.json,
+# 전환·되돌리기는 references/PAPERCLIP.md. launchd 에는 텔레그램 봇과 deadman-* 만 남는다.
 #
 # Examples:
 #   bash install-cron.sh install us-close "06:00"
@@ -167,6 +171,22 @@ cmd_install() {
       script_path="${BARROTUBE_HOME}/lib/publish-resume.sh"
       extra_args=""
       ;;
+    rescue-kr-close)
+      # Paperclip 회차가 16:20 점검 뒤 실패해도 당일 유예 안에 재개한다.
+      # 원 회차가 없거나 아직 실행 중이면 deadman-recover.js 가 아무것도 하지 않는다.
+      script_path="${BARROTUBE_HOME}/scripts/automation/paperclip/deadman-recover.js"
+      extra_args="--slot kr-close"
+      ;;
+    deadman-us-close|deadman-omnibus|deadman-realestate|deadman-kr-close|deadman-market-map)
+      # 페이퍼클립 폴백 (2026-10-07). 정기 회차는 페이퍼클립 루틴이 띄우고, 이 라벨은 정시 + 20분에
+      # 마커를 봐서 페이퍼클립이 회차를 못 띄웠을 때만 직접 돌린다 (lib/paperclip-deadman.sh).
+      #   bash install-cron.sh install deadman-us-close "06:20"
+      script_path="${BARROTUBE_HOME}/lib/paperclip-deadman.sh"
+      case "$routine" in
+        deadman-market-map) extra_args="job:market-map" ;;
+        *) extra_args="slot:${routine#deadman-}" ;;
+      esac
+      ;;
     telegram-bot)
       # Long-polling daemon — RunAtLoad=true, KeepAlive=true, time_spec 불필요
       script_path="${BARROSKILLS_HOME}/scripts/automation/telegram-bot.js"
@@ -176,7 +196,7 @@ cmd_install() {
       ;;
     *)
       echo "❌ 알 수 없는 routine: $routine" >&2
-      echo "사용 가능: us-close | kr-close | omnibus | realestate | market-map | market-map-krclose | competitor-scan | growth | growth-manager | weekly-marketing | doctor-daily | telegram-bot | publish-resume"
+      echo "사용 가능: us-close | kr-close | omnibus | realestate | market-map | market-map-krclose | competitor-scan | growth | growth-manager | weekly-marketing | doctor-daily | telegram-bot | publish-resume | rescue-kr-close | deadman-{us-close,omnibus,realestate,kr-close,market-map}"
       exit 1
       ;;
   esac

@@ -119,7 +119,12 @@ export function buildDirective({ date, slot, analysis, kpi, experiment, policy, 
   lines.push(...remedySection(remedies));
 
   // 1) 실험 — 최우선. 주 1개 실험이 로테이션의 핵심이라 맨 위.
-  if (experiment?.directive) {
+  const incompatibleHook = experiment?.target === 'script'
+    && /질문형으로 시작|질문으로 시작/.test(experiment.directive ?? '')
+    && (remedies ?? []).some((r) => /질문으로 열지/.test(r.def?.directive ?? ''));
+  if (incompatibleHook) {
+    lines.push(`> ${experiment.id}는 이 슬롯의 자동 훅 처방과 충돌해 적용하지 않음.`, '');
+  } else if (experiment?.directive) {
     const target = experiment.target === 'script' ? '대본(훅)' : '제목(메타데이터)';
     lines.push(`## 이번 주 실험 (${experiment.id} · 적용 대상: ${target})`, `- ${experiment.directive}`, '');
   }

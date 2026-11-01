@@ -39,6 +39,7 @@ import {
   num, pctColor, squarify, groupedTreemap, krStocksToItems, themeModel,
   resolveEdition, EDITIONS, krSessionOf, krSessionLabel,
   KR_CLOSE_FILE, krCloseSnapshotWindow, pickKrForEdition,
+  krFallback, backoffMs, launchChrome,
 } from './lib/market-map.js';
 
 const ROOT = resolve(import.meta.dirname, '../..');
@@ -68,7 +69,7 @@ function usSessionLabel(sessionDate) {
 const kstDate = (d = new Date()) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(d);
 const kstDay = (iso) => '일월화수목금토'[new Date(`${iso}T12:00:00+09:00`).getUTCDay() === 6 ? 6 : (new Date(`${iso}T12:00:00+09:00`).getUTCDay() + 0)];
 
-async function getJSON(url, { retries = 2, timeoutMs = 12_000 } = {}) {
+async function getJSON(url, { retries = 3, timeoutMs = 12_000 } = {}) {
   for (let a = 0; ; a += 1) {
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), timeoutMs);
@@ -78,7 +79,7 @@ async function getJSON(url, { retries = 2, timeoutMs = 12_000 } = {}) {
       return await r.json();
     } catch (e) {
       if (a >= retries) throw new Error(`${url.slice(0, 60)}… ${e.message}`);
-      await new Promise((res) => setTimeout(res, 700 * (a + 1)));
+      await new Promise((res) => setTimeout(res, backoffMs(a)));
     } finally { clearTimeout(t); }
   }
 }
@@ -194,9 +195,17 @@ async function collect(edition) {
 
   // 코스피 시총 상위 + 테마. 석간은 15:45 에 떠 둔 KRX 공식 종가 스냅샷을 먼저 쓴다
   // (lib/market-map.js pickKrForEdition — 18:00 실시간 값에는 시간외 단일가가 섞인다).
-  const live = await fetchKr();
   const snapPath = join(ROOT, CFG.output_dir, date, KR_CLOSE_FILE);
   const snapshot = existsSync(snapPath) ? JSON.parse(readFileSync(snapPath, 'utf-8')) : null;
+  let live;
+  try {
+    live = await fetchKr();
+  } catch (e) {
+    const outRoot = join(ROOT, CFG.output_dir);
+    live = krFallback({ edition, snapshot, priorKr: findPriorKr(outRoot), priorThemes: findPriorThemes(outRoot) });
+    if (!live) throw e;
+    console.warn(`   ⚠ 코스피·테마 수집 실패 (${e.message}) — ${live.krSession?.date} 스냅샷으로 대신한다`);
+  }
   const picked = pickKrForEdition({ edition, live, snapshot });
   if (picked.source === 'krx-close') console.log(`   📌 코스피·테마: KRX 종가 스냅샷 (${picked.fetchedAt})`);
   if (picked.warn) console.warn(`   ⚠ ${picked.warn}`);
@@ -226,7 +235,7 @@ async function collect(edition) {
   // 2026-09-17 08:00 실제 산출에서 6개 테마가 전부 그랬다.
   // 직전 유효 스냅샷을 끌어와 그 세션 날짜로 라벨한다 — 조간이 어제 마감 테마를
   // 싣는 건 자연스럽고, 0 을 싣는 건 거짓이다.
-  let themesSession = { date: krSession.date ?? date, carried: false };
+  let themesSession = { date: live.themesDate ?? krSession.date ?? date, carried: Boolean(live.themesDate) };
   if (themes.length && themes.every((t) => !t.pct && !t.total)) {
     const prior = findPriorThemes(join(ROOT, CFG.output_dir));
     if (prior) {
@@ -375,7 +384,7 @@ async function render(d, outDir) {
   const html = buildHTML(d);
   const htmlPath = join(outDir, 'map.html');
   writeFileSync(htmlPath, html);
-  const browser = await chromium.launch({ channel: 'chrome', headless: true });
+  const browser = await launchChrome(chromium);
   try {
     const ctx = await browser.newContext({ deviceScaleFactor: 2, viewport: { width: 1200, height: 1500 } });
     const page = await ctx.newPage();

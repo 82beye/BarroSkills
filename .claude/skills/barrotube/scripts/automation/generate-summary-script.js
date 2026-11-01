@@ -4,8 +4,10 @@
  * generate-summary-script.js — 「미국 증시 요약」 대본 (세로 3분·7씬)
  *
  * generate-script.js 는 쇼츠의 「통찰형 훅」 계약(수치 하나·인과·질문)으로 다듬어져 있다.
- * 요약 포맷의 글은 반대다 — 벤치마크(오선 「증시 요약」 427편)는 담담한 통신사 브리핑체로
- * 지수·원인·종목·월가 인용·일정을 다 읽고, 질문형 훅·구독 권유를 쓰지 않는다(0%).
+ * 요약 포맷의 글은 담담한 통신사 브리핑체이고 질문형 훅을 쓰지 않는다(벤치마크 오선 「증시 요약」 427편).
+ * 다만 지수·원인·종목·월가 인용·일정을 칸마다 읽는 벤치마크 구성은 버렸다 — 2026-10-15 운영자
+ * (EP-2026-0234): 「열거 형태로 또 생성됐다, 그날의 이슈가 주제·제목이어야 한다」. 한 편은 그날의
+ * 이야기(thesis) 하나이고, 7씬은 그 이야기의 단계다(config/market-summary.json scenes).
  * 화면은 쇼츠와 같다(운영자 지시 2026-10-01): 씬 1 만 지수 요약 카드, 씬 2~7 은 마시 컷.
  *
  * 마시 컷의 image_prompt 는 **범용**으로 쓴다 — 그날의 회사·인물·숫자를 그리지 않고 씬의
@@ -22,13 +24,14 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { stringify as stringifyYAML } from 'yaml';
+import { parse as parseYAML, stringify as stringifyYAML } from 'yaml';
 
 import { callClaudeCode, callCodex, resolveChain, runEngineChain } from './lib/text-engine.js';
 import { validateScript, formatIssue } from './lib/script-quality-contract.js';
 import { MASCOT_CLAUSE, checkEpisodePrompts } from './lib/image-prompt-contract.js';
 import { allSlots, PALETTE_DIRECTION } from './lib/scene-slot-taxonomy.js';
 import { buildImagePromptContractBlock } from './generate-script.js';
+import { reviewSummaryBrief, reviewSummarySpine } from './lib/editorial-spine.js';
 import { readActiveRemedies, closingCtaOf, ensureClosingCta, remediesApplied } from './lib/growth-remediation.js';
 
 const ROOT = resolve(import.meta.dirname, '../..');
@@ -111,6 +114,32 @@ export function checkSummary(out, extraCta = null, events = []) {
   return problems;
 }
 
+// 한 편 = 한 이야기. 2026-10-15 EP-2026-0234: 씬이 업종 순위·종목 등락·금·비트코인을 칸마다 채웠고,
+// 그날 시장을 흔든 사건(CPI 쇼크로 연준 추가 인상 세 차례가 가격에 들어갔다)은 제목에도 대본에도 없었다.
+// 어느 날에나 맞는 말은 핵심어로 세지 않는다 — 「시장」을 핵심어로 두면 모든 씬이 통과한다.
+const BROAD_TERMS = new Set(['미국', '증시', '시장', '주식', '주가', '투자', '오늘', '지수', '한국', '뉴욕', '경제']);
+const squash = (s) => String(s || '').replace(/\s+/g, '');
+
+/** thesis 가 제목과 모든 씬을 꿰는가. 문제 목록(문자열)을 돌려준다. */
+export function checkThesis(out) {
+  const problems = [];
+  if (String(out?.thesis || '').trim().length < 10) problems.push('thesis 에 오늘의 이야기를 한 문장으로 적어라');
+  const terms = (Array.isArray(out?.thesis_terms) ? out.thesis_terms : []).map((t) => String(t).trim()).filter(Boolean);
+  if (terms.length < 1 || terms.length > 4) return [...problems, 'thesis_terms 에 이야기의 핵심어를 1~4개 적어라 (예: ["금리 인상","연준"])'];
+  const keys = terms.map(squash).filter((t) => t.length >= 2 && !BROAD_TERMS.has(t));
+  if (keys.length < terms.length) {
+    problems.push(`thesis_terms 에 어느 날에나 맞는 말이 있다(${terms.filter((t) => !keys.includes(squash(t))).join('·')}) — 오늘 이야기만의 핵심어를 써라`);
+  }
+  if (!keys.length) return problems;
+  const has = (text) => keys.some((k) => squash(text).includes(k));
+  if (!has(out.title_hook)) problems.push(`title_hook 이 오늘의 이야기를 말하지 않는다 — thesis_terms(${terms.join('·')}) 중 하나를 넣어라`);
+  const off = (out.scenes || []).map((s, i) => (has(s.narration) ? 0 : i + 1)).filter(Boolean);
+  if (off.length) {
+    problems.push(`씬 ${off.join('·')} narration 이 이야기에서 벗어났다(thesis_terms ${terms.join('·')} 없음) — 그 씬의 사실이 오늘 이야기의 어느 단계인지 그 말로 이어라. 이야기와 무관한 자료면 빼고 다른 사실로 채워라`);
+  }
+  return problems;
+}
+
 /**
  * 재작성 프롬프트. 직전 응답을 함께 줘야 「지적된 것만 고쳐라」가 성립한다.
  * 2026-10-06 us-close(EP-2026-0212): 위반 목록만 주자 모델이 매번 새로 써서 시도마다 다른 곳이
@@ -138,21 +167,44 @@ function systemPrompt(extraCta = null) {
   const roles = CFG.scenes.map((s, i) => `${String(i + 1).padStart(3, '0')} role=${s.role} ${s.target_seconds}s ${s.card ? `[card ${s.card}]` : '[마시 컷]'} — ${s.intent}`).join('\n');
   return `너는 한국어 경제 채널 「바로경제」의 「${CFG.series_label}」 원고 작가다. 매일 아침 8시, 밤사이 끝난 미국장을 3분 세로 영상으로 정리한다.
 
+## 한 편 = 한 이야기 (가장 중요)
+- 오늘 미국장의 이야기 하나를 thesis 로 정한다. 그날 시장이 스스로 지목한 주된 사건 — 통신사 마감 시황 헤드라인이 지수 등락의 원인으로 꼽은 것
+  (예: 물가 쇼크로 연준 추가 인상 기대가 뛰었다 · 실적 쇼크 · 사상 최고치) — 이 주제다.
+  [에피소드 브리프]·[데스크]가 지엽적인 반직관 사실을 주제로 골랐어도 입력 안에 시장을 더 크게 흔든 사건이 있으면 그 사건을 주제로 삼고,
+  반직관 사실은 twist 씬의 한 장면으로 다룬다.
+- 발표된 지표·실적은 방아쇠(trigger 씬)다. 이야기의 주어는 시장이 그것을 보고 다시 가격에 넣은 것 — 연준 금리 경로(인상·인하 확률과 횟수)·
+  실적 전망 같은 기대의 변화와, 시장이 그것을 받아들인 감정(공포·안도·환호)이다. thesis·title_hook 을 「물가 예상 상회」처럼
+  지표 결과로 쓰지 말고 그 결과가 바꾼 기대로 써라(예: 「물가 예상 상회」가 아니라 「연준 추가 인상 공포」).
+- ${CFG.scenes.length}씬은 자료 칸이 아니라 그 이야기의 단계다(선언 → 사건 → 반응 → 이유 → 반대 신호 → 한국 → 다음 장). 모든 씬이 thesis 를 한 걸음씩 전진시킨다.
+- thesis_terms 는 이야기의 핵심어 1~4개(예: "금리 인상", "연준"). 모든 씬 narration 과 title_hook 에 그중 하나가 들어가야 한다.
+  「미국」「증시」「시장」처럼 어느 날에나 맞는 말은 핵심어가 아니다.
+- 열거 금지: 업종 순위, 상승·하락 상위 종목, 금·은·비트코인·유가·환율 시세를 자료에 있다는 이유로 읽지 마라. 이야기를 증명하거나 이야기에 단서를 보탤 때만 쓴다.
+
+## 시청자에게 말하지 않는 것 — 제작 과정
+- 기사 본문을 읽었는지, 제목·요약만 봤는지, 검증·확인했는지, 스냅샷·자료에 있는지, 「추정입니다」 같은 작가 메모는 narration·subtitle_text 에 쓰지 않는다.
+  [데스크]·[리서치]의 「확인 못 함」「추정」 표시는 너에게 주는 메모다 — 그 사실을 쓸지 뺄지만 정하고, 낭독하지 마라.
+- 확인 못 한 사실은 문장째 뺀다. 출처가 지목한 원인은 「<매체>는 …때문이라고 분석했습니다」, 시장 해석은 「…라는 해석이 나옵니다」로 전한다.
+  해석임을 밝히는 것과 제작 과정을 말하는 것은 다르다.
+
 ## 형식 (반드시)
 - 씬 정확히 ${CFG.scenes.length}개, 순서·role 고정:
 ${roles}
 - 총 ${CFG.target_total_seconds}초. narration 은 초당 약 ${CFG.chars_per_second}자(띄어쓰기 포함, TTS 실측) — target_seconds × ${CFG.chars_per_second} ± 10%.
 - 문체: 담담한 통신사 브리핑체(「~했습니다」「~전했습니다」). 시청자에게 질문하지 말 것, 「내 계좌」·구독 권유·감탄사 금지, 과장 형용사 금지.
 - 씬 1 은 「<미국 장 날짜를 한글로, 예: 구월 삼십일 수요일> 미국 증시 요약입니다.」로 시작한다.
+- 화면 카드가 3대 지수·등락률을 보여준다. 음성으로 다시 세 지수를 읽지 말고, 오늘 설명할 사건과 그 경제적 의미를 먼저 말한다. 기록이 있는 날은 기록을 우선한다.
 - 마지막 씬 narration 은 ${extraCta ? `「${extraCta}」 「${CFG.cta}」 다음 「${CFG.disclaimer}」 세` : `「${CFG.cta}」 다음 「${CFG.disclaimer}」 두`} 문장으로 끝낸다(문구 그대로).
 - subtitle_text 는 화면에 뜨는 요약이다 — 그 씬 narration 의 핵심을 숫자 표기로 한두 줄(줄당 22자 이내).
 
 ## 사실 규칙
 - 수치는 [데이터]·[데스크]·[리서치]에 있는 것만. 없는 숫자·없는 발언을 지어내지 마라.
-- street 씬의 인용은 [데스크]·[리서치]에 실제로 있는 발언만, 「<소속> <이름>은 …라고 전했습니다」. 그런 발언이 없으면 매체 이름으로 시장 해석을 전한다.
-- movers 씬 종목은 「종목_이유_출처포함」에 있는 종목을 먼저 쓰고, 등락률과 이유를 한 문장씩. 이유를 모르는 종목은 고르지 마라.
-- 장 마감 뒤 실적(시간외 움직임·데스크에 나온 실적 발표)은 movers 나 driver 에서 다룬다.
+- 인용은 [데스크]·[리서치]에 실제로 있는 발언만, 「<소속> <이름>은 …라고 전했습니다」. 그런 발언이 없으면 매체 이름으로 시장 해석을 전한다.
+- reaction 씬 종목은 「종목_이유_출처포함」에 있으면서 이야기와 이어지는 종목. 이유를 모르는 종목은 고르지 마라.
+- 장 마감 뒤 실적(시간외 움직임·데스크에 나온 실적 발표)은 이야기와 이어질 때만 trigger 나 reaction 에서 다룬다.
 - 날짜 기준: 지수·종목은 미국 장 날짜, 일정은 한국 시간.
+- 같은 사실을 두 씬에서 다시 읽지 마라. trigger 의 사건을 mechanism·twist 에서 되풀이하지 말고 이유·반대 신호·파급 결과 중 새 정보를 보태라.
+- 전제와 결과를 혼동하지 마라. '금리가 오르면 자금조달 비용이 높아질 수 있다'는 조건부 경로이고, 특정 기업의 실적 악화가 확인됐다는 뜻은 아니다. 근거가 없는 연결은 editorial_spine 에 unknown 으로 적고 대본에서는 말하지 마라. 확정 전망·종목 행동 권유를 만들지 마라.
+- 다음 신호는 실제 확인 가능한 발표·실적·관측 변수여야 한다. 일정 입력이 비면 시각을 꾸미지 말고, 중심 사건과 직접 관련된 검증 신호를 선택한다. 신호가 전제와 다른 방향일 때 해석이 어떻게 달라지는지도 근거 범위 안에서 설명한다.
 
 ## TTS 표기
 - narration 에는 아라비아 숫자를 절대 쓰지 마라 — 날짜·퍼센트·소수점·금액 모두 한글 수사.
@@ -175,18 +227,22 @@ ${buildImagePromptContractBlock(MASCOT_CLAUSE)}
 ## 그날의 주제 — 기록이 먼저
 - [데이터] 오늘의_기록(사상 최고치·연속 기록)은 그날 미국장의 사건이다. 있으면 그것이 주제다:
   씬 1 은 「…요약입니다.」 바로 다음 문장에서 그 기록을 먼저 말하고(여러 지수면 함께, 연속이면 며칠째인지),
-  3대 지수 등락률은 그 뒤에 근거로 붙인다. title_hook 도 그 기록을 이름으로 쓴다. 등락률만으로 열지 마라.
-- 이 영상은 밤사이 끝난 미국장 정리다. 전날 한국장(코스피·외국인 수급)을 주제나 비교 축으로 끌어오지 마라 —
-  [선정 토픽]·[데스크]가 한·미 대비로 잡혀 있어도 그렇다. 한국장은 마지막 쪽에서 오늘 볼 대목 한 문장까지만.
+  필요한 지수 하나만 음성 근거로 붙이고 나머지는 카드로 보인다. title_hook 도 그 기록을 이름으로 쓴다. 등락률만으로 열지 마라.
+- 이 영상은 밤사이 끝난 미국장 정리다. 다만 [에피소드 브리프]가 한·미 대비를 주제로 선정했다면 코스피·외국인 수급 등 핵심 숫자를 빼지 마라.
+  이 경우 첫 씬에서 코스피와 미국장의 대비를 열고, 뒤 씬에서 근거와 한계를 설명한다.
+  한국의 같은 날짜 장은 미국 정규장이 시작되기 전에 마감한다. "한국 장 마감 뒤 그날 밤 미국 장에서…"처럼 순서를 밝히고,
+  나중에 나온 미국 종목 종가가 앞선 한국 급락의 원인이라고 쓰지 마라. 두 시장의 공통 악재도 확인된 보도 범위에서만 설명한다.
 
 ## 제목
-- title_hook: 그날을 대표하는 사건 하나, ${CFG.title.hook_max_chars}자 이내. 괄호 태그 금지. 짧을수록 좋다 — 사건의 크기가 조회수를 정한다(대비 구조 「A에도 B」 허용).
+- title_hook: thesis 를 압축한 말 — 그날 시장을 흔든 사건, 시장이 그것을 어떻게 받아들였는지(공포·안도·환호)까지 담아도 좋다. ${CFG.title.hook_max_chars}자 이내. 괄호 태그 금지.
+  짧을수록 좋다 — 사건의 크기가 조회수를 정한다(대비 구조 「A에도 B」 허용). 이야기 안의 세부 반전을 제목으로 올리지 마라.
 
 ## 출력
 JSON 하나만. 코드펜스·설명 금지.
-{"title_hook":"...","angle_summary":"<한 문장>","scenes":[
- {"scene_id":"001","role":"open","narration":"...","subtitle_text":"...","card":{"type":"indices"},"bgm_mood":"calm_explain","target_seconds":18,"emphasis_tokens":[".."]},
- {"scene_id":"002","role":"driver","narration":"...","subtitle_text":"...","slot":"rates/up","image_prompt":"[palette:bullish] ...","bgm_mood":"tense_intro","target_seconds":32,"emphasis_tokens":[".."]}, ...]}
+editorial_spine 은 검토용 메모다(화면·음성에 나가지 않는다). observation은 확인된 사건, mechanism은 출처가 지목한 원인 또는 '원인 미확인', transmission은 경제적 전달 경로, viewer_result는 조건을 붙인 시청자 결과, watch_signal은 실제 확인할 변수다. evidence_refs는 입력에 있는 URL 또는 원자료 식별자 summary-us.json만 쓴다. 이 메모를 채우려고 근거 없는 인과를 새로 만들지 마라.
+{"thesis":"<오늘의 이야기 한 문장>","thesis_terms":["..",".."],"title_hook":"...","angle_summary":"<한 문장>","editorial_spine":{"observation":"...","mechanism":"...","transmission":"...","viewer_result":"...","watch_signal":"...","evidence_refs":["summary-us.json"]},"scenes":[
+ {"scene_id":"001","role":"open","narration":"...","subtitle_text":"...","card":{"type":"indices"},"bgm_mood":"calm_explain","target_seconds":16,"emphasis_tokens":[".."]},
+ {"scene_id":"002","role":"trigger","narration":"...","subtitle_text":"...","slot":"rates/up","image_prompt":"[palette:bullish] ...","bgm_mood":"tense_intro","target_seconds":28,"emphasis_tokens":[".."]}, ...]}
 bgm_mood 는 calm_explain·neutral_bg·tense_intro·dramatic_reveal·hopeful_outro 중 하나.`;
 }
 
@@ -207,6 +263,7 @@ function userPrompt(date, data, extra) {
   };
   return [
     '[데이터]', JSON.stringify(d, null, 1),
+    '', '[에피소드 브리프 — 선정한 주제]', extra.briefTopic || '(없음)',
     '', '[데스크 — 기자단 브리핑(출처 포함)]', extra.desk || '(없음)',
     '', '[리서치 — 출처 포함]', extra.research || '(없음)',
     '', '[선정 토픽]', extra.topic || '(없음)',
@@ -214,12 +271,19 @@ function userPrompt(date, data, extra) {
   ].join('\n');
 }
 
+export function evidenceRefs(data, extra) {
+  const input = [extra.briefTopic, extra.desk, extra.research, extra.topic,
+    ...Object.values(data.reasons || {}).map((reason) => reason.url || '')].join('\n');
+  return ['summary-us.json', ...new Set(input.match(/https?:\/\/[^\s)\]"'<>]+/g) || [])];
+}
+
 function toMarkdown(epId, date, data, out, engine, growthRemedies = []) {
   const fm = {
     episode_id: epId, channel_id: 'econ-daily', format: CFG.format, form: 'market-summary', persona: 'barro-teacher',
     target_total_seconds: CFG.target_total_seconds, language: 'ko', writer: `summary-writer (${engine})`,
     created_at: new Date().toISOString(), revision: 1, summary_date: date, us_session: data.us_session,
-    title_hook: out.title_hook, angle_summary: out.angle_summary || '',
+    title_hook: out.title_hook, thesis: out.thesis, thesis_terms: out.thesis_terms, angle_summary: out.angle_summary || '',
+    editorial_spine: out.editorial_spine,
     ...(data.events?.length ? { events: data.events } : {}),
     // 썸네일 헤드라인은 제목 훅(그날의 사건)이다. 없으면 생성기가 씬 1 자막(지수 등락률)을 걸었다 —
     // 2026-10-07 EP-2026-0214 썸네일이 「다우 +0.49% 나스닥 +0.45% S&P500」이었다.
@@ -244,7 +308,14 @@ async function main() {
   const data = readJSON(join(dir, 'summary-us.json'));
   if (!data) { console.error(`❌ summary-us.json 없음 — collect-summary-data.js 를 먼저 돌려라 (${dir})`); process.exit(1); }
   const news = readJSON(join(dir, 'news.json'));
+  const briefText = read(join(ROOT, 'workspace', 'episodes', values.episode, '00_brief.md'), 6000);
+  const briefTopic = briefText.match(/^---\n([\s\S]*?)\n---/)?.[1];
+  let selectedTopic = '';
+  if (briefTopic) {
+    try { selectedTopic = String(parseYAML(briefTopic)?.topic || ''); } catch { /* old brief without valid YAML */ }
+  }
   const extra = {
+    briefTopic: selectedTopic,
     desk: read(join(dir, 'desk-briefing-us-close.md'), 9000),
     research: read(join(dir, 'research-us-close.md'), 7000),
     topic: read(join(dir, 'topic-us-close.json'), 2000),
@@ -270,6 +341,9 @@ async function main() {
       normalizeSeconds(out.scenes || [], CFG.target_total_seconds);
       ensureClosingCta(out.scenes, extraCta);
       problems = checkSummary(out, extraCta, data.events || []);
+      problems.push(...checkThesis(out));
+      problems.push(...reviewSummarySpine(out, evidenceRefs(data, extra)));
+      problems.push(...reviewSummaryBrief(out, selectedTopic));
       const q = validateScript((out.scenes || []).map((s, i) => ({ ...s, scene_id: String(i + 1).padStart(3, '0') })))
         .filter((i) => i.severity === 'error');
       problems.push(...q.map((i) => formatIssue(i).trim()));
@@ -279,7 +353,9 @@ async function main() {
     problems.forEach((p) => console.warn(`     - ${p}`));
     prompt = retryPrompt(userPrompt(date, data, extra), problems, out);
   }
-  if (problems.length) { console.error('❌ 요약 대본 계약을 맞추지 못했다'); process.exit(1); }
+  // Exit 3 is a content failure. The pipeline must not silently replace this
+  // with the generic writer after all editorial rewrites failed.
+  if (problems.length) { console.error('❌ 요약 대본 계약을 맞추지 못했다'); process.exit(3); }
 
   const base = join(ROOT, 'workspace', 'episodes', values.episode, 'platforms', CFG.platform);
   mkdirSync(base, { recursive: true });

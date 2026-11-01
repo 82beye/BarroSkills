@@ -308,6 +308,63 @@ for label in labels:
     else:
         emit('cron_' + routine, 'GREEN', 'not yet observed')
 
+# ── 페이퍼클립 관제 (2026-10-07~) ─────────────────────────────────────────
+# 정기 잡이 페이퍼클립 루틴으로 옮겨 가면서 launchd 종료코드로는 회차 성패가 안 보인다.
+# 대신 페이퍼클립 응답·가동 루틴 수·거버너 갱신 시각·회차 마커(workspace/ops/runs)를 본다.
+ops = pathlib.Path(sys.argv[1]) / 'workspace' / 'ops'
+ids_path = ops / 'paperclip-ids.json'
+if ids_path.exists():
+    import urllib.request
+    try:
+        ids = json.loads(ids_path.read_text())
+    except Exception:
+        ids = {}
+    try:
+        with urllib.request.urlopen('http://127.0.0.1:3100/api/health', timeout=5) as r:
+            ok = json.loads(r.read().decode()).get('status') == 'ok'
+    except Exception:
+        ok = False
+    if not ids.get('activated'):
+        emit('paperclip', 'GREEN', '가동 전(launchd 운영) — 페이퍼클립 관제 미적용')
+    elif not ok:
+        emit('paperclip', 'RED', '페이퍼클립 서버 응답 없음 — 정기 회차는 데드맨(정시+20분)만 지킨다. paperclipai service status')
+    else:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:3100/api/companies/{ids['companyId']}/routines", timeout=10) as r:
+                routines = json.loads(r.read().decode())
+            want = set((ids.get('routines') or {}).values())
+            active = [x for x in routines if x.get('id') in want and x.get('status') == 'active']
+            paused = [x['title'] for x in routines if x.get('id') in want and x.get('status') != 'active']
+            st = json.loads((ops / 'token-state.json').read_text()) if (ops / 'token-state.json').exists() else {}
+            held = {k for k, v in (st.get('routines') or {}).items() if v.get('pausedBy') == 'governor'}
+            age = (NOW - datetime.datetime.fromisoformat(st['updatedAt'].replace('Z', '+00:00'))).total_seconds() / 60 if st.get('updatedAt') else None
+            if age is None or age > 45:
+                emit('paperclip', 'YELLOW', f'토큰 거버너 갱신 {"없음" if age is None else f"{age:.0f}분 전"} — Token Governor 타이머 확인')
+            elif len(paused) > len(held):
+                emit('paperclip', 'YELLOW', f'루틴 {len(active)}/{len(want)} 가동 — 사람이 멈춘 루틴: {", ".join(paused)[:200]}')
+            else:
+                emit('paperclip', 'GREEN', f'루틴 {len(active)}/{len(want)} 가동 (거버너 보류 {len(held)}) · Claude {st.get("providers", {}).get("claude", {}).get("level", "?")} · Codex {st.get("providers", {}).get("codex", {}).get("level", "?")}')
+        except Exception as e:
+            emit('paperclip', 'YELLOW', f'루틴 조회 실패: {e}')
+    # 어제·오늘 회차 마커 중 실패·멈춤 (SRE 이슈로 넘어갔는지)
+    bad = []
+    for day in {(NOW - datetime.timedelta(days=1)).astimezone(KST).date().isoformat(), NOW.astimezone(KST).date().isoformat()}:
+        d = ops / 'runs' / day
+        if not d.exists():
+            continue
+        for f in d.glob('*.json'):
+            try:
+                m = json.loads(f.read_text())
+            except Exception:
+                continue
+            if m.get('status') in ('failed', 'halted', 'lost') and not m.get('action', '').startswith('test:'):
+                sre = ', '.join(o.get('issue', '') for o in (m.get('sreIssues') or [])) or 'SRE 이슈 없음'
+                bad.append(f"{day} {m.get('action')} {m.get('status')}{(' ' + m['ep']) if m.get('ep') else ''} → {sre}")
+    if bad:
+        emit('paperclip_runs', 'YELLOW', f'{len(bad)}건 실패·멈춤 (SRE 처리 중이면 정상): ' + ' / '.join(sorted(bad))[:400])
+    else:
+        emit('paperclip_runs', 'GREEN', '어제·오늘 회차 마커에 실패·멈춤 없음')
+
 # ── 감사 로그 24시간 창 ────────────────────────────────────────────────────
 events = audit_events()
 def detail_of(d):

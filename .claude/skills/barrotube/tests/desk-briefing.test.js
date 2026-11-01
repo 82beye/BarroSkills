@@ -194,7 +194,8 @@ test('리서치가 죽어도 데스크가 고른 토픽은 살아남는다', () 
   const src = read('scripts/automation/research-brief.js');
   const fb = src.slice(src.indexOf('function writeFallbackAnalysis'));
   assert.match(fb, /desk-topic-\$\{slotName\}\.json/, '폴백이 슬롯별 desk-topic 을 읽어야 한다');
-  assert.match(fb, /desk\.topic \|\| items\[0\]\?\.title/, '데스크 토픽이 헤드라인보다 앞서야 한다');
+  assert.match(fb, /deskUsable \? cleanHeadline\(desk\.topic\) : picked\.topic/,
+    '근거가 유효한 데스크 토픽은 일반 헤드라인보다 앞서야 한다');
   assert.match(fb, /topic_source/, '어느 출처에서 왔는지 산출물에 남겨야 한다');
   // 스코프 사고 방지: pick() 은 다른 함수의 지역 변수라 여기서 쓰면 ReferenceError 다.
   assert.doesNotMatch(fb, /pick\(/, 'writeFallbackAnalysis 안에서는 pick() 을 쓸 수 없다');

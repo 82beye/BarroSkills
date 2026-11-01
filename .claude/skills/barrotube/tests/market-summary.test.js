@@ -7,13 +7,17 @@ import test from 'node:test';
 import { titleKo, pickEvents } from '../scripts/automation/fetch-econ-calendar.js';
 import { nyInstant, afterHoursFromChart, sectorAverages, topMovers, recordFromHistory, recordEvents } from '../scripts/automation/collect-summary-data.js';
 import { indicesCard } from '../scripts/automation/lib/summary-cards.js';
-import { cardTopic } from '../scripts/automation/generate-cards.js';
-import { checkSummary, normalizeSeconds, paletteFitsSlot, firstJsonObject, retryPrompt } from '../scripts/automation/generate-summary-script.js';
+import { cardBackgroundScenes, cardTopic } from '../scripts/automation/generate-cards.js';
+import { checkSummary, checkThesis, normalizeSeconds, paletteFitsSlot, firstJsonObject, retryPrompt } from '../scripts/automation/generate-summary-script.js';
+import { buildSystemPrompt, formatSpecForBrief } from '../scripts/automation/generate-script.js';
 import { splitPicks } from '../scripts/automation/summary-assets.js';
 import { summaryTitle } from '../scripts/automation/lib/summary-title.js';
 import { cardHTML, sessionLabel } from '../scripts/automation/render-summary-cards.js';
 import { planGrokScenes, DEFAULTS } from '../scripts/automation/lib/grok-budget.js';
 import { validateScript } from '../scripts/automation/lib/script-quality-contract.js';
+import { loadScenes as loadGrokScenes } from '../scripts/automation/grok-motion-applescript.js';
+import { mkdtempSync, writeFileSync as writeFile } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CFG = JSON.parse(readFileSync(join(ROOT, 'config', 'market-summary.json'), 'utf8'));
@@ -116,6 +120,12 @@ test('target_seconds 합은 포맷 목표로 맞춘다', () => {
   assert.equal(s.reduce((n, x) => n + x.target_seconds, 0), 165);
 });
 
+test('일반 작가 폴백도 요약 브리프의 길이 목표를 따른다', () => {
+  assert.equal(formatSpecForBrief('shorts-3min', 150).target_total_seconds, 150);
+  assert.equal(formatSpecForBrief('shorts-3min').target_total_seconds, 172);
+  assert.match(buildSystemPrompt('shorts-3min', 'barro-teacher', null, null, null, null, 150), /150 seconds/);
+});
+
 test('요약 대본 재작성은 직전 응답을 함께 준다 — 지적된 곳만 고치게', () => {
   // 2026-10-06 EP-2026-0212: 위반 목록만 주자 모델이 매번 새로 써서 시도마다 다른 위반이 났다.
   const prev = { title_hook: '훅', scenes: [{ role: 'open', narration: '가' }] };
@@ -205,7 +215,7 @@ test('기록이 있는 날은 씬 1 두 번째 문장과 제목 훅이 기록을
 test('기록은 데이터·지시문·카드·썸네일까지 이어진다 — 썸네일 헤드라인은 지수 등락률이 아니라 제목 훅', () => {
   const gen = readFileSync(join(ROOT, 'scripts', 'automation', 'generate-summary-script.js'), 'utf8');
   assert.match(gen, /오늘의_기록: data\.events\?\.length \? data\.events : '\(없음\)'/, '대본 작가가 기록을 데이터로 받는다');
-  assert.match(gen, /전날 한국장\(코스피·외국인 수급\)을 주제나 비교 축으로 끌어오지 마라/, '새벽 미국장 영상의 주제는 미국장');
+  assert.match(gen, /브리프\]가 한·미 대비를 주제로 선정했다면 코스피·외국인 수급 등 핵심 숫자를 빼지 마라/, '선정된 한·미 대비를 대본에 반영한다');
   assert.match(gen, /thumbnail: \{ headline_text: out\.title_hook \}/);
   const thumb = readFileSync(join(ROOT, 'scripts', 'automation', 'generate-thumbnail.js'), 'utf8');
   assert.match(thumb, /headline_text: briefThumb\.headline_text \|\| scriptThumb\.headline_text \|\|/, '대본이 정한 헤드라인이 첫 씬 자막 파생보다 먼저');
@@ -225,4 +235,61 @@ test('요약 포맷 인트로 카드는 브리프의 한·미 대비 토픽이 �
   const summary = { form: 'market-summary', title_hook: '나스닥·S&P500 나란히 사상 최고치', events: ['나스닥 사상 최고치 마감 (2거래일 연속)', 'S&P 500 사상 최고치 마감'] };
   assert.equal(cardTopic(summary, brief), '나스닥·S&P500 나란히 사상 최고치 · 나스닥 사상 최고치 마감 (2거래일 연속) · S&P 500 사상 최고치 마감');
   assert.equal(cardTopic({ form: 'shorts', topic: 'x' }, brief), brief.topic, '다른 포맷은 예전처럼 브리프 토픽');
+  // 2026-10-15 EP-2026-0234: 제목 훅만 주자 카드가 「CPI 0.1%p 서프라이즈」로 주제를 바꿨다 — thesis 를 함께 준다.
+  assert.equal(cardTopic({ form: 'market-summary', title_hook: '연준 인상 공포, 나스닥만 급락', thesis: '시장이 연준 추가 인상을 다시 가격에 넣었다' }, brief),
+    '연준 인상 공포, 나스닥만 급락 · 시장이 연준 추가 인상을 다시 가격에 넣었다');
+});
+
+test('인트로 카드 배경은 지수 카드가 아니라 첫 그림 씬(그날의 원인 컷)이다', () => {
+  // 2026-10-09 운영자: 「인트로 이미지에 왜 지수 지표 이미지를 넣냐 — 훅이 될 그림이어야 한다」.
+  // 인트로는 영상 맨 앞 2초라 씬 1 지수 카드를 깔면 같은 표가 두 번 나온다.
+  const scenes = CFG.scenes.map((s) => (s.card ? { card: { type: s.card } } : { image_prompt: '마시 컷' }));
+  const bg = cardBackgroundScenes(scenes);
+  assert.ok(!scenes[bg.intro].card, '인트로 배경이 데이터 카드');
+  assert.ok(!scenes[bg.outro].card, '아웃트로 배경이 데이터 카드');
+  assert.equal(CFG.scenes[bg.intro].role, 'trigger');
+  // 카드가 없는 일반 쇼츠는 예전 그대로 첫 씬·마지막 씬
+  assert.deepEqual(cardBackgroundScenes([{}, {}, {}, {}, {}]), { intro: 0, outro: 4 });
+});
+
+test('한 편은 한 이야기 — 씬 역할은 자료 칸이 아니라 이야기 단계이고, 모든 씬과 제목이 thesis 를 꿴다', () => {
+  // 2026-10-15 운영자(EP-2026-0234): 「열거 형태로 또 생성됐다 — 연준 추가 인상 세 차례 공포가 주제·제목이어야 했다」.
+  // 칸이 업종·종목·월가·거시였을 때 모델은 칸마다 그 종류의 자료를 채웠다.
+  assert.deepEqual(CFG.scenes.map((s) => s.role), ['open', 'trigger', 'reaction', 'mechanism', 'twist', 'korea', 'next']);
+  const story = (narr) => ({
+    thesis: '물가 쇼크로 시장이 연준 추가 금리 인상 세 차례를 가격에 넣었다',
+    thesis_terms: ['금리 인상', '연준'],
+    title_hook: '금리 인상 공포가 돌아왔다',
+    scenes: narr.map((n) => ({ narration: n })),
+  });
+  const good = story([
+    '시월 십사일 수요일 미국 증시 요약입니다. 뜨거운 물가에 금리 인상 공포가 돌아왔습니다.',
+    '소비자물가가 예상을 웃돌자 시장은 연준이 연내 한 번, 내년 두 번 더 올린다는 쪽에 걸었습니다.',
+    '금리 인상에 가장 약한 곳은 반도체였습니다.', '연준이 더 올리면 미래 이익의 현재 가치가 깎입니다.',
+    '장중 치솟은 금리는 주식에서 빠진 돈이 채권으로 가며 일부 되돌려졌고, 연준 경로는 그대로입니다.',
+    '한국 반도체에도 금리 인상 공포가 번질 수 있습니다.', '연준 의장 발언이 금리 인상 경로를 가를 것입니다.',
+  ]);
+  assert.deepEqual(checkThesis(good), []);
+  // EP-2026-0234 의 실제 씬 3(업종)·씬 4(종목)처럼 이야기와 무관한 자료를 읽은 씬은 되돌린다.
+  const listed = story([...good.scenes.map((s) => s.narration).slice(0, 2),
+    '업종은 반도체가 삼 점 사오 퍼센트 내린 반면 헬스케어는 이 점 팔육 퍼센트 올라 갈렸습니다.',
+    '종목 중에서는 델이 십일 점 이칠 퍼센트 급락했습니다.', ...good.scenes.map((s) => s.narration).slice(4)]);
+  assert.ok(checkThesis(listed).some((p) => p.startsWith('씬 3·4 narration 이 이야기에서 벗어났다')));
+  assert.ok(checkThesis({ ...good, title_hook: 'CPI는 뜨거웠는데 10년물은 내렸다' }).some((p) => p.includes('title_hook')));
+  assert.ok(checkThesis({ ...good, thesis_terms: ['시장', '금리 인상'] }).some((p) => p.includes('어느 날에나 맞는 말')));
+  assert.ok(checkThesis({ ...good, thesis_terms: [] }).some((p) => p.includes('thesis_terms')));
+});
+
+test('실제 Chrome Grok 경로도 대본의 카드 씬을 알고 Grok 에 보내지 않는다', () => {
+  // 2026-10-15 EP-2026-0234: 계획기는 card 를 거르는데 호출부가 {id, role} 만 넘겨 지수 카드가 Grok 에 들어갔고
+  // 숫자가 일그러졌다(다우 51,621.48 → 「51,692.487」). EP-2026-0217 도 같은 계획이었다.
+  const dir = mkdtempSync(join(tmpdir(), 'bt-grok-'));
+  writeFile(join(dir, '30_script.md'), ['---', 'scenes:',
+    '  - scene_id: "001"', '    role: open', '    card:', '      type: indices',
+    '  - scene_id: "002"', '    role: trigger', '    slot: rates/up',
+    '  - scene_id: "003"', '    role: reaction', '    slot: semis/down', '---', ''].join('\n'));
+  const scenes = loadGrokScenes(dir);
+  assert.deepEqual(scenes.map((s) => [s.id, s.card]), [['001', true], ['002', false], ['003', false]]);
+  const p = planGrokScenes({ scenes, episode: 'EP-T', ledger: { submissions: [] }, budget: DEFAULTS, now: new Date('2026-10-15T00:00:00Z') });
+  assert.ok(!p.grok.includes('001'), `카드 씬이 Grok 계획에 들어갔다: ${p.grok}`);
 });

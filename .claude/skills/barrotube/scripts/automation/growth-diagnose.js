@@ -57,6 +57,8 @@ function proposalMarkdown(date, item) {
   ];
   if (stage && STAGE_CODE[stage]) lines.push('## 볼 코드', '', `- ${STAGE_CODE[stage]}`, `- 로그: logs/cron/<slot>.log · logs/audit/<날짜>.jsonl`, '');
   lines.push('## 근거', '', '```json', JSON.stringify(f.evidence, null, 2).slice(0, 6000), '```', '');
+  // 비공개 업로드인데 관측 시각으로 확정할 수 없는 회차 — 누락도 발행도 아니다.
+  if (f.pending_review?.length) lines.push('## 판정 보류', '', '```json', JSON.stringify(f.pending_review, null, 2), '```', '');
   return lines.join('\n');
 }
 
@@ -110,11 +112,11 @@ function main() {
     return;
   }
   // 영상에는 슬롯이 붙어 나온다 — 슬롯 범위가 있는 처방의 효과를 그 슬롯 영상으로만 잰다.
-  const { videos, audit, episodes, cancelled } = loadFacts(ROOT, now);
+  const { videos, audit, episodes, cancelled, markers } = loadFacts(ROOT, now);
   const statePath = join(GROWTH, 'remediations.json');
   const state = loadJSON(statePath, emptyState());
 
-  const findings = diagnose({ kpi, slots, audit, cancelled, resolved: state.resolved ?? [], videos, episodes, now });
+  const findings = diagnose({ kpi, slots, audit, cancelled, markers, resolved: state.resolved ?? [], videos, episodes, now });
   const plan = planRemediation({ findings, state, catalog, videos, now });
   const active = plan.state.active;
 

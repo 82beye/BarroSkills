@@ -1,6 +1,6 @@
 ---
 name: barrotube
-description: BarroTube YouTube 자동 회사 — 마케팅 분석부터 에피소드 산출·YouTube 업로드까지 corework 자동화. 에이전트 hub-and-spoke 위임. Paperclip 의존 없음.
+description: BarroTube YouTube 자동 회사 — 마케팅 분석부터 에피소드 산출·YouTube 업로드까지 corework 자동화. 에이전트 hub-and-spoke 위임. 생산은 결정론 파이프라인, 정기 실행·토큰 관제·장애 수리·주간 성장은 페이퍼클립 관제(references/PAPERCLIP.md).
 ---
 
 # /barrotube — BarroTube Standalone Skill
@@ -322,7 +322,9 @@ bash $BARROTUBE_HOME/lib/install-cron.sh uninstall us-close
    (운영자 명시 요청, 2026-08-24 활성화). 이때도 Phase 11 텔레그램 거부창 30분과
    private+publishAt 예약이 남아 공개 전까지 되돌릴 수 있다. 수동 승인으로 복귀하려면 false.
    **이 플래그와 무관하게, 수동 실행(`/barrotube`)에서는 자동 승인하지 않는다.**
-8. **Paperclip 비활성화**: `PAPERCLIP_DISABLED=1` 환경 변수 필수. 미설정 시 register-paperclip-issue.js가 외부 호출 시도 → 시간 낭비.
+8. **Paperclip**: `PAPERCLIP_DISABLED=1` 은 계속 필수 — 4~5월 체제의 옛 연동(register-paperclip-issue.js·`_legacy_paperclip/`)을 끈다.
+   2026-10-07 부터 정기 실행·토큰 관제·장애 수리·주간 성장은 **새 페이퍼클립 관제**(`scripts/automation/paperclip/`, 정본 `config/paperclip/`)가 맡는다 —
+   구조·편성·운영 명령·되돌리기는 `references/PAPERCLIP.md`. 정기 회차를 손으로 돌릴 때도 `dispatch.js --direct` 를 쓰면 같은 회차 마커를 공유해 중복 실행이 없다.
 9. **채널 활성화 게이트**: `channel.yaml`의 상태가 `active`이고 migration conflict가 모두 해소된 채널만 제작·발행 액션을 실행할 수 있다. `needs_review` 채널은 상태·자산·설정 조회만 허용한다.
 10. **승인 무결성**: S10 승인은 영상·metadata·QA·선택 썸네일과 채널 revision·YouTube 목적지·최종 공개 설정에 결속된다. 승인 후 어느 값이든 바뀌면 새 승인을 발급한다.
 11. **승인 신뢰 모델**: 승인 JSON은 로컬 운영 체크포인트이며 동일 OS 사용자/저장소 쓰기 권한자를 막는 암호학적 경계가 아니다. 보드 세션 토큰과 OS 파일 권한을 보호한다.
@@ -389,6 +391,7 @@ npm run channel:document -- --channel today.myo # 읽기 전용 HTML snapshot �
 
 ## Reference Files
 
+- `references/PAPERCLIP.md` — 페이퍼클립 관제 (2026-10-07~): 에이전트 7명·루틴 16개·토큰 거버너·장애 수리·주간 성장·되돌리기
 - `references/ROUTINES.md` — 정기 증시 브리핑 2슬롯 (06:00→08:00 / 16:00→18:00) 운영
 - `references/REALESTATE.md` — 부동산 섹션 (realestate 슬롯·중립 애널리스트 데스크·공공 API 키)
 - `references/PIPELINE.md` — S0~S12 단계별 상세 (입출력·비용·시간)

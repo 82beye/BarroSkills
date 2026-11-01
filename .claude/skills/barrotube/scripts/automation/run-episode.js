@@ -17,6 +17,7 @@ import { renderDirect } from './render-direct.js';
 import { buildDistributionPackage } from './build-distribution.js';
 import {
   persistPublishResult,
+  adoptUploadReservation,
   publishYouTube,
   releasePublishResultReservation,
   reservePublishResult,
@@ -342,7 +343,10 @@ async function runStage(episodeDir, episodeId, stage, dryRun, opts = {}) {
       console.log(`  📤 Publishing to YouTube...`);
       const { assertPublishControls, saveUploadSession } = await import('./publish-youtube.js');
       assertPublishControls(episodeId);
-      const reservation = reservePublishResult(bundle.publishResultFile, { allowExisting: opts.forceRepublish });
+      // --resume-upload: 끊긴 업로드의 저장 세션을 이어 올린다. 새 업로드를 열지 않는다.
+      const reservation = opts.resumeUpload
+        ? adoptUploadReservation(bundle.publishResultFile)
+        : reservePublishResult(bundle.publishResultFile, { allowExisting: opts.forceRepublish });
       let uploadAttempted = false;
       let resultPersisted = false;
       let ytResult;
@@ -359,6 +363,7 @@ async function runStage(episodeDir, episodeId, stage, dryRun, opts = {}) {
           channelDefaults: publishChannel.channelDefaults,
           onUploadAttempt: () => { assertPublishControls(episodeId); uploadAttempted = true; },
           onUploadSession: (session) => saveUploadSession(reservation, session),
+          resumeSession: reservation.session || null,
         });
         uploadAttempted ||= Boolean(ytResult.videoId);
         publishResult = {
@@ -546,12 +551,17 @@ async function main() {
       platform: { type: 'string' },
       'dry-run': { type: 'boolean', default: false },
       'force-republish': { type: 'boolean', default: false },
+      'resume-upload': { type: 'boolean', default: false },
       'force-release-stale': { type: 'boolean', default: false },
     },
   });
 
   if (!values.episode) {
-    console.error('Usage: node run-episode.js --episode <EP-YYYY-NNNN> [--platform long|shorts] [--from <S2>] [--dry-run] [--force-republish] [--force-release-stale]');
+    console.error('Usage: node run-episode.js --episode <EP-YYYY-NNNN> [--platform long|shorts] [--from <S2>] [--dry-run] [--force-republish] [--resume-upload] [--force-release-stale]');
+    process.exit(1);
+  }
+  if (values['resume-upload'] && values['force-republish']) {
+    console.error('❌ --resume-upload and --force-republish cannot be combined');
     process.exit(1);
   }
   if (values.platform && !['long', 'shorts'].includes(values.platform)) {
@@ -627,6 +637,7 @@ async function main() {
   for (let i = startIndex; i < STAGES.length; i++) {
     const result = await runStage(episodeDir, values.episode, STAGES[i], values['dry-run'], {
       forceRepublish: values['force-republish'],
+      resumeUpload: values['resume-upload'],
       platform: values.platform || null,
     });
 

@@ -24,6 +24,15 @@ BARROTUBE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$BARROTUBE_HOME"
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
+# 페이퍼클립이 띄우면 TMPDIR 이 그 실행의 임시 폴더다. 실행이 취소·타임아웃되면 폴더가 지워지는데
+# 이 잡은 분리돼 계속 돈다 — 그 뒤 Chrome 이 지워진 폴더에 프로필을 만들다 죽었다
+# (2026-10-20 조간: 실행 취소 23:03Z 와 launch 180초 타임아웃이 겹침, 10-22 조간: mkdtemp ENOENT).
+# 이 잡의 임시 파일은 실행 수명과 무관한 시스템 임시 폴더에 둔다.
+case "${TMPDIR:-}" in
+  *paperclip-run-*|"") export TMPDIR="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || echo /tmp/)" ;;
+esac
+[ -d "$TMPDIR" ] || export TMPDIR=/tmp/
+
 # 덮개가 닫힌 채 DarkWake 틈에 뜨면 네트워크가 없다 — 수집·게시 전에 올라올 때까지 기다린다.
 source "${BARROTUBE_HOME}/lib/guards.sh"
 wait_for_network 20 || echo "⚠ 네트워크 응답 없음 — 그대로 시도" >&2
@@ -51,8 +60,12 @@ CARDS="workspace/growth/market-map/$DATE/$ED/cards"
 if bash lib/market-map-pages.sh "$CARDS"; then
   # 4) 유튜브 커뮤니티 게시. 카드를 공개 링크에서 fetch 해 붙이므로 **Pages 다음이라야 한다**.
   #    공개본이 이번 판과 다르면 community-post.js 가 스스로 멈춘다 — 직전 판을 올리는 사고 방지.
-  node scripts/automation/community-post.js --edition "$ED" \
-    || echo "⚠ 커뮤니티 게시 실패 — 카드는 텔레그램에 있다" >&2
+  #    실패해도 판은 끝까지 간다(카드는 이미 나갔다). 다만 조용히 넘기지 않는다 — 「◐ PARTIAL」 줄을
+  #    남기면 dispatch 가 마커를 partial 로 적는다. 예전 `|| echo` 는 평일 5회 중 4회 실패를 done 으로 묻었다.
+  if ! node scripts/automation/community-post.js --edition "$ED"; then
+    echo "◐ PARTIAL 커뮤니티 게시 실패 — 카드는 텔레그램에 있다 (사유는 .err 의 ❌ 줄)"
+  fi
 else
   echo "⚠ Pages 갱신 실패 — 링크는 직전 판에 머문다. 공개본이 낡았으니 커뮤니티 게시도 건너뛴다" >&2
+  echo "◐ PARTIAL Pages 갱신 실패 — 커뮤니티 게시를 건너뛰었다"
 fi

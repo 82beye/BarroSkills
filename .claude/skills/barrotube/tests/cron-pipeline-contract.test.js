@@ -519,10 +519,12 @@ test('research fallback always creates S2 and S3 inputs from collected data', ()
   try {
     writeFileSync(join(outDir, 'market-us-close.json'), JSON.stringify({
       content_mode: 'closed_market_issue',
+      fetched_at: '2026-08-08T06:00:00Z',
       quotes: [{ symbol: '.INX', name: 'S&P 500', price_text: '1,234.56', change_pct: 0.5, traded_at: '2026-08-07' }],
     }));
     writeFileSync(join(outDir, 'news.json'), JSON.stringify({
-      sources: [{ items: [{ title: 'Weekend market issue', link: 'https://example.com/issue', description: 'A sourced summary.' }] }],
+      sources: [{ items: [{ title: 'Weekend market issue: oil prices and stocks', link: 'https://example.com/issue',
+        pubDate: '2026-08-07T12:00:00Z', description: 'A sourced stock market summary.' }] }],
     }));
 
     const result = spawnSync('node', [RESEARCH, '--slot', 'us-close', '--date', '2026-08-08', '--out-dir', outDir, '--fallback'], { encoding: 'utf8' });

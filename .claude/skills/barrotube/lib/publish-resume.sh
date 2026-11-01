@@ -86,6 +86,18 @@ while IFS= read -r ep_dir; do
       continue
     fi
 
+    # Paperclip 의 publish-resume 은 auto-pipeline 의 Phase 4/8 을 거치지 않는다.
+    # 저장된 요약 대본·설명문이 현재 계약을 통과해야 승인 토큰을 게시에 쓴다.
+    if [ -s "${base}/30_script.md" ] && grep -q '^form: market-summary$' "${base}/30_script.md"; then
+      if ! node scripts/automation/validate-script-quality.js --file "${base}/30_script.md" --strict ||
+         ! node scripts/automation/generate-metadata.js --episode "$ep_dir" --platform "$platform" --validate; then
+        failed=1
+        audit "publish_resume_script_gate" "ERROR" "ep=$ep_id platform=$platform"
+        notify_telegram "🛑 <b>${ep_id}</b> 게시 재개 차단 — 요약 대본 또는 배포 문구 검수 실패"
+        continue
+      fi
+    fi
+
     # 덮개가 닫힌 채 DarkWake 틈에 뜨면 네트워크가 없어 업로드가 "fetch failed" 로 끝난다
     # (publish-resume.err 실측). 올릴 게 있을 때만, 올라올 때까지 기다린다.
     wait_for_network 20 || echo "  ⚠ 네트워크 응답 없음 — 그대로 시도합니다"

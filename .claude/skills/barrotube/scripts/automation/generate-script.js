@@ -93,6 +93,13 @@ const FORMAT_SPECS = {
   },
 };
 
+export function formatSpecForBrief(format, targetSeconds) {
+  const requested = Number(targetSeconds);
+  return Number.isFinite(requested) && requested > 0
+    ? { ...FORMAT_SPECS[format], target_total_seconds: requested }
+    : FORMAT_SPECS[format];
+}
+
 /**
  * 채널 character-dna.md 의 첫 코드블록에서 마스코트 절을 뽑는다.
  * 그 블록은 이미 generate-image-gemini.js 가 이미지 생성 시 주입하는 SSOT인데,
@@ -196,8 +203,8 @@ function slotSceneRoles(slot, sceneCount) {
   } catch { return null; }
 }
 
-function buildSystemPrompt(format, persona, seriesContext, publicFiguresInfo = null, mascotClause = null, slot = null) {
-  const spec = FORMAT_SPECS[format];
+export function buildSystemPrompt(format, persona, seriesContext, publicFiguresInfo = null, mascotClause = null, slot = null, targetSeconds = null) {
+  const spec = formatSpecForBrief(format, targetSeconds);
   const sceneCount = spec.scene_count;
 
   const seriesBlock = seriesContext
@@ -235,6 +242,8 @@ ${buildAnalystContractBlock(sceneCount)}
 6. emphasis_tokens: 1~3 Korean keywords per scene.
 7. Target audience: 20~40대 한국 투자자.
 8. FORBIDDEN: specific stock buy/sell recommendations, "무조건/100%/확실/이것만 하면 부자", 정치 편향.
+8a. 대본의 중심 질문은 한 개다. 선정 사실 → 그 사실이 비용·수요·금리·환율·실적 등으로 옮겨 가는 경로 → 한국 시청자에게 중요한 조건부 결과 → 해석을 가를 다음 확인 신호를 각 씬에 자연스럽게 배분한다. 통념을 뒤집는 문구를 억지로 만들거나 매 씬 같은 문장을 반복하지 마라.
+8b. 출처가 확인한 사실과 제작자의 추론을 분리한다. 리서치가 원인을 확인하지 못하면 그 빈칸을 '시장에서는 ~ 때문이라고 봅니다' 같은 근거 없는 말로 채우지 마라. 사실만으로 경로를 설명할 수 없으면 범위를 좁히거나 해당 주제를 버려라. 다음 신호는 예측 목표치가 아니라 이 해석을 검증할 수 있는 발표·실적 항목·관측 변수다.
 9. CRITICAL — narration is FOR TTS ONLY. DO NOT include in narration: emojis (📚 🚨 etc), bracket tags ([1/5]), intro card text, subtitle overlays, or any text that appears as visual-only elements. Those belong to video/subtitle layers — not to spoken audio.
 10. CRITICAL — Hook scene (씬 001): speak AT MOST ONE number, and the same scene must say why it matters to the viewer. A hook that only recites a figure fails — index moves are on every channel (see RULE 4-CONTRACT D). Open on the counter-intuitive fact: what moved against expectations, who disagreed, what broke the usual pattern. Put the remaining figures in subtitle_text.
 10a. CRITICAL — A ROUTINE DAILY MOVE MAY NOT BE THE SUBJECT of the hook. "오늘 X% 올랐다/내렸다" is not news below index ${INDEX_MOVE_PCT_FLOOR}% / FX 1.0% / commodity 3.0% / rates 10bp / single name 5.0% (absolute). Below those, the hook's subject must be the mechanism, the disagreement, or the consequence to the viewer; the figure may appear later only as EVIDENCE ("…때문에" / "그 결과…"), never as the thing being announced.
@@ -433,7 +442,9 @@ async function main() {
   if (platformOverride && fm.format && formatToPlatform(fm.format) !== values.platform) {
     console.warn(`⚠️  --platform=${values.platform} (format=${platformOverride}) overrides brief.format=${fm.format}`);
   }
-  const spec = FORMAT_SPECS[format];
+  // The brief is the episode's duration contract. A generic fallback from the
+  // summary writer must honor its 150s brief too.
+  const spec = formatSpecForBrief(format, fm.target_length_seconds);
 
   const persona = fm.persona || (format === 'long-3min' ? 'barro-teacher' : 'barro-alert');
 
@@ -480,7 +491,8 @@ async function main() {
   const mascotClause = loadMascotClause(channel);
   console.log(`   Mascot DNA: ${mascotClause ? `주입됨 (${mascotClause.length}자)` : '없음 — 인라인 서술 지시'}`);
 
-  const systemPrompt = buildSystemPrompt(format, persona, seriesContext, publicFiguresInfo, mascotClause, values.slot || null);
+  const systemPrompt = buildSystemPrompt(format, persona, seriesContext, publicFiguresInfo, mascotClause,
+    values.slot || null, fm.target_length_seconds);
 
   const userPromptParts = [
     `[EPISODE BRIEF]`,
@@ -517,6 +529,7 @@ async function main() {
       : `- 뉴스 레퍼런스 중 가장 관련성 높은 것을 훅(hook)으로 활용하되, 운영자 의도(주제)가 우선.`,
     `- 페르소나 금기 표현 준수. 페르소나 위반은 품질 저하로 판정됨.`,
     `- 팩트 기반, 수치는 구어체.`,
+    `- [CONTENT STRATEGY]의 관찰·메커니즘·함의·반증을 원자료와 대조한 뒤 사용하라. fallback 전략에 경로가 비어 있으면 근거 없이 채우지 말고 확인된 관찰과 조건부 영향만 말하라. 시청자가 이후 뉴스를 읽을 때 무엇이 달라지면 해석을 바꿔야 하는지 구체적으로 남겨라.`,
     `- 특정 종목 매수 추천 X.`,
   );
 
@@ -536,13 +549,7 @@ async function main() {
                            used: values.model || DEFAULT_MODEL }),
   });
 
-  /**
-   * 품질 계약 위반은 한 번만 되돌려 준다.
-   *
-   * 두 번째도 실패하면 위반을 frontmatter 에 남기고 진행한다 — 주관이 섞인 지표로
-   * 매일 도는 파이프라인을 멈춰 세우면, 다음 사람이 게이트를 끄는 쪽을 택하게 된다.
-   * 남은 위반은 Board 승인 화면에서 사람이 본다.
-   */
+  /** 품질 계약 위반은 한 번 되돌린다. 재시도 후 error 는 자산 생성 전에 차단한다. */
   // 재작성에는 직전 응답을 함께 준다. 위반 목록만 주면 모델이 처음부터 다시 써서, 고친 컷 대신
   // 다른 컷이 걸린다 — 2026-10-06 EP-2026-0212 는 Phase 5 재생성에서 003 이 그대로 남고 005 가 새로 걸려 멈췄다.
   let parsed, engineUsed, scenes, qualityIssues = [], promptBlocks = [], previous = '';
@@ -554,7 +561,7 @@ async function main() {
          ...promptBlocks.map((v) => `- 씬 ${v.sceneId} image_prompt [${v.code}] ${v.message}`), '',
          '## 직전 응답 — 이것을 고쳐 JSON 하나로 다시 내라', previous, '',
          '지적된 것만 고치고 나머지 계약(씬 수·target_seconds 합·image_prompt·TTS 한글 수사)은 그대로 지켜라.',
-         '수치를 덜어낸 자리는 비우지 말고, 오늘 이 뉴스에서만 할 수 있는 인과·함의로 채워라. 분량은 유지한다.',
+         '수치를 덜어낸 자리는 근거 있는 인과·함의로 채워라. 근거가 부족하면 범위를 좁히고 미확인이라고 밝혀라. 검수 통과를 위해 원인·전망을 지어내지 마라. 분량은 가능한 범위에서 유지한다.',
         ].join('\n');
 
     const got = await runEngineChain(chain, buildRunners(prompt));
@@ -588,22 +595,12 @@ async function main() {
     if (!qualityIssues.some((i) => i.severity === 'error' || i.rewrite) && !promptBlocks.length) break;
 
     if (attempt === 2) {
-      // 2026-09-21 운영자 지시: 「3% 를 넘지 못하면 지수를 주제로 잡지 못하게 하라」.
-      // 이 규칙만은 '기록하고 진행' 하지 않는다 — 나머지 위반의 처리는 그대로 둔다.
-      // 여기서 멈추면 이미지·TTS 비용을 쓰기 전이다(Phase 4). auto-pipeline 이
-      // fail_with_alert 로 텔레그램을 울린다. exit 2·3 은 produce-episode 에서 다른
-      // 뜻으로 쓰이므로 1 을 쓴다.
-      // narration 숫자도 여기서 멈춘다 — 넘기면 이미지·모션을 다 만든 뒤 S6a 가 막는다(2026-09-30 EP-2026-0198).
-      const blocking = qualityIssues.filter((i) => i.rule === 'index-move-as-subject' || i.rule === 'narration-digits');
+      // Every error is a contract failure; leaving some in frontmatter still shipped weak
+      // analysis and overlong numeric recitals. Warnings remain reviewable, not blocking.
+      const blocking = qualityIssues.filter((i) => i.severity === 'error');
       if (blocking.length) {
-        console.error(`❌ ${blocking[0].message}`);
-        if (blocking[0].rule === 'narration-digits') {
-          console.error('   재작성 후에도 narration 에 아라비아 숫자가 남았다 — TTS 전에 대본을 내보내지 않는다.');
-          console.error(`   ${blocking[0].suggestion}`);
-        } else {
-          console.error('   재작성 후에도 훅의 주어가 지수 등락률이다 — 대본을 내보내지 않는다.');
-          console.error('   토픽을 바꾸거나(레벨 돌파·N년래 최고·연속기록) 훅의 주어를 사건·인과로 바꿔라.');
-        }
+        for (const issue of blocking) console.error(`❌ ${issue.message}\n   → ${issue.suggestion}`);
+        console.error('   재작성 2회 후에도 대본 품질 오류가 남아 자산 생성을 보류합니다.');
         process.exit(1);
       }
       console.warn('   ⚠ 재작성 후에도 품질 계약 위반이 남았다 — frontmatter 에 기록하고 진행한다');

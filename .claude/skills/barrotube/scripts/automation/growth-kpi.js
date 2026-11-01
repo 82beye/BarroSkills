@@ -18,7 +18,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, renameSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { computeScorecard, normalizeIndex, METRICS_VERSION } from './lib/growth-kpi.js';
+import { computeScorecard, normalizeIndex, views48Coverage, METRICS_VERSION } from './lib/growth-kpi.js';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const CH_DIR = join(ROOT, 'workspace', 'growth', 'channel');
@@ -88,6 +88,7 @@ function main() {
     top_videos: card.top, bottom_videos: card.bottom,
     experiment: curExp ? { id: curExp.id, directive: curExp.directive, started: curExp.started } : null,
     inputs: { video_count: videos.length, history_rows: history.length, observed_at: index.updated_at,
+      views48_sample: views48Coverage(videos, now),
       channel_id: index.channelId, analytics_latest_day: analytics?.map((r) => r.day).sort().at(-1) ?? null },
   };
   const tmp = join(KPI_DIR, `${date}.${process.pid}.tmp`);
@@ -106,6 +107,7 @@ function main() {
     '', '## 최근 14d 하위', ...card.bottom.map((v) => `- ${v.views.toLocaleString()}회 (${v.vpd}/일) — ${v.title}`),
     '',
     `> 관측: ${index.updated_at} · Analytics 최신 일자: ${out.inputs.analytics_latest_day ?? '없음'}`,
+    `> 48h 관측 창: 게시 후 ${out.inputs.views48_sample.observation_window_hours.join('~')}시간 · 최근 ${out.inputs.views48_sample.recent.observed}/${out.inputs.views48_sample.recent.eligible}편 (결손 ${out.inputs.views48_sample.recent.missing}, 중앙값 ${out.inputs.views48_sample.recent.median_views ?? '—'}) · 기준 ${out.inputs.views48_sample.baseline.observed}/${out.inputs.views48_sample.baseline.eligible}편 (결손 ${out.inputs.views48_sample.baseline.missing}, 중앙값 ${out.inputs.views48_sample.baseline.median_views ?? '—'})`,
     `> NA = 비교 가능한 관측 부족. 순증은 7일, WoW는 같은 인덱스의 14일 이력이 필요하다.`,
     '',
   ].join('\n');

@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { getSecret } from './config-loader.js';
 import {
-  groupedTreemap, resolveEdition, EDITIONS, krSessionLabel,
+  groupedTreemap, resolveEdition, EDITIONS, krSessionLabel, launchChrome,
 } from './lib/market-map.js';
 
 const ROOT = resolve(import.meta.dirname, '../..');
@@ -587,7 +587,7 @@ async function renderPNGs(cards, outDir) {
   writeFileSync(htmlPath, `<!doctype html><meta charset="utf-8">${helmet}`
     + `<body style="margin:0;background:${T.paperAlt};display:flex;flex-direction:column;align-items:flex-start;width:max-content">${bodies}</body>`);
 
-  const browser = await chromium.launch({ channel: 'chrome', headless: true });
+  const browser = await launchChrome(chromium);
   try {
     const ctx = await browser.newContext({ deviceScaleFactor: 1, viewport: { width: 1200, height: 1400 } });
     const page = await ctx.newPage();

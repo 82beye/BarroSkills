@@ -711,13 +711,16 @@ end timeout`;
   }
 }
 
-function loadScenes(baseDir) {
+export function loadScenes(baseDir) {
   const txt = readFileSync(join(baseDir, '30_script.md'), 'utf8');
   const out = [];
   for (const blk of txt.split(/\n  - scene_id: /).slice(1)) {
     const id = (blk.match(/^"(\d+)"/) || [])[1];
     const role = (blk.match(/role: (\w+)/) || [])[1] || '';
-    if (id) out.push({ id, role });
+    // 데이터 카드 표시를 넘겨야 planGrokScenes 가 카드 씬을 Grok 에서 뺀다. 빠져 있던 동안
+    // 「미국 증시 요약」 지수 카드가 Grok 에 들어가 숫자가 일그러졌다(EP-2026-0217·0234, 2026-10-15 발견).
+    const card = /^\s+card:/m.test(blk);
+    if (id) out.push({ id, role, card });
   }
   return out;
 }
@@ -926,4 +929,7 @@ async function main() {
   process.exit(failed && !made ? 1 : 0);
 }
 
-main().catch((e) => { console.error(`❌ ${e.message}`); process.exit(1); });
+// import 만 해도 main 이 돌면 테스트에서 못 쓴다 — 레포의 다른 CLI 와 같은 가드.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((e) => { console.error(`❌ ${e.message}`); process.exit(1); });
+}

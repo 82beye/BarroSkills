@@ -16,21 +16,22 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { execSync } from 'node:child_process';
 import { parse as parseYAML } from 'yaml';
 import { validateScript, formatIssue } from './lib/script-quality-contract.js';
+import { reviewSummaryBrief, reviewSummarySpine } from './lib/editorial-spine.js';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const EPISODES = join(ROOT, 'workspace', 'episodes');
 
-function scenesOf(path) {
+function metadataOf(path) {
   const match = readFileSync(path, 'utf-8').match(/^---\n([\s\S]*?)\n---/);
   if (!match) return null;
   try {
     const meta = parseYAML(match[1]);
-    return Array.isArray(meta?.scenes) ? meta.scenes : null;
+    return Array.isArray(meta?.scenes) ? meta : null;
   } catch {
     return null;
   }
@@ -65,9 +66,39 @@ function main() {
   let errorCount = 0;
 
   for (const path of targets) {
-    const scenes = scenesOf(path);
-    if (!scenes) continue;
+    const meta = metadataOf(path);
+    const scenes = meta?.scenes;
+    if (!scenes?.length) {
+      errorCount += 1;
+      report.push({ file: path, issues: [{
+        rule: 'invalid-script', severity: 'error', scene_id: null,
+        message: '대본 frontmatter 또는 scenes 가 없거나 파싱할 수 없다',
+        suggestion: '유효한 YAML frontmatter 와 최소 한 개의 scenes 를 저장한 뒤 다시 검사해라.',
+      }] });
+      continue;
+    }
     const issues = validateScript(scenes);
+    if (meta.form === 'market-summary') {
+      const saved = reviewSummarySpine({ scenes, editorial_spine: meta.editorial_spine },
+        meta.editorial_spine?.evidence_refs || []);
+      // Older saved summaries predate the editorial spine. Review their spoken
+      // lists without retrospectively requiring metadata they never had.
+      for (const message of saved) {
+        if (!meta.editorial_spine && message.startsWith('editorial_spine')) continue;
+        issues.push({ rule: 'summary-story-spine', severity: 'error', scene_id: null,
+          message, suggestion: '원자료와 출처를 확인해 서사를 다시 편집해라. 문구만 추가해 통과시키지 마라.' });
+      }
+      const briefPath = join(dirname(dirname(dirname(path))), '00_brief.md');
+      if (existsSync(briefPath)) {
+        const briefMatch = readFileSync(briefPath, 'utf-8').match(/^---\n([\s\S]*?)\n---/);
+        let topic = '';
+        try { topic = String(parseYAML(briefMatch?.[1] || '')?.topic || ''); } catch { /* malformed old brief */ }
+        for (const message of reviewSummaryBrief({ scenes }, topic)) {
+          issues.push({ rule: 'summary-brief-alignment', severity: 'error', scene_id: null,
+            message, suggestion: '브리프의 핵심 관찰을 대본에 넣고 한국 장 마감과 미국 장의 시간 순서를 분명히 하라.' });
+        }
+      }
+    }
     errorCount += issues.filter((i) => i.severity === 'error').length;
     if (issues.length) report.push({ file: path, issues });
   }

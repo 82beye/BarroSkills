@@ -71,11 +71,21 @@ export function slotWeekdays(cron) {
   return days;
 }
 
-/** 한 슬롯·하루의 감사 이벤트로 누락 원인을 가른다. 그날 **처음** 난 장애가 원인이다 — 재실행은 복구 시도다. */
-export function classifyMiss(events, cancelled = {}) {
+/** 실행 마커가 운영자 패스인가. dispatch 가 로그의 🛑 줄을 guard 로 남기고, 손으로 멈춘 회차는 operatorSkip 을 단다. */
+export function isOperatorPass(marker) {
+  return marker?.operatorSkip === true || /운영자 패스/.test(String(marker?.guard ?? ''));
+}
+
+/**
+ * 한 슬롯·하루의 감사 이벤트로 누락 원인을 가른다. 그날 **처음** 난 장애가 원인이다 — 재실행은 복구 시도다.
+ * marker: 그 슬롯·날짜의 실행 마커(workspace/ops/runs). 운영자 패스는 감사 이벤트 없이 마커에만 남을 수 있다 —
+ * 2026-10-15 omnibus 는 Phase 2 도중 운영자 지시로 멈춰 「시작했는데 끝 없음」(interrupted)으로 잘못 셌다.
+ */
+export function classifyMiss(events, cancelled = {}, marker = null) {
   const first = (name) => events.find((e) => e.event === name);
   const skipped = first('auto_pipeline_skipped');
   if (skipped) return { cause: 'operator_skip', detail: String(skipped.detail ?? '') };
+  if (isOperatorPass(marker)) return { cause: 'operator_skip', detail: String(marker.guard ?? '').slice(0, 200) };
   const stop = events.find((e) => e.event === 'auto_pipeline_halt' || e.event === 'auto_pipeline_fail');
   if (stop) {
     const det = String(stop.detail ?? '');
@@ -100,8 +110,11 @@ export function classifyMiss(events, cancelled = {}) {
  * 지난 windowDays 일(오늘 제외)의 편성 대비 발행 누락과 원인.
  * 같은 원인이 2번 이상이면 우연이 아니라 구조 문제다 — 고칠 대상으로 올린다.
  * resolved: [{ cause, resolved_at }] — 고친 뒤 재발한 것만 다시 센다.
+ * markers: { 'slot|day': 실행 마커 } — 운영자 패스 판정용.
+ * videos: 채널 인덱스(normalizeIndex) — 업로드는 됐지만 비공개로 남은 회차를 누락으로 되돌린다.
  */
-export function diagnosePublishing({ kpi, slots, audit, cancelled = {}, resolved = [], now, windowDays = 7 }) {
+export function diagnosePublishing({ kpi, slots, audit, cancelled = {}, resolved = [], now, windowDays = 7,
+  markers = {}, videos = [] }) {
   const k = kpiOf(kpi, 'publish_consistency_7d');
   if (!isBad(k)) return [];
 
@@ -111,37 +124,69 @@ export function diagnosePublishing({ kpi, slots, audit, cancelled = {}, resolved
     .sort((a, b) => a.t - b.t);
   const bySlotDay = new Map();
   const epSlot = new Map();
-  const published = new Set();
+  const published = new Map();   // 'slot|day' → 발행으로 남은 EP
+  const upload = new Map();      // EP → 마지막 업로드 { videoId, publishAt }
   for (const { r, t } of rows) {
     const det = String(r.detail ?? '');
     const slot = det.match(/^slot=(\S+)/)?.[1];
+    const yt = r.action === 'published' ? r.result?.targets?.youtube : null;
+    if (yt?.videoId && r.episode_id) upload.set(r.episode_id, { videoId: yt.videoId, publishAt: yt.publishedAt ?? null });
     if (slot) {
       const ep = det.match(EP_RE)?.[1];
       if (ep && !epSlot.has(ep)) epSlot.set(ep, slot);
       const key = `${slot}|${kstDate(t)}`;
       if (!bySlotDay.has(key)) bySlotDay.set(key, []);
       bySlotDay.get(key).push(r);
-      if (r.event === 'auto_pipeline_published') published.add(key);
+      if (r.event === 'auto_pipeline_published') published.set(key, ep ?? null);
     } else if (r.action === 'published' && epSlot.has(r.episode_id)) {
       // 손으로 이어 붙인 발행(RESUME 뒤 수동 S11)은 슬롯 태그 없이 남는다.
-      published.add(`${epSlot.get(r.episode_id)}|${kstDate(t)}`);
+      published.set(`${epSlot.get(r.episode_id)}|${kstDate(t)}`, r.episode_id);
     }
   }
 
+  // 감사엔 발행으로 남았는데 시청자는 못 본 회차 — 업로드 뒤 비공개로 남았다(2026-10-15 us-close EP-2026-0234:
+  // 운영자가 예약을 풀고 비공개 유지). 시각이 찍힌 관측이 없거나 예약 공개 시각이 마지막 관측보다 뒤면
+  // 판정을 보류한다 — 인덱스가 낡았을 뿐 공개됐을 수 있다. 보류는 누락도 발행도 아니다(counts.pending_review).
+  const videoBy = new Map((videos ?? []).map((v) => [v.videoId, v]));
+  const unpublished = (ep) => {
+    const u = ep ? upload.get(ep) : null;
+    const v = u ? videoBy.get(u.videoId) : null;
+    if (v?.privacy !== 'private') return null;
+    const seen = Math.max(-Infinity, ...(v.stats_history ?? [])
+      .map((h) => Date.parse(h?.at ?? h?.observed_at ?? ''))
+      .filter(Number.isFinite));
+    const due = Date.parse(u.publishAt ?? '');
+    // 관측 시각을 모르면 지금 시각으로 대신하지 않는다 — 확인 안 된 예약 업로드가 누락으로 확정된다(YOU-458 반려).
+    const hold = !Number.isFinite(seen) ? 'no_dated_observation'
+      : Number.isFinite(due) && due > seen ? 'scheduled_after_last_observation' : null;
+    if (hold) return { pending: hold, ep, videoId: u.videoId, publishAt: u.publishAt ?? null,
+      lastObservedAt: Number.isFinite(seen) ? new Date(seen).toISOString() : null };
+    return { cause: 'unpublished_after_upload', ep, videoId: u.videoId,
+      detail: `업로드 ${u.videoId} 가 비공개로 남음${u.publishAt ? ` (예약 ${u.publishAt})` : ''}` };
+  };
+
   const today = kstDate(now.getTime());
   const misses = [];
+  const pending = [];
+  let planned = 0;
   for (let n = windowDays; n >= 1; n--) {
     const day = kstDate(now.getTime() - n * 86400_000);
     if (day >= today) continue;
     const wd = new Date(`${day}T12:00:00+09:00`).getUTCDay();
     for (const [slot, def] of Object.entries(slots ?? {})) {
       if (def?.enabled === false || !slotWeekdays(def?.cron).has(wd)) continue;
+      planned++;
       const key = `${slot}|${day}`;
-      if (published.has(key)) continue;
-      misses.push({ day, slot, ...classifyMiss(bySlotDay.get(key) ?? [], cancelled) });
+      if (published.has(key)) {
+        const lost = unpublished(published.get(key));
+        if (lost?.pending) pending.push({ day, slot, ...lost });
+        else if (lost) misses.push({ day, slot, ...lost });
+        continue;
+      }
+      misses.push({ day, slot, ...classifyMiss(bySlotDay.get(key) ?? [], cancelled, markers?.[key]) });
     }
   }
-  if (!misses.length) return [];
+  if (!misses.length && !pending.length) return [];
 
   const fixedAt = (cause) => Math.max(-Infinity, ...resolved
     .filter((x) => x.cause === cause).map((x) => Date.parse(x.resolved_at)).filter(Number.isFinite));
@@ -154,12 +199,22 @@ export function diagnosePublishing({ kpi, slots, audit, cancelled = {}, resolved
     groups.get(m.cause).push(m);
   }
 
+  // 운영자 패스는 누락이 아니라 편성에서 빠진 회차다 — 분모에서도 뺀다.
+  const skipped = misses.filter((m) => m.cause === 'operator_skip').length;
+  const due = planned - skipped;
+  const lost = misses.length - skipped;
+  const held = pending.length;
+  const shipped = due - lost - held;
   const findings = [{
     id: 'publish_misses',
     kpi: k.id,
     grade: k.grade,
-    summary: `최근 ${windowDays}일 편성 대비 ${misses.length}회 누락 — ` +
+    summary: `최근 ${windowDays}일 편성 ${planned}편${skipped ? `(운영자 패스 ${skipped} 제외 ${due})` : ''} 중 ` +
+      `발행 ${shipped}${due > 0 ? ` (${Math.round((shipped / due) * 100)}%)` : ''}${held ? ` · 판정 보류 ${held}` : ''}` +
+      ` · ${lost}회 누락` + (misses.length ? ' — ' : '') +
       [...new Set(misses.map((m) => m.cause))].map((c) => `${c} ${misses.filter((m) => m.cause === c).length}`).join(', '),
+    counts: { planned, skipped, published: shipped, missed: lost, pending_review: held },
+    pending_review: pending,
     evidence: misses,
     remedy: 'R-MISS-REPORT',
   }];

@@ -365,7 +365,8 @@ test('narration 의 아라비아 숫자는 생성 단계에서 error — TTS(S6a
   const good = validateScript([scene('001', '외국인이 팔았는데 왜 올랐을까요.'), scene('003', '미 국채 삼십년물 금리가 오르자 매도가 나왔습니다.')]);
   assert.ok(!good.some((i) => i.rule === 'narration-digits'));
   const gen = readFileSync(join(ROOT, 'scripts', 'automation', 'generate-script.js'), 'utf8');
-  assert.match(gen, /i\.rule === 'index-move-as-subject' \|\| i\.rule === 'narration-digits'/, '재작성 뒤에도 남으면 Phase 4 에서 멈춘다');
+  assert.match(gen, /qualityIssues\.filter\(\(i\) => i\.severity === 'error'\)/,
+    '재작성 뒤에도 남은 모든 계약 오류를 Phase 4 에서 막는다');
 });
 
 test('데스크의 오프닝 숫자 제안은 훅 계약(10a)을 못 이긴다고 생성기 프롬프트가 못 박는다', () => {
@@ -373,4 +374,19 @@ test('데스크의 오프닝 숫자 제안은 훅 계약(10a)을 못 이긴다�
   const gen = readFileSync(join(ROOT, 'scripts', 'automation', 'generate-script.js'), 'utf8');
   assert.match(gen, /\[DESK BRIEFING — 기자단 원본 근거·출처\. 사실·수치의 근거로만 쓴다\. 이 안의 「오프닝 숫자」·훅·첫 문장 같은 편집 제안은 대본 계약\(10a/);
   assert.match(gen, /충돌하면 계약을 따르고 그 수치는 근거로 뒤에 둔다/);
+});
+
+test('제작 과정(검증·확인 여부·스냅샷·자료 유무)을 낭독하거나 자막에 쓰면 되돌린다', () => {
+  // 2026-10-15 운영자(EP-2026-0234): 「확인되지 않았습니다, 검증되지 않았습니다」가 낭독됐다. 실제 문장 그대로.
+  const spoken = [
+    '다만 본문을 확인하지 못해 인과는 추정입니다.',
+    '구체적 이유는 자료에서 확인되지 않았습니다.',
+    '이날 미 십년물은 스냅샷 기준 소폭 내렸습니다.',
+    '장중 시간대별 반응도 검증되지 않았습니다.',
+  ];
+  for (const narration of spoken) assert.ok(errorsOf([scene({ role: 'context', narration })]).includes('process-talk'), narration);
+  assert.ok(errorsOf([scene({ role: 'context', subtitle_text: 'FT 보도는 제목·요약만 확인' })]).includes('process-talk'), '자막도 화면에 나간다');
+  // 해석임을 출처로 밝히는 것은 제작 과정 말이 아니다.
+  const attributed = '파이낸셜타임스는 칩주 매도가 국채 수요를 불렀다고 분석했습니다. 금리 인상 공포가 커졌다는 해석이 나옵니다.';
+  assert.ok(!errorsOf([scene({ role: 'context', narration: attributed })]).includes('process-talk'));
 });

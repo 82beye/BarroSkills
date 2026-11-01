@@ -72,6 +72,8 @@ RULES:
    - MED: 맥락 누락, 과장 표현, 불완전한 인용
    - LOW: 사소한 표현 차이, 최신 데이터와 미세 차이
 5. For HIGH/MED, always provide "suggested_revision" (corrected Korean sentence, same 스타일/길이).
+   The suggestion is read aloud to viewers. Never put verification notes in it — no 「스냅샷 기준」, 「확인되지 않았습니다」, 「검증되지 않았습니다」, 「본문을 확인하지 못해」, 「추정입니다」.
+   If a fact cannot be supported, suggest the sentence without that fact (narrow it or drop the clause); if a cause is only reported, attribute it to the outlet (「<매체>는 …라고 전했습니다」).
 6. Cite "evidence" with the source URL itself. When the source is in the attached pipeline research, copy its URL exactly as written there — a markdown link's target in parentheses IS the URL; a name like "FXStreet(09-28)" alone is not a citation. Use an official document name only when no URL exists. Min 2 independent sources for HIGH.
 7. If a claim cannot be verified via search, mark HIGH with risk_reason="unverifiable".
 7a. EXCEPTION — a claim whose figures match the attached PIPELINE DATA SNAPSHOT for the same instrument and session

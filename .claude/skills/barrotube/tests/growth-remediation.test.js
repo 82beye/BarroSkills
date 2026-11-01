@@ -80,6 +80,107 @@ test('발행 누락: 같은 원인 2회부터 수정 설계서, 고친 뒤의 �
   assert.deepEqual(diagnosePublishing({ kpi: kpi('publish_consistency_7d', 'GREEN'), slots, audit, now: NOW }), []);
 });
 
+test('발행 누락 정합: 마커의 운영자 패스는 누락이 아니고, 업로드 후 비공개는 누락이다 (2026-10-16 오분류)', () => {
+  // 2026-10-15 omnibus: 감사엔 start 만 있고 끝이 없다 — 운영자가 Phase 2 에서 멈췄고 마커 guard 에만 남았다.
+  const guard = '🛑 운영자 패스 — 운영자 지시로 패스 (2026-10-15 13:1x KST)';
+  const start = [{ event: 'auto_pipeline_start', detail: 'slot=omnibus dry_run=0' }];
+  assert.equal(classifyMiss(start).cause, 'interrupted', '마커가 없으면 여전히 중단');
+  assert.equal(classifyMiss(start, {}, { status: 'guarded', guard }).cause, 'operator_skip');
+  assert.equal(classifyMiss(start, {}, { status: 'guarded', operatorSkip: true }).cause, 'operator_skip');
+  assert.equal(classifyMiss(start, {}, { status: 'guarded', guard: '🛑 EP-2026-0001 QA FAIL — publish 차단' }).cause,
+    'interrupted', 'QA 차단 🛑 은 운영자 패스가 아니다');
+
+  const now = new Date('2026-10-15T21:40:00Z');           // 10-16(목) 06:40 KST
+  const slots = { 'us-close': { cron: '06:00' }, omnibus: { cron: 'Mon-Thu 10:00' } };
+  const audit = [];
+  const videos = [];
+  const pub = (day, slot, n, { privacy = 'public', publishAt = `${day}T08:00:00+09:00`, seen = '2026-10-16T06:40:00Z' } = {}) => {
+    const ep = `EP-2026-0${slot === 'omnibus' ? 3 : 2}${n}0`;
+    const vid = `${slot}-${day}`;
+    audit.push({ at: `${day}T07:00:00+09:00`, event: 'auto_pipeline_published', detail: `slot=${slot} ep=${ep}` });
+    audit.push({ timestamp: `${day}T07:00:01+09:00`, episode_id: ep, action: 'published',
+      result: { targets: { youtube: { status: 'scheduled', videoId: vid, publishedAt: publishAt, privacyStatus: 'private' } } } });
+    videos.push({ videoId: vid, privacy, publishedAt: publishAt, stats_history: [{ at: seen, views: 5 }] });
+  };
+  const markers = {};
+  for (let n = 1; n <= 7; n++) {
+    const day = kstDate(now.getTime() - n * 86400_000);
+    // us-close: 하루 전(10-15)은 업로드 후 비공개(예약 해제), 이틀 전은 예약 시각이 마지막 관측보다 뒤(인덱스가 낡음)
+    if (n === 1) pub(day, 'us-close', n, { privacy: 'private', publishAt: null });
+    else if (n === 2) pub(day, 'us-close', n, { privacy: 'private', seen: `${day}T07:30:00+09:00` });
+    else pub(day, 'us-close', n);
+    const wd = new Date(`${day}T12:00:00+09:00`).getUTCDay();
+    if (![1, 2, 3, 4].includes(wd)) continue;
+    if (n === 1) {
+      audit.push({ at: `${day}T13:01:00+09:00`, event: 'auto_pipeline_start', detail: 'slot=omnibus dry_run=0' });
+      markers[`omnibus|${day}`] = { status: 'guarded', guard, operatorSkip: true };
+    } else pub(day, 'omnibus', n);
+  }
+  const k = kpi('publish_consistency_7d', 'YELLOW', '82%');
+  const f = diagnosePublishing({ kpi: k, slots, audit, markers, videos, now });
+  const misses = f.find((x) => x.id === 'publish_misses');
+  const by = (slot) => misses.evidence.filter((m) => m.slot === slot);
+  assert.deepEqual(by('omnibus').map((m) => m.cause), ['operator_skip']);
+  assert.deepEqual(by('us-close').map((m) => [m.cause, m.ep]), [['unpublished_after_upload', 'EP-2026-0210']],
+    '예약 해제·비공개는 누락');
+  assert.deepEqual(misses.pending_review.map((m) => [m.slot, m.ep, m.pending]),
+    [['us-close', 'EP-2026-0220', 'scheduled_after_last_observation']], '예약 대기(관측이 예약보다 앞)는 보류');
+  assert.equal(misses.counts.planned, 7 + 4);
+  assert.deepEqual([misses.counts.skipped, misses.counts.missed, misses.counts.published, misses.counts.pending_review],
+    [1, 1, 8, 1]);
+  assert.match(misses.summary, /편성 11편\(운영자 패스 1 제외 10\) 중 발행 8 \(80%\) · 판정 보류 1 · 1회 누락/);
+  assert.ok(!f.some((x) => x.id.startsWith('systemic_miss')), '운영자 패스·단발 비공개는 반복 장애가 아니다');
+
+  // 마커·인덱스를 안 넘기면 예전 판정 그대로 (호출부 호환)
+  const legacy = diagnosePublishing({ kpi: k, slots, audit, now }).find((x) => x.id === 'publish_misses');
+  assert.deepEqual(legacy.evidence.map((m) => m.cause), ['interrupted']);
+});
+
+test('비공개 업로드는 시각이 찍힌 관측으로만 누락을 확정하고, 확정할 수 없으면 보류한다 (YOU-458 반려)', () => {
+  const now = new Date('2026-10-16T06:40:00Z');
+  const day = '2026-10-15';
+  const ep = 'EP-2026-0234';
+  const videoId = 'private-upload';
+  const slots = { 'us-close': { cron: '06:00' } };
+  const check = (publishAt, stats_history) => {
+    const audit = [
+      { at: `${day}T07:00:00+09:00`, event: 'auto_pipeline_published', detail: `slot=us-close ep=${ep}` },
+      { at: `${day}T07:00:01+09:00`, action: 'published', episode_id: ep,
+        result: { targets: { youtube: { videoId, publishedAt: publishAt } } } },
+    ];
+    const videos = [{ videoId, privacy: 'private', ...(stats_history === undefined ? {} : { stats_history }) }];
+    return diagnosePublishing({ kpi: kpi('publish_consistency_7d', 'RED'), slots, audit, videos, now, windowDays: 1 })
+      .find((f) => f.id === 'publish_misses');
+  };
+  const missed = (f, why) => {
+    assert.deepEqual(f.evidence.map((m) => [m.cause, m.ep]), [['unpublished_after_upload', ep]], why);
+    assert.deepEqual([f.counts.published, f.counts.missed, f.counts.pending_review], [0, 1, 0], why);
+  };
+  const held = (f, reason, why) => {
+    assert.deepEqual(f.evidence, [], `${why} — 누락 목록에 없다`);
+    assert.deepEqual(f.pending_review.map((m) => [m.pending, m.ep, m.videoId]), [[reason, ep, videoId]], why);
+    assert.deepEqual([f.counts.published, f.counts.missed, f.counts.pending_review], [0, 0, 1], `${why} — 발행도 아니다`);
+    assert.match(f.summary, /발행 0 \(0%\) · 판정 보류 1 · 0회 누락/);
+  };
+  const reserved = `${day}T08:00:00+09:00`;
+
+  // 1. 예약 없음 + 시각이 찍힌 관측 → 누락
+  missed(check(null, [{ at: `${day}T09:00:00+09:00` }]), '예약이 풀렸고 시각이 찍힌 비공개 관측은 누락');
+  // 2. 관측 시각 없음 → 예약 유무와 무관하게 보류 (지금 시각으로 대신하지 않는다)
+  for (const publishAt of [null, reserved]) {
+    held(check(publishAt, undefined), 'no_dated_observation', `stats_history 없음 (예약 ${publishAt})`);
+    held(check(publishAt, []), 'no_dated_observation', `stats_history 빈 배열 (예약 ${publishAt})`);
+    held(check(publishAt, [{ at: 'not-a-date', views: 3 }, { views: 4 }]), 'no_dated_observation',
+      `at 파싱 불가 (예약 ${publishAt})`);
+  }
+  // 3. 예약 전 관측(예약 > 마지막 관측) → 보류
+  held(check(reserved, [{ at: `${day}T07:30:00+09:00` }]), 'scheduled_after_last_observation',
+    '예약 전 비공개 관측은 정상적인 대기 상태일 수 있다');
+  // 4. 예약 후 관측(예약 ≤ 마지막 관측) → 누락. 파싱 안 되는 관측이 섞여도 유효한 것 중 가장 늦은 것을 본다.
+  missed(check(reserved, [{ at: `${day}T09:00:00+09:00` }, { at: 'bad' }]), '예약 이후에도 비공개면 누락');
+  missed(check(reserved, [{ at: reserved }]), '예약 시각과 같은 관측도 예약 이후로 본다');
+});
+
 test('좋아요율: 마무리에 좋아요 요청이 비면 자동 처방, 이미 절반 넘게 있으면 침묵', () => {
   const eps = (likeEvery) => Array.from({ length: 10 }, (_, i) => ({
     ep: `EP-2026-01${i}0`, slot: i === 0 ? 'realestate' : 'kr-close', publishedAt: `2026-10-0${i % 5 + 1}T09:00:00Z`,
@@ -100,7 +201,7 @@ test('48h 조회: 배포 안 된 공개 영상과 긴 포맷 묶음을 따로 �
     const pub = new Date(NOW.getTime() - daysAgo * 86400_000);
     return {
       videoId: id, title: id, publishedAt: pub.toISOString(), duration_s: durationS, privacy,
-      stats_history: [{ at: new Date(pub.getTime() + 40 * hour).toISOString(), views: v48 }],
+      stats_history: [{ at: new Date(pub.getTime() + 48 * hour).toISOString(), views: v48 }],
       views: v48, likes: 1,
     };
   };
@@ -164,10 +265,11 @@ test('처방 판정: 좋아지면 유지(adopted), 끝내 안 좋아지면 되�
   assert.equal(stale.state.history[0].result.reason, 'not_applied');
   assert.deepEqual(stale.outbox.map((o) => o.kind), ['stale']);
 
-  const wait = planRemediation({ findings: [], state, catalog: CATALOG, videos: after(6, 6), now: later });
-  assert.equal(wait.state.active[0].status, 'active', '효과 없지만 max_episodes 전이면 더 지켜본다');
+  const wait = planRemediation({ findings: [], state, catalog: CATALOG, videos: after(5, 6), now: later });
+  assert.equal(wait.state.active[0].status, 'active', 'min_episodes 전이면 더 지켜본다');
 
-  const bad = planRemediation({ findings: [], state, catalog: CATALOG, videos: after(14, 6), now: later });
+  // 10-22 YOU-552: 48h 조회는 관측 이력이 잘려 14편(max_episodes)에 닿지 못했다 — kr-cause-first 0.08× 가 6편째에도 active 였다
+  const bad = planRemediation({ findings: [], state, catalog: CATALOG, videos: after(6, 6), now: later });
   assert.equal(bad.state.active.length, 0);
   assert.equal(bad.state.history[0].verdict, 'reverted');
   const again = planRemediation({

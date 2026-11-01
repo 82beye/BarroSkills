@@ -356,7 +356,8 @@ async function main() {
   const episodeId = episodeIdOf(epDir);
   const sid = (s) => String(s.scene_id).padStart(3, '0');
   if (!values.scene) {
-    const roles = scenes.map((s) => ({ id: sid(s), role: s.role || '' }));
+    // card 를 넘겨야 데이터 카드 씬이 Grok 에서 빠진다 (grok-motion-applescript.js loadScenes 와 같은 이유).
+    const roles = scenes.map((s) => ({ id: sid(s), role: s.role || '', card: Boolean(s.card) }));
     const have = new Set(roles.map((s) => s.id).filter((id) => existsSync(join(videosDir, `scene_${id}.mp4`))));
     const now = planGrokScenes({ scenes: roles, have, episode: episodeId, ledger: readLedger(), budget: loadGrokBudget() });
     const prior = readPlan(videosDir);

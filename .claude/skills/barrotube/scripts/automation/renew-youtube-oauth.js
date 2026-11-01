@@ -13,9 +13,9 @@
  * 게시에는 홈페이지·개인정보처리방침·서비스약관 URL 과 인증된 도메인이 필요하고, 그건
  * 운영자만 만들 수 있다. 그때까지의 차선이 이 스크립트다.
  *
- * 하는 일: 만료가 가까우면 로컬 콜백 서버를 띄우고, **로그인된 실제 Chrome** 을 AppleScript
- * 로 몰아 동의 3단계를 대신 클릭한다. Playwright 가 아니라 AppleScript 인 이유는
- * grok-motion-applescript.js 와 같다 — 자동화 지문이 없고 launchd(Aqua 세션)에서 그대로 돈다.
+ * 하는 일: 만료가 가까우면 로컬 콜백 서버를 띄우고 로그인된 Aside 프로필에서
+ * 기존 권한의 동의를 다시 받는다. Aside 경로에 콜백이 없으면 기존 Chrome AppleScript
+ * 경로를 시도한다. 어느 쪽이든 새 토큰은 예상 채널을 확인한 뒤에만 저장한다.
  *
  * 실패해도 안전하다. 어느 단계에서 막히든 기존 토큰은 그대로 두고 텔레그램으로 수동 절차를
  * 알린다. 새 토큰을 받은 뒤에도 **채널이 바뀌지 않았는지 확인**하고, 다르면 되돌린다 —
@@ -32,7 +32,7 @@
 
 import { createServer } from 'node:http';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
@@ -82,6 +82,7 @@ const BRAND = process.env.BT_YT_BRAND || '바로경제';
 const EXPECTED_CHANNEL_ID = process.env.BT_YT_CHANNEL_ID || 'UCZAXYLHl1-bFqNmnwtgrcXg';
 /** 남은 일수가 이 값 이하이면 갱신한다. 7일 TTL 에 4일 여유. */
 const DEFAULT_THRESHOLD_DAYS = 3;
+const ASIDE_BIN = join(process.env.HOME, '.local/bin/aside');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -211,6 +212,31 @@ function waitForCode(port, timeoutMs) {
   });
 }
 
+/** 로그인된 Aside 프로필에서 기존 동의만 갱신한다. 채널 검증은 교환 뒤에 수행한다. */
+function driveAside(authUrl) {
+  return new Promise((resolve) => {
+    const prompt = [
+      `Open this Google OAuth URL: ${authUrl}`,
+      `Use the already signed-in Google account and select the ${BRAND} YouTube brand account for the BarroTube app.`,
+      'Approve only the scopes already shown in this authorization request; do not add permissions or switch accounts.',
+      'Complete the consent flow until the local 127.0.0.1 callback page says renewal is complete. Do not print the code or tokens.',
+      'If a new login, 2FA, or unexpected permissions are requested, stop without approving.',
+    ].join(' ');
+    const child = spawn(ASIDE_BIN, ['exec', '--host', 'local', '--permission', 'full-access', prompt],
+      { stdio: 'ignore' });
+    const timeout = setTimeout(() => child.kill('SIGTERM'), 240_000);
+    child.once('error', () => { clearTimeout(timeout); resolve(false); });
+    child.once('close', (code) => { clearTimeout(timeout); resolve(code === 0); });
+  });
+}
+
+function closeAsideCallback(port) {
+  if (!existsSync(ASIDE_BIN)) return;
+  const code = `for (const t of await listBrowserTabs()) if (t.url.startsWith('http://127.0.0.1:${port}/')) await closeTab(await attachBrowserTab(t.targetId));`;
+  try { execFileSync(ASIDE_BIN, ['repl', code], { stdio: 'ignore', timeout: 30_000 }); }
+  catch { /* 갱신 성공 여부는 콜백 탭 정리에 의존하지 않는다 */ }
+}
+
 async function exchange(code, clientId, clientSecret, redirectUri) {
   const res = await fetch(TOKEN_URL, {
     method: 'POST',
@@ -286,22 +312,31 @@ async function main() {
   })) authUrl.searchParams.set(k, v);
 
   console.log(`   콜백: ${redirectUri}`);
-  const codePromise = waitForCode(port, 180_000);
+  const codePromise = waitForCode(port, 300_000);
+  let codeReceived = false;
+  codePromise.then(() => { codeReceived = true; }, () => {});
 
   try {
-    openTab(authUrl.toString());
-    // 동의 화면은 단계마다 로딩이 있다. 화면을 판별해 누르고, 리디렉트될 때까지 반복한다.
-    let lastWait = '';
-    for (let i = 0; i < 60; i++) {
-      await sleep(2000);
-      const url = currentAuthUrl();
-      if (url && url.includes('127.0.0.1')) break;          // 리디렉트 완료
-      if (!url) continue;
-      try {
-        const r = chromeJS('accounts.google.com', CLICK_JS);
-        if (!r.startsWith('WAIT')) console.log(`   ▶ ${r}`);
-        else if (r !== lastWait) { console.log(`   … ${r}`); lastWait = r; }
-      } catch { /* 탭이 아직 없거나 전환 중 */ }
+    if (existsSync(ASIDE_BIN)) {
+      console.log('   브라우저: Aside 로그인 프로필');
+      await driveAside(authUrl.toString());
+    }
+    if (!codeReceived) {
+      console.log('   Aside 콜백 없음 — Chrome 기존 경로 시도');
+      openTab(authUrl.toString());
+      // 동의 화면은 단계마다 로딩이 있다. 화면을 판별해 누르고, 리디렉트될 때까지 반복한다.
+      let lastWait = '';
+      for (let i = 0; i < 60 && !codeReceived; i++) {
+        await sleep(2000);
+        const url = currentAuthUrl();
+        if (url && url.includes('127.0.0.1')) break;
+        if (!url) continue;
+        try {
+          const r = chromeJS('accounts.google.com', CLICK_JS);
+          if (!r.startsWith('WAIT')) console.log(`   ▶ ${r}`);
+          else if (r !== lastWait) { console.log(`   … ${r}`); lastWait = r; }
+        } catch { /* 탭이 아직 없거나 전환 중 */ }
+      }
     }
 
     const code = await codePromise;
@@ -318,6 +353,7 @@ async function main() {
     writeEnv('YOUTUBE_OAUTH_REFRESH_TOKEN', tokens.refresh_token);
     writeEnv('YOUTUBE_OAUTH_ISSUED_AT', new Date().toISOString());
     closeTab('127.0.0.1');
+    closeAsideCallback(port);
     console.log(`   ✅ 갱신 완료 — 채널 ${ch.title} (${ch.id}), 다시 7일`);
     notify(`🔐 <b>YouTube OAuth 자동 갱신</b>\n채널: ${ch.title}\n남은 기간이 ${state.days_left}일이라 갱신했습니다. 다시 7일.`);
     process.exit(0);
@@ -325,6 +361,7 @@ async function main() {
     // 기존 토큰은 건드리지 않았다 — 실패해도 남은 시간 동안은 계속 돈다.
     if (prevToken && readEnv('YOUTUBE_OAUTH_REFRESH_TOKEN') !== prevToken) writeEnv('YOUTUBE_OAUTH_REFRESH_TOKEN', prevToken);
     closeTab('127.0.0.1');
+    closeAsideCallback(port);
     console.error(`   ❌ 자동 갱신 실패: ${e.message}`);
     notify(`⚠️ <b>YouTube OAuth 자동 갱신 실패</b>\n${e.message}\n남은 기간: ${state.days_left}일\n\n수동:\n<code>node scripts/automation/setup-youtube-oauth.js</code>`);
     process.exit(1);

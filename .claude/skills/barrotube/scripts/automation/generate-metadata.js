@@ -26,6 +26,7 @@ import { callClaudeCode, callCodex, resolveChain, runEngineChain } from './lib/t
 import { findHeadlineCollision, recentTitles, selectTitle } from './lib/title-select.js';
 import { classifyTitle, TYPE_LABEL } from './lib/title-types.js';
 import { summaryTitle } from './lib/summary-title.js';
+import { reviewSummaryMetadata } from './lib/editorial-spine.js';
 import { readActiveRemedies, remediesApplied } from './lib/growth-remediation.js';
 
 export { headlineNumberTokens, findHeadlineCollision } from './lib/title-select.js';
@@ -128,6 +129,8 @@ RULES:
 - privacyStatus는 절대 설정하지 마라 (사용자가 별도 지정)
 ${isShorts ? '- Description에 "#Shorts" 포함 필수' : '- "#Shorts" 절대 사용 금지 (롱폼은 Shorts 배지 박탈됨)'}
 - description 말미에 면책 문구 포함: "본 영상은 투자 조언이 아닙니다. 투자 결정은 본인의 판단과 책임 하에 이루어져야 합니다."
+- 요약·설명·플랫폼 캡션에는 영상 대본의 narration·subtitle_text 에 실제 들어간 사건과 수치만 써라. 브리프에만 있는 수치·인과를 영상 내용처럼 소개하지 마라.
+- 한·미 같은 날짜 장을 비교할 때 한국 장은 미국 정규장보다 먼저 마감한다. 미국 종가가 앞선 한국 장의 원인이라는 표현을 쓰지 마라.
 
 CRITICAL JSON FORMATTING:
 - String 값 내부에 줄바꿈이 필요하면 반드시 literal \\n 문자열을 사용 (실제 newline 금지).
@@ -324,6 +327,7 @@ async function main() {
     engine: { type: 'string' },         // claude | codex | gemini | auto(기본)
     model: { type: 'string', short: 'm' },
     'publish-at': { type: 'string' },   // "HH:MM" (KST) 또는 완전한 ISO8601. 예약 공개.
+    validate: { type: 'boolean' },     // 저장된 메타데이터와 최종 대본만 검사 (LLM 호출 없음)
   } });
   if (!values.episode) { console.error('Usage: generate-metadata.js --episode <dir> [--platform long|shorts] [--engine claude|codex|gemini] [--publish-at HH:MM]'); process.exit(1); }
 
@@ -347,6 +351,17 @@ async function main() {
   const scriptMd = readFileSync(scriptPath, 'utf-8');
   const fm = parseFrontmatter(scriptMd);
   if (!fm) { console.error('❌ No frontmatter'); process.exit(1); }
+
+  if (values.validate) {
+    const metaPath = join(baseDir, '70_publish_meta.json');
+    if (!existsSync(metaPath)) throw new Error(`배포 메타데이터가 없습니다: ${metaPath}`);
+    const meta = JSON.parse(readFileSync(metaPath, 'utf-8'));
+    const problems = fm.form === 'market-summary' ? reviewSummaryMetadata(meta, fm.scenes) : [];
+    for (const problem of problems) console.error(`❌ 요약 메타데이터 불일치: ${problem}`);
+    if (problems.length) throw new Error(`배포 메타데이터 검증 실패: ${problems.length}건`);
+    console.log(`✅ 배포 메타데이터 검증 통과: ${metaPath}`);
+    return;
+  }
 
   const format = fm.format || 'shorts';
   // series_name을 paperclip/config/series.json에서 동적으로 로드 → 다른 시리즈에 sp500 라벨 박히는 회귀 방지
@@ -423,7 +438,9 @@ async function main() {
     `[EPISODE]`, fm.episode_id, `Channel: ${fm.channel_id}`, `Format: ${format}`,
     seriesInfo ? `Series: ${seriesInfo.series_id} ep ${seriesInfo.series_episode}/${seriesInfo.series_total}` : '',
     '',
-    `[BRIEF]`, brief.slice(0, 800), '',
+    // 요약 포맷의 배포 문구는 최종 영상 대본만 따라야 한다. 원 브리프를
+    // 다시 주면 팩트체크 재작성으로 빠진 수치가 설명문에 되살아난다.
+    ...(fm.form === 'market-summary' ? [] : ['[BRIEF]', brief.slice(0, 800), '']),
     `[SCRIPT SCENES]`,
     // narration 은 TTS 정본이라 숫자가 한글 수사다("국채 삼십년물", "이천이십일년").
     // 그게 설명문·태그로 그대로 새면 읽기도 나쁘고 검색도 안 된다 — 2026-08-15 EP-0094
@@ -666,6 +683,14 @@ async function main() {
     meta.title = summaryTitle(cfg.title.template, fm.title_hook, fm.us_session);
     if (Array.isArray(meta.tags)) meta.tags = [...new Set([cfg.series_label, '미국증시', ...meta.tags])];
     console.log(`   🗞  요약 포맷 제목: ${meta.title}`);
+  }
+
+  if (fm.form === 'market-summary') {
+    const problems = reviewSummaryMetadata(meta, fm.scenes);
+    if (problems.length) {
+      for (const problem of problems) console.error(`❌ 요약 메타데이터 불일치: ${problem}`);
+      throw new Error('배포 문구가 최종 영상 대본과 다릅니다. 대본에 없는 수치·수급을 지우고 다시 생성하세요.');
+    }
   }
 
   const outPath = join(baseDir, '70_publish_meta.json');

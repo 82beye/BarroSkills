@@ -141,6 +141,10 @@ async function initResumableUpload(accessToken, videoBody, fileSize) {
 
   const uploadUrl = res.headers.get('location');
   if (!uploadUrl) throw new Error('No Location header returned from resumable init');
+  return assertUploadUrl(uploadUrl);
+}
+
+function assertUploadUrl(uploadUrl) {
   const parsed = new URL(uploadUrl);
   if (parsed.origin !== 'https://www.googleapis.com' || !parsed.pathname.startsWith('/upload/youtube/')) {
     throw new Error('Unexpected resumable upload URL; refusing to send approved media');
@@ -148,17 +152,42 @@ async function initResumableUpload(accessToken, videoBody, fileSize) {
   return uploadUrl;
 }
 
+// 308 은 YouTube 의 "Resume Incomplete" 이지 리다이렉트가 아니다. 그런데 Node fetch 는 308 을
+// 리다이렉트로 보고 redirect:'error' 에서 "fetch failed (unexpected redirect)" 로 던진다.
+// 그래서 아래 상태 확인이 끊긴 업로드마다 터져 세션을 한 번도 이어 올리지 못했다
+// (2026-10-22 EP-2026-0251: 56.3MB 중 10.7MB 에서 멈춤, 빈 공개 영상만 남음). 'manual' 은 308 을 그대로 돌려준다.
+async function probeUploadSession(uploadUrl, size, accessToken) {
+  const res = await fetch(uploadUrl, {
+    method: 'PUT', redirect: 'manual',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Length': '0',
+      'Content-Range': `bytes */${size}` },
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (res.status === 200 || res.status === 201) return { video: await res.json() };
+  if (res.status !== 308) throw new Error(`Upload status check failed: HTTP ${res.status}; session preserved`);
+  const range = res.headers.get('range');
+  const match = range && /^bytes=0-(\d+)$/.exec(range);
+  if (range && !match) throw new Error('Invalid resumable upload Range');
+  return { next: match ? Number(match[1]) + 1 : 0, retryAfter: res.headers.get('retry-after') };
+}
+
 /**
- * 영상 파일을 Resumable URL에 PUT (단일 청크)
+ * 영상 파일을 Resumable URL에 PUT (단일 청크). probeFirst 면 저장된 세션이 받은 곳부터 잇는다.
  */
-async function uploadVideoChunk(uploadUrl, buffer, accessToken, onUploadAttempt) {
+export async function uploadVideoChunk(uploadUrl, buffer, accessToken, onUploadAttempt, { probeFirst = false } = {}) {
   let offset = 0;
+  if (probeFirst) {
+    const probe = await probeUploadSession(uploadUrl, buffer.length, accessToken);
+    if (probe.video) return probe.video;
+    if (probe.next >= buffer.length) throw new Error('Unexpected resumable upload offset; reconcile session');
+    offset = probe.next;
+  }
   for (let attempt = 0; attempt < 3; attempt++) {
     onUploadAttempt?.();
     let res;
     try {
       res = await fetch(uploadUrl, {
-        method: 'PUT', redirect: 'error',
+        method: 'PUT', redirect: 'manual',
         headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'video/*',
           'Content-Length': String(buffer.length - offset),
           'Content-Range': `bytes ${offset}-${buffer.length - 1}/${buffer.length}` },
@@ -170,21 +199,12 @@ async function uploadVideoChunk(uploadUrl, buffer, accessToken, onUploadAttempt)
       throw new Error(`Upload failed: HTTP ${res.status}; session preserved for reconciliation`);
     }
     await delay(1000 * 2 ** attempt);
-    res = await fetch(uploadUrl, {
-      method: 'PUT', redirect: 'error',
-      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Length': '0',
-        'Content-Range': `bytes */${buffer.length}` },
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (res.status === 200 || res.status === 201) return res.json();
-    if (res.status !== 308) throw new Error(`Upload status check failed: HTTP ${res.status}; session preserved`);
-    const range = res.headers.get('range');
-    const match = range && /^bytes=0-(\d+)$/.exec(range);
-    if (range && !match) throw new Error('Invalid resumable upload Range');
-    const next = match ? Number(match[1]) + 1 : 0;
+    const probe = await probeUploadSession(uploadUrl, buffer.length, accessToken);
+    if (probe.video) return probe.video;
+    const next = probe.next;
     if (next < offset || next >= buffer.length) throw new Error('Unexpected resumable upload offset; reconcile session');
     offset = next;
-    const retryAfter = res.headers.get('retry-after');
+    const retryAfter = probe.retryAfter;
     if (retryAfter) {
       const seconds = /^\d+$/.test(retryAfter) ? Number(retryAfter) : Math.ceil((Date.parse(retryAfter) - Date.now()) / 1000);
       if (!Number.isFinite(seconds) || seconds > 60) throw new Error('Upload retry deferred by server; session preserved');
@@ -236,6 +256,7 @@ export async function publishYouTube({
   channelDefaults = {},
   onUploadAttempt = null,
   onUploadSession = null,
+  resumeSession = null,
 }) {
   // Copy every upload input before the first await. Approval callers pass the
   // exact verified buffers, so later filesystem changes cannot alter bytes sent.
@@ -281,13 +302,25 @@ export async function publishYouTube({
   console.log('🔐 Verifying OAuth channel identity...');
   await assertOAuthChannel(accessToken, expectedChannelId);
 
-  console.log('📤 Initializing resumable upload...');
-  const uploadUrl = await initResumableUpload(accessToken, videoBody, fileSize);
-  onUploadSession?.({ upload_url: uploadUrl, file_size: fileSize, channel_id: expectedChannelId,
-    video_sha256: sha256Buffer(approvedVideo), metadata_sha256: sha256Buffer(JSON.stringify(videoBody)) });
+  const session = { file_size: fileSize, channel_id: expectedChannelId,
+    video_sha256: sha256Buffer(approvedVideo), metadata_sha256: sha256Buffer(JSON.stringify(videoBody)) };
+  let uploadUrl;
+  if (resumeSession) {
+    // 세션을 연 바로 그 바이트·메타데이터·채널일 때만 잇는다. 하나라도 다르면 다른 영상이 된다.
+    if (['file_size', 'channel_id', 'video_sha256', 'metadata_sha256'].some((k) => resumeSession[k] !== session[k])) {
+      throw new Error('Saved upload session does not match the approved video, metadata, or channel; refusing to resume');
+    }
+    uploadUrl = assertUploadUrl(resumeSession.upload_url);
+    console.log('📤 Resuming saved upload session...');
+  } else {
+    console.log('📤 Initializing resumable upload...');
+    uploadUrl = await initResumableUpload(accessToken, videoBody, fileSize);
+    onUploadSession?.({ upload_url: uploadUrl, ...session });
+  }
 
   console.log(`📤 Uploading video (${(fileSize / 1024 / 1024).toFixed(2)} MB)...`);
-  const video = await uploadVideoChunk(uploadUrl, approvedVideo, accessToken, onUploadAttempt);
+  const video = await uploadVideoChunk(uploadUrl, approvedVideo, accessToken, onUploadAttempt,
+    { probeFirst: Boolean(resumeSession) });
   const videoId = video.id;
   if (typeof videoId !== 'string' || !videoId) throw new Error('Upload response has no video ID; reconcile saved session');
   console.log(`✅ Uploaded: video_id=${videoId}`);
@@ -360,11 +393,55 @@ export function persistPublishResult(reservation, value, { replace = false } = {
   }
 }
 
+// 끊긴 업로드의 락을 이어받는다(--resume-upload). 락에 저장된 세션이 온전해야 하고,
+// 살아 있는 프로세스가 쥔 락이면 손대지 않는다. 죽은 소유자 하나당 인계 표식을 'wx' 로
+// 선점한 프로세스만 락의 pid 를 자기로 바꾼다 — 동시에 두 재개가 같은 세션을 잇지 못한다.
+export function adoptUploadReservation(path) {
+  const resolvedPath = resolve(path);
+  const existingVideoId = existingPublishVideoId(resolvedPath);
+  if (existingVideoId) throw new Error(`Episode is already published as ${existingVideoId}`);
+  const lockPath = `${resolvedPath}.lock`;
+  if (!existsSync(lockPath)) throw new Error(`No saved upload session to resume: ${lockPath}`);
+  const session = JSON.parse(readFileSync(lockPath, 'utf8'));
+  if (!session.upload_url || !Number.isInteger(session.file_size) || !session.video_sha256 || !session.metadata_sha256) {
+    throw new Error('Upload lock has no complete saved session; reconcile manually');
+  }
+  if (Number.isInteger(session.pid) && session.pid !== process.pid) {
+    let alive = true;
+    try { process.kill(session.pid, 0); } catch (error) { alive = error.code === 'EPERM'; }
+    if (alive) throw new Error(`Upload lock is held by live pid ${session.pid}`);
+  }
+  if (session.pid === process.pid) return { path: resolvedPath, lockPath, session };
+  const claimPath = `${lockPath}.adopt-${Number.isInteger(session.pid) ? session.pid : 'none'}`;
+  try {
+    closeSync(openSync(claimPath, 'wx', 0o600));
+  } catch (error) {
+    if (error.code === 'EEXIST') throw new Error(`Upload session is already being resumed by another process: ${claimPath}`);
+    throw error;
+  }
+  try {
+    // 표식을 쥔 뒤 다시 읽는다. 그 사이 다른 프로세스가 인계를 끝냈으면 pid 가 바뀌어 있다.
+    const current = existsSync(lockPath) ? JSON.parse(readFileSync(lockPath, 'utf8')) : null;
+    if (!current || current.pid !== session.pid || current.upload_url !== session.upload_url) {
+      throw new Error('Upload lock changed owner during adoption; retry after checking the lock');
+    }
+    const adopted = { ...current, pid: process.pid, adopted_from_pid: session.pid ?? null, adopted_at: new Date().toISOString() };
+    const tmp = `${lockPath}.${process.pid}.adopt.tmp`;
+    writeFileSync(tmp, JSON.stringify(adopted, null, 2), { mode: 0o600, flag: 'wx' });
+    renameSync(tmp, lockPath);
+    return { path: resolvedPath, lockPath, session: adopted };
+  } finally {
+    unlinkSync(claimPath);
+  }
+}
+
 export function releasePublishResultReservation(reservation, { uploaded = false, persisted = false } = {}) {
   if (!reservation) return;
   // Keep a reconciliation marker when YouTube accepted bytes but the durable
   // result could not be written. Retrying blindly could create a duplicate.
-  if ((!uploaded || persisted) && existsSync(reservation.lockPath)) unlinkSync(reservation.lockPath);
+  // An adopted session already holds remote bytes, so it is kept until persisted.
+  const keep = !persisted && (uploaded || reservation.session);
+  if (!keep && existsSync(reservation.lockPath)) unlinkSync(reservation.lockPath);
 }
 
 function parseCliArgs(args) {

@@ -32,7 +32,9 @@ import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, ren
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { getSecret } from './config-loader.js';
-import { parseDuration, lengthBucket, isShorts, appendStatsHistory } from './lib/competitor-analytics.js';
+import {
+  parseDuration, lengthBucket, isShorts, appendStatsHistory, CHANNEL_STATS_HISTORY_MAX,
+} from './lib/competitor-analytics.js';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const OUT_DIR = join(ROOT, 'workspace', 'growth', 'channel');
@@ -217,7 +219,7 @@ async function main() {
           views: numOrNull(v.statistics?.viewCount),
           likes: numOrNull(v.statistics?.likeCount),
           comments: numOrNull(v.statistics?.commentCount),
-        }),
+        }, CHANNEL_STATS_HISTORY_MAX),
       };
       fetched++;
     }

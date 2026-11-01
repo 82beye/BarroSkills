@@ -545,6 +545,11 @@ if [ -z "$RESUME_EP" ]; then
     CREATE_ARGS=(--channel econ-daily --topic "$TOPIC")
     [ -n "$SLOT_FORMAT" ]  && CREATE_ARGS+=(--format "$SLOT_FORMAT")
     [ -n "$SLOT_PERSONA" ] && CREATE_ARGS+=(--persona "$SLOT_PERSONA")
+    # 요약 포맷의 씬 목표(150초)를 brief 에도 기록한다. shorts-3min 의
+    # 일반 기본값(172초)을 쓰면 QA 는 통과해도 brief 와 영상 길이가 어긋난다.
+    if [ "$SUMMARY_FORM" = "1" ]; then
+      CREATE_ARGS+=(--length "$(json_get "$SUMMARY_CFG" "d['target_total_seconds']")")
+    fi
     CREATE_OUT=$(node scripts/automation/create-episode.js "${CREATE_ARGS[@]}" 2>&1)
     echo "$CREATE_OUT"
     EP_ID=$(echo "$CREATE_OUT" | grep -oE "EP-[0-9]{4}-[0-9]+" | head -1)
@@ -594,10 +599,16 @@ if [ -n "$RESUME_EP" ] && [ -s "$SCRIPT_PATH" ] && grep -q '^form: market-summar
   SUMMARY_FORM=1
   SLOT_SCENES=$(json_get "$SUMMARY_CFG" "len(d['scenes'])")
 fi
-# 대본 생성기 — 요약 포맷이 실패하면 같은 EP(3분 세로)를 일반 대본으로 살린다.
+# 대본 생성기 — 내용 계약 실패(exit 3)는 다른 작가로 우회하지 않는다.
 generate_episode_script() {
   if [ "$SUMMARY_FORM" = "1" ]; then
-    node scripts/automation/generate-summary-script.js --episode "$EP_ID" --date "$TODAY" && return 0
+    local summary_status=0
+    node scripts/automation/generate-summary-script.js --episode "$EP_ID" --date "$TODAY" || summary_status=$?
+    [ "$summary_status" = "0" ] && return 0
+    if [ "$summary_status" = "3" ]; then
+      echo "  ❌ 요약 대본 내용 계약 실패 — 일반 대본으로 우회하지 않음"
+      return 3
+    fi
     echo "  ⚠ 요약 대본 실패 — 같은 EP 를 일반 대본으로 진행"
     audit "summary_script_fallback" "WARN" "ep=$EP_ID"
     SUMMARY_FORM=0
@@ -610,6 +621,15 @@ elif [ "$DRY_RUN" = "1" ]; then
   echo "[DRY_RUN] 대본 생성 ($([ "$SUMMARY_FORM" = "1" ] && echo generate-summary-script.js || echo generate-script.js))"
 else
   generate_episode_script || fail_with_alert "Phase 4 script" "대본 생성 실패"
+fi
+
+# 생성기 재시도와 별도로 저장된 최종본을 검사한다. RESUME·요약 포맷도 같은 문턱을 지난다.
+# --strict 는 error 만 막고, 과탐 가능성이 있는 warn 은 보고서에 남긴다.
+if [ "$DRY_RUN" = "1" ]; then
+  echo "[DRY_RUN] validate-script-quality.js --file $SCRIPT_PATH --strict"
+else
+  node scripts/automation/validate-script-quality.js --file "$SCRIPT_PATH" --strict \
+    || fail_with_alert "Phase 4 대본 품질" "품질 계약 error 가 남았습니다. 대본을 수정한 뒤 재개하세요."
 fi
 
 # ─────────────────────────────────────────────────
@@ -625,6 +645,8 @@ else
     audit "auto_pipeline_prompt_retry" "WARN" "slot=$SLOT ep=$EP_ID"
     generate_episode_script --force \
       || fail_with_alert "Phase 5 rewrite" "대본 재생성 실패"
+    node scripts/automation/validate-script-quality.js --file "$SCRIPT_PATH" --strict \
+      || fail_with_alert "Phase 5 재생성 대본 품질" "재생성된 대본에 품질 계약 error 가 남았습니다."
     node scripts/automation/validate-image-prompts.js --episode "$EP_DIR" --platform "$PLATFORM" \
       || halt_for_human "Phase 5 계약" "재생성 후에도 image_prompt 계약 위반 — 이미지를 굽지 않고 멈췄습니다. 대본을 손보고 재개하세요."
   fi
@@ -838,6 +860,12 @@ if [ "$DRY_RUN" = "0" ] && [ -s "$FACTCHECK_PATH" ]; then
     echo "   ✅ 재작성 ${FC_REWRITES}회로 팩트체크 게이트 통과"
     audit "auto_pipeline_factcheck_recovered" "INFO" "slot=$SLOT ep=$EP_ID rewrites=$FC_REWRITES"
   fi
+fi
+
+# 팩트체크 재작성은 대본을 바꿀 수 있다. 비용이 드는 자산 생성 전에 최종본을 다시 검사한다.
+if [ "$DRY_RUN" = "0" ]; then
+  node scripts/automation/validate-script-quality.js --file "$SCRIPT_PATH" --strict \
+    || fail_with_alert "Phase 6 최종 대본 품질" "팩트체크 후 품질 계약 error 가 남았습니다. 근거를 유지하며 대본을 수정하세요."
 fi
 
 # 공인 인물 캐리커처 보강 (2026-09-29 — lib/ensure-caricature.js). 대본이 CHARACTERIZE 인물
@@ -1492,6 +1520,13 @@ elif [ $PRODUCE_RC -ne 0 ]; then
 fi
 
 audit "auto_pipeline_produced" "INFO" "slot=$SLOT ep=$EP_ID"
+
+# S9 를 건너뛴 재개 회차도 저장된 배포 문구를 다시 본다. 대본에 없는
+# 코스피·외국인 수치를 설명문에 넣은 채 QA/자동 승인을 통과시키지 않는다.
+if [ "$SUMMARY_FORM" = "1" ] && [ "$DRY_RUN" = "0" ]; then
+  node scripts/automation/generate-metadata.js --episode "$EP_DIR" --platform "$PLATFORM" --validate \
+    || fail_with_alert "Phase 8 요약 메타데이터" "저장된 배포 문구가 영상 대본과 다릅니다. S9 메타데이터를 고쳐 재개하세요."
+fi
 
 # Grok 이 정본인데 HyperFrames 로 대체돼 나가면 화면이 죽는다 — Grok 은 피사체가 실제로
 # 움직이고, HyperFrames 는 스틸에 팬·줌을 거는 것뿐이다. QA 는 "hyperframes 5" 라고 적기만

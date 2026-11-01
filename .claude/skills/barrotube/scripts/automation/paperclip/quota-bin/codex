@@ -1,0 +1,3 @@
+#!/bin/sh
+# Exact native CLI basename keeps Paperclip's real hello validation enabled.
+exec /Users/beye/.nvm/versions/node/v24.11.1/bin/node "${0%/*}/../quota-cli.js" codex "$@"

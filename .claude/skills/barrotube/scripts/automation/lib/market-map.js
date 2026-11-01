@@ -251,3 +251,40 @@ export function krSessionLabel(krSession, fallbackDate) {
   // status 가 아니라 거래시간으로 판정한 open 을 쓴다 (위 주석 참조).
   return { date, text: krSession?.open ? '장중' : '15:30 마감' };
 }
+
+/**
+ * 네이버 수집이 백오프 뒤에도 실패했을 때 대신 실을 코스피·테마. 없으면 null — 판을 실패로 둔다.
+ * 오늘 15:45 KRX 종가 스냅샷이 있으면 그것(석간은 어차피 이걸 쓴다). 조간은 직전 유효 스냅샷을
+ * 세션 라벨째로 끌어온다 — 08:00 엔 한국장이 안 열려 평소에도 직전 세션을 싣는다.
+ * 석간은 코스피가 선도 시장이라 직전 값으로 대신하지 않는다: 오늘 아침 장중 값을 「석간」으로 내보내게 된다.
+ */
+export function krFallback({ edition, snapshot = null, priorKr = null, priorThemes = null }) {
+  if (snapshot?.kr?.length && snapshot.krSession?.date) {
+    return { kr: snapshot.kr, themes: snapshot.themes ?? [], krSession: snapshot.krSession, themesDate: null };
+  }
+  if (edition !== 'morning' || !priorKr?.kr?.length) return null;
+  return {
+    kr: priorKr.kr, themes: priorThemes?.themes ?? [],
+    krSession: { ...priorKr.session, carried: true }, themesDate: priorThemes?.date ?? null,
+  };
+}
+
+/** 네트워크 재시도 간격(ms). 0.7·1.4초로는 DarkWake 직후·순간 끊김을 못 넘겼다 — 1.5·3·6초. */
+export const backoffMs = (attempt) => 1500 * 2 ** attempt;
+
+/**
+ * Chrome 을 띄운다. 실패하면 한 번만 다시 띄운다 (2026-10-20 조간: launch 180초 타임아웃으로 판 전체가 죽었다).
+ * chromium 은 playwright-core 의 것을 넘긴다 — 테스트가 가짜를 넣을 수 있게.
+ */
+export async function launchChrome(chromium, { tries = 2, waitMs = 5000, log = console.warn, sleep } = {}) {
+  const wait = sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  for (let a = 1; ; a += 1) {
+    try {
+      return await chromium.launch({ channel: 'chrome', headless: true });
+    } catch (e) {
+      if (a >= tries) throw e;
+      log(`⚠ Chrome 실행 실패 (${a}/${tries}) — ${String(e?.message ?? e).split('\n')[0]} · ${Math.round(waitMs / 1000)}초 뒤 다시 띄운다`);
+      await wait(waitMs);
+    }
+  }
+}

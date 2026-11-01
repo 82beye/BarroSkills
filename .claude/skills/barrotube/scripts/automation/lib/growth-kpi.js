@@ -70,7 +70,7 @@ export function recentVideos(videos, now, windowDays = 7) {
  *     "조회가 무너지는 주에 초록불이 켜지던 KPI를 고친다" 다. 옛 값이 틀렸던 것이다.
  * 판본이 다르면 판정하지 않는다 — 실험을 태우느니 한 주 더 돌리는 게 싸다.
  */
-export const METRICS_VERSION = 3;
+export const METRICS_VERSION = 4;
 
 /** 계산식이 바뀐 시점들. 판본 필드가 없던 옛 문서도 생성 시각으로 되짚는다. */
 const METRICS_EPOCHS = [
@@ -126,13 +126,15 @@ export function views48Index(videos, now, { windowDays = 7, atHours = 48 } = {})
   // 기준선에서 **최근 창을 뺀다.** 넣으면 분모가 분자를 따라 내려가 변화가 지워진다 —
   // 2026-09-14 실측: 넣으면 475/518 = 0.92 (완만해 보인다), 빼면 475/792 = 0.60 (실제 낙폭).
   const pool = [];
+  let eligible = 0;
   for (const v of videos) {
     const d = ageDays(v, now);
     if (d === null || d <= windowDays || d > 37) continue;
+    eligible += 1;
     const x = at(v);
     if (Number.isFinite(x)) pool.push(x);
   }
-  if (pool.length < 3) return null;
+  if (views48BaselineShort({ eligible, observed: pool.length })) return null;
   const base = median(pool);
   if (!base || base <= 0) return null;
   const recent = [];
@@ -144,6 +146,35 @@ export function views48Index(videos, now, { windowDays = 7, atHours = 48 } = {})
   }
   if (!recent.length) return null;
   return median(recent) / base;
+}
+
+/**
+ * 48h 기준선 표본 충족 기준: 관측 10편 이상 + 대상의 60% 이상.
+ * 미달이면 지수를 내지 않는다(NA·표본부족). 2026-10-21 기준선은 56편 중 19편만 관측이 남아 있었다 —
+ * stats_history 가 15일치로 잘려 남은 것은 젊은 쪽뿐이고, 그 19편의 중앙값을 기준선이라 부를 수 없다(YOU-551).
+ */
+export const VIEWS48_BASELINE_MIN = { observed: 10, ratio: 0.6 };
+
+export function views48BaselineShort({ eligible, observed }) {
+  return observed < VIEWS48_BASELINE_MIN.observed || observed < VIEWS48_BASELINE_MIN.ratio * eligible;
+}
+
+/** 48h 지수의 관측 표본과 결손을 값과 함께 공개한다. */
+export function views48Coverage(videos, now, { windowDays = 7, atHours = 48 } = {}) {
+  const out = { observation_window_hours: [atHours - 6, atHours + 6] };
+  for (const [name, inWindow] of [
+    ['recent', (d) => d >= atHours / 24 && d <= windowDays],
+    ['baseline', (d) => d > windowDays && d <= 37],
+  ]) {
+    const eligible = videos.filter((v) => (v.privacy == null || v.privacy === 'public')
+      && (v.upload_status == null || v.upload_status === 'processed')
+      && inWindow(ageDays(v, now)));
+    const values = eligible.map((v) => viewsAtAge(v, atHours)).filter(Number.isFinite);
+    out[name] = { eligible: eligible.length, observed: values.length,
+      missing: eligible.length - values.length, zero: values.filter((x) => x === 0).length,
+      median_views: median(values) };
+  }
+  return out;
 }
 
 /**
@@ -293,22 +324,24 @@ export function indexViewsAt(videos, t) {
 }
 
 /**
- * 게시 후 maxHours 시점의 조회수. Shorts 는 초기 이틀에 승부가 나고 그 뒤로는 거의 눕는다.
- * 나이가 다른 영상을 같은 자로 재려면 vpd 가 아니라 이 값을 써야 한다.
+ * 게시 후 maxHours 시점에 가장 가까운 조회수 (±6시간).
+ * 수집이 늦었거나 빠른 영상끼리 24시간 폭으로 비교하지 않는다.
  */
 export function viewsAtAge(v, maxHours = 48) {
   const pub = Date.parse(v?.publishedAt ?? '');
   if (!Number.isFinite(pub)) return null;
   let val = null;
-  let lastAt = -Infinity;
+  let bestGap = Infinity;
+  let bestAt = -Infinity;
   for (const h of v.stats_history ?? []) {
     const at = obsAt(h);
     const age = (at - pub) / HOUR_MS;
-    // 하루 두 번 수집하므로 목표 시점 직전 24시간 안의 관측만 쓴다.
     if (!Number.isFinite(at) || !Number.isFinite(h.views) || h.views < 0) continue;
-    if (age >= Math.max(0, maxHours - 24) && age <= maxHours && at >= lastAt) {
+    const gap = Math.abs(age - maxHours);
+    if (gap <= 6 && (gap < bestGap || (gap === bestGap && at > bestAt))) {
       val = h.views;
-      lastAt = at;
+      bestGap = gap;
+      bestAt = at;
     }
   }
   return val;
@@ -406,7 +439,15 @@ export function computeScorecard({ videos, history, config, now, analytics = nul
   }
   push('video_hit_rate_7d', hitRate(videos, now, { multiple: k.video_hit_rate_7d.hit_multiple }));
   // 히트율 바로 옆에 둔다 — RED 가 '한 계단'인지 '절반'인지는 이 값이 말해 준다.
-  if (k.views_48h_index_7d) push('views_48h_index_7d', views48Index(videos, now));
+  if (k.views_48h_index_7d) {
+    push('views_48h_index_7d', views48Index(videos, now));
+    const base = views48Coverage(videos, now).baseline;
+    if (views48BaselineShort(base)) {
+      const o = out.at(-1);
+      o.method = 'sample_short';
+      o.display = `표본부족 ${base.observed}/${base.eligible}`;
+    }
+  }
   if (k.views_per_publish_7d) push('views_per_publish_7d', viewsPerPublish(videos, now));
   push('like_rate_7d', likeRate(videos, now));
   if (k.avg_view_pct_7d) push('avg_view_pct_7d', avgViewPct(analytics, now), analytics ? 'analytics' : 'na');

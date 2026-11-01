@@ -8,8 +8,8 @@
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYAML } from 'yaml';
-import { normalizeIndex, viewsAtAge } from './growth-kpi.js';
-import { kstDate, LIKE_CTA, FOLLOW_CTA } from './growth-diagnosis.js';
+import { normalizeIndex, viewsAtAge, indexViewsAt, netDelta, recentVideos } from './growth-kpi.js';
+import { kstDate, isOperatorPass, LIKE_CTA, FOLLOW_CTA } from './growth-diagnosis.js';
 import { classifyTitle } from './title-types.js';
 import { loadCatalog, emptyState, remedyProgress, SCRIPT_LOCKED_FORMS } from './growth-remediation.js';
 
@@ -131,13 +131,35 @@ export function loadEpisodes(root, audit, videosById) {
   return { episodes, cancelled };
 }
 
+/**
+ * workspace/ops/runs/<KST 날짜>/slot_<slot>[#n|@am].json 최근 days 일 → { 'slot|day': 마커 }.
+ * 운영자 패스는 감사 로그가 아니라 마커(guard·operatorSkip)에만 남을 수 있다. 같은 날 재실행이 여럿이면
+ * 운영자 패스인 쪽을 남긴다.
+ */
+export function loadRunMarkers(root, now, days = 8) {
+  const out = {};
+  for (let n = days; n >= 0; n--) {
+    const day = kstDate(now.getTime() - n * 86400_000);
+    const dir = join(root, 'workspace', 'ops', 'runs', day);
+    if (!existsSync(dir)) continue;
+    for (const f of readdirSync(dir).sort()) {
+      const slot = f.match(/^slot_([^#@]+?)(?:[#@][^/]*)?\.json$/)?.[1];
+      const doc = slot ? loadJSON(join(dir, f)) : null;
+      if (!doc) continue;
+      const key = `${slot}|${day}`;
+      if (!out[key] || !isOperatorPass(out[key])) out[key] = doc;
+    }
+  }
+  return out;
+}
+
 /** 진단기·매니저 공용 사실 묶음. videos 는 normalizeIndex 결과에 slot 이 붙은 것. */
 export function loadFacts(root, now) {
   const videos = normalizeIndex(loadJSON(join(root, 'workspace', 'growth', 'channel', 'videos.json'), {}), now);
   const videosById = new Map(videos.map((v) => [v.videoId, v]));
   const audit = loadAudit(root, now);
   const { episodes, cancelled } = loadEpisodes(root, audit, videosById);
-  return { videos, audit, episodes, cancelled };
+  return { videos, audit, episodes, cancelled, markers: loadRunMarkers(root, now) };
 }
 
 const pct = (x, d = 2) => (Number.isFinite(x) ? Number((x * 100).toFixed(d)) : null);
@@ -157,6 +179,137 @@ export function kpiTrend(root, date, days = 14) {
       kpis: Object.fromEntries((doc.kpis ?? []).map((k) => [k.id, k.display ?? k.value])) });
   }
   return out;
+}
+
+/**
+ * 채널 데스크 — 미시 처방(대본·제목) 앞에 채널 방향(거시)을 같은 판단자가 먼저 보게 하는 사실 묶음.
+ * 설계서 workspace/growth/proposals/2026-10-21-cmo-daily-desk.md (결정 수정 10-21 17:40). 산수와 경보는 여기서
+ * 판정한다 — LLM 이 「경보가 났다」를 지어내거나 놓치지 않게.
+ */
+export const DESK = {
+  zeroReach: 35,        // 48h 이 이하 = 첫 시험 노출에서 탈락한 「미배포형」
+  deadReach: 10,        // 하루에 이 이하가 deadPerDay 편 이상이면 경보
+  deadPerDay: 2,
+  lowIndex: 0.5,        // 48h 조회 지수가 lowIndexDays 일 연속 이 미만이면 경보
+  lowIndexDays: 3,
+  repeatHours: 72,      // 이 시간 안에 같은 주제 repeatCount 회 이상이면 경보 (10-10~12 가계 연체 718→143→32)
+  repeatCount: 3,
+};
+
+// 주제 반복은 **제목**으로 센다. 주제문(05_desk_topic.json)은 배경으로 금리·유가를 거의 매번 적어서 그걸로 세면
+// 금리가 날마다 걸린다. 시청자가 「또 그 얘기」로 받는 것은 피드에 보이는 제목이다.
+export const DESK_TOPICS = {
+  반도체: /반도체|삼성전자|하이닉스|메모리|D램|엔비디아|마이크론|TSMC|램리서치/i,
+  'AI': /(?<![A-Za-z])AI(?![A-Za-z])|인공지능|데이터센터/,
+  '금리·연준': /금리|국채|10년물|연준|FOMC/,
+  '유가': /유가|원유|브렌트|WTI|유조선|석유/,
+  가계부채: /연체|가계|주담대/,
+  환율: /환율|원\/달러|원화|달러 ?(?:강세|약세|인덱스)/,
+  금: /금값|(?<![가-힣])금(?=[이은값·\s])/,
+  부동산: /집값|아파트|부동산|전세|주택/,
+  코인: /비트코인|가상자산|코인|이더리움/,
+};
+
+export function deskTopics(title) {
+  const t = String(title ?? '').replace(/#\S+/g, '');
+  return Object.entries(DESK_TOPICS).filter(([, re]) => re.test(t)).map(([k]) => k);
+}
+
+const isPublic = (v) => (v.privacy == null || v.privacy === 'public') && (v.upload_status == null || v.upload_status === 'processed');
+const r1 = (x, d = 0) => (Number.isFinite(x) ? Number(x.toFixed(d)) : null);
+
+/**
+ * 48h 조회. 관측 창(±6h)을 놓친 영상은 지금 조회로 본다 — 48h 조회의 상한이라 「≤35뷰」 판정은 틀리지 않는다.
+ * 아직 48시간이 안 됐으면 null.
+ */
+function reach48(v, now) {
+  const x = viewsAtAge(v, 48);
+  if (Number.isFinite(x)) return x;
+  const ageH = (now.getTime() - Date.parse(v.publishedAt ?? '')) / 3600_000;
+  return ageH >= 48 && Number.isFinite(v.views) ? v.views : null;
+}
+
+/**
+ * 데스크 사실 묶음 (순수 함수). videos 는 loadFacts 결과(slot 이 붙은 것), kpiIndex 는 { 'YYYY-MM-DD': 48h 지수 값 }.
+ */
+export function channelDesk({ videos, episodes = [], history = [], kpiIndex = {}, state = {}, experiment = null, config = {}, va = new Map(), now, date }) {
+  const epBy = new Map(episodes.map((e) => [e.videoId, e]));
+  const label = (v) => epBy.get(v.videoId)?.ep ?? v.videoId;
+  const titleOf = (v) => String(epBy.get(v.videoId)?.title ?? v.title ?? '');
+  const pub = videos.filter(isPublic);
+  const ms = now.getTime();
+
+  // 북극성 산수 — 순증 = 7d 조회 × 전환(/1k). KPI 와 같은 식(인덱스 조회 증분)을 판단 시각에 다시 잰다.
+  const v0 = indexViewsAt(pub, now);
+  const v1 = indexViewsAt(pub, new Date(ms - 7 * 86400_000));
+  const views7d = v0 !== null && v1 !== null ? v0 - v1 : null;
+  const published7d = recentVideos(pub, now, 7).length;
+  const netSubs = netDelta(history, 'subs', now);
+  const conv = netSubs !== null && views7d > 0 ? netSubs / (views7d / 1000) : null;
+  const target = config.kpis?.weekly_net_subs?.green ?? 10;
+  const planned = config.kpis?.publish_consistency_7d?.planned_per_week ?? null;
+  const perPublish = views7d !== null && published7d ? views7d / published7d : null;
+  const needViews = conv > 0 ? (target / conv) * 1000 : null;
+  const needPerPublish = needViews !== null && planned ? needViews / planned : null;
+  const northstar = {
+    views_7d: views7d, published_7d: published7d, net_subs_7d: netSubs, subs_per_1k: r1(conv, 2),
+    views_per_publish: r1(perPublish), target_net_subs: target, planned_per_week: planned,
+    need_views_7d: r1(needViews), need_views_per_publish: r1(needPerPublish),
+    gap_x: needPerPublish !== null && perPublish > 0 ? r1(needPerPublish / perPublish, 2) : null,
+  };
+
+  // 최근 72h 공개분 해부 — 영상 전체가 아니라 이 행들만 데스크가 본다. 비공개·처리 중 0뷰를 공개 성과와 섞지 않는다
+  const since72 = ms - DESK.repeatHours * 3600_000;
+  const recent = pub
+    .filter((v) => { const t = Date.parse(v.publishedAt ?? ''); return t >= since72 && t <= ms; })
+    .sort((a, b) => String(a.publishedAt).localeCompare(String(b.publishedAt)));
+  const recent72h = recent.map((v) => {
+    const v48 = viewsAtAge(v, 48);
+    const topics = deskTopics(titleOf(v));
+    return {
+      ep: label(v), slot: v.slot ?? null, at: kst(v.publishedAt), dur: v.duration_s ?? null,
+      views: Number.isFinite(v48) ? v48 : v.views,
+      basis: Number.isFinite(v48) ? '48h' : `현재 ${Math.round((ms - Date.parse(v.publishedAt)) / 3600_000)}h`,
+      avp: va.get(v.videoId)?.avp ?? null,
+      ...(topics.length ? { topics } : {}),
+      title: titleOf(v).replace(/\s*#Shorts\s*$/i, '').slice(0, 60),
+    };
+  });
+
+  // 미배포형 — 최근 7일 공개분 중 48h ≤35뷰
+  const matured = recentVideos(pub, now, 7).map((v) => ({ v, x: reach48(v, now) })).filter((r) => r.x !== null);
+  const zero = matured.filter((r) => r.x <= DESK.zeroReach);
+  const zeroReach = { window_days: 7, max_views: DESK.zeroReach, observed: matured.length, count: zero.length, eps: zero.map((r) => label(r.v)) };
+
+  // 같은 주제 72h 반복 (2회 이상만 싣고, repeatCount 이상이면 경보)
+  const byTopic = {};
+  for (const v of recent) for (const t of deskTopics(titleOf(v))) (byTopic[t] ??= []).push(label(v));
+  const topicRepeats = Object.entries(byTopic).filter(([, eps]) => eps.length >= 2)
+    .map(([topic, eps]) => ({ topic, count: eps.length, eps })).sort((a, b) => b.count - a.count);
+
+  // 동시에 도는 처방·실험 — 많을수록 무엇이 효과였는지 못 가른다
+  const live = (state.active ?? []).filter((a) => a.status === 'active' || a.status === 'adopted').map((a) => a.remedy);
+  const concurrent = { remedies: live, experiment: experiment?.id ?? null, total: live.length + (experiment?.id ? 1 : 0) };
+
+  const alerts = [];
+  const dayShift = (n) => kstDate(Date.parse(`${date}T12:00:00+09:00`) - n * 86400_000);
+  const idx = Array.from({ length: DESK.lowIndexDays }, (_, i) => kpiIndex[dayShift(DESK.lowIndexDays - 1 - i)]);
+  if (idx.every((x) => Number.isFinite(x) && x < DESK.lowIndex)) {
+    alerts.push({ id: 'index_low', text: `48h 조회 지수 ${DESK.lowIndexDays}일 연속 <${DESK.lowIndex} (${idx.map((x) => x.toFixed(2)).join('·')})` });
+  }
+  // 48h 가 막 찬 공개일(그제·사흘 전)만 본다 — 같은 날을 일주일 내내 다시 울리지 않게
+  for (const day of [dayShift(3), dayShift(2)]) {
+    const onDay = pub.filter((v) => kstDate(Date.parse(v.publishedAt ?? '')) === day);
+    const dead = onDay.filter((v) => { const x = reach48(v, now); return x !== null && x <= DESK.deadReach; });
+    if (dead.length >= DESK.deadPerDay) {
+      alerts.push({ id: 'dead_day', text: `${day.slice(5)} 공개 ${onDay.length}편 중 ${dead.length}편이 48h 0~${DESK.deadReach}뷰 (${dead.map(label).join(', ')})` });
+    }
+  }
+  for (const t of topicRepeats.filter((x) => x.count >= DESK.repeatCount)) {
+    alerts.push({ id: 'topic_repeat', text: `${DESK.repeatHours}h 안 「${t.topic}」 ${t.count}회 (${t.eps.join(', ')})` });
+  }
+
+  return { northstar, recent72h, zeroReach, topicRepeats, concurrent, alerts };
 }
 
 /**
@@ -191,11 +344,11 @@ export function buildDossier({ root, date, now, slots }) {
       };
     });
 
-  const history = existsSync(join(growth, 'channel', 'history.jsonl'))
+  const rawHistory = existsSync(join(growth, 'channel', 'history.jsonl'))
     ? readFileSync(join(growth, 'channel', 'history.jsonl'), 'utf-8').split('\n').filter(Boolean)
-      .map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean).slice(-28)
-      .map((h) => ({ at: kst(h.at), subs: h.subs, views: h.views }))
+      .map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean)
     : [];
+  const history = rawHistory.slice(-28).map((h) => ({ at: kst(h.at), subs: h.subs, views: h.views }));
   const analyticsFile = existsSync(join(growth, 'channel'))
     ? readdirSync(join(growth, 'channel')).filter((f) => /^analytics-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort().at(-1)
     : null;
@@ -221,10 +374,24 @@ export function buildDossier({ root, date, now, slots }) {
   const exp = loadJSON(join(growth, 'experiments.json'), {});
   const diagnosis = loadJSON(join(growth, 'diagnosis', `${date}.json`), {});
   const config = loadJSON(join(root, 'config', 'growth.json'), {});
+  const kpiIndex = {};
+  for (let n = 0; n < DESK.lowIndexDays; n++) {
+    const d = kstDate(Date.parse(`${date}T12:00:00+09:00`) - n * 86400_000);
+    const v = (loadJSON(join(growth, 'kpi', `${d}.json`), {})?.kpis ?? []).find((k) => k.id === 'views_48h_index_7d')?.value;
+    if (Number.isFinite(v)) kpiIndex[d] = v;
+  }
+  let desk = null;
+  try {
+    desk = channelDesk({ videos, episodes, history: rawHistory, kpiIndex, state, experiment: exp.current ?? null, config, va, now, date });
+  } catch (e) {
+    console.warn(`⚠ 채널 데스크 자료 실패 — 기존 판단만: ${e.message}`);
+  }
 
   return {
     date,
     north_star: config.north_star ?? 'weekly_net_subs',
+    // 채널 방향(거시) — 매니저가 처방 전에 먼저 본다. 경보는 코드가 판정한 것만.
+    desk,
     kpi_today: (loadJSON(join(growth, 'kpi', `${date}.json`), {})?.kpis ?? [])
       .map((k) => ({ id: k.id, label: k.label, value: k.display, grade: k.grade })),
     kpi_trend: kpiTrend(root, date),

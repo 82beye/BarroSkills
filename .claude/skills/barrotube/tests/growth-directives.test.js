@@ -85,6 +85,17 @@ test('buildDirective — 분석·KPI 전무여도 유효한 문서를 낸다 (�
   assert.ok(md.includes('왜곡'));
 });
 
+test('buildDirective — 옴니버스 결과 훅 처방과 질문 훅 실험을 함께 지시하지 않는다', () => {
+  const experiment = { id: 'EXP-03-hook-question', target: 'script', directive: '첫 씬(hook) 내레이션을 시청자에게 던지는 질문형으로 시작한다' };
+  const remedies = [{ remedy: 'R-AI-omni-short-hook', def: { label: '짧은 결과 훅', target: 'script', directive: '첫 문장에 결과를 말한다. 질문으로 열지 말고 과장하지 않는다.' } }];
+  const omni = buildDirective({ date: '2026-10-12', slot: 'omnibus', experiment, remedies });
+  assert.match(omni, /질문으로 열지/);
+  assert.doesNotMatch(omni, /질문형으로 시작/);
+  assert.match(omni, /충돌해 적용하지 않음/);
+  const us = buildDirective({ date: '2026-10-12', slot: 'us-close', experiment, remedies: [] });
+  assert.match(us, /질문형으로 시작/);
+});
+
 test('exhaustedTopics — 제목을 45자로 자른다', () => {
   const [line] = exhaustedTopics(ANALYSIS.outliers);
   assert.ok(line.includes('오선'));

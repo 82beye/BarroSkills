@@ -33,9 +33,11 @@ fi
 # 이미 환경에 있는 값이 우선한다 (일회성 override 를 .env 가 덮지 않도록).
 # ─────────────────────────────────────────────────
 load_bt_env() {
-  local envfile="${BARROTUBE_HOME}/.env"
-  [ -f "$envfile" ] || return 0
-  local line key val
+  local envfile line key val
+  # 토큰 거버너의 엔진 순서(workspace/ops/engine-routing.env)를 .env 보다 먼저 읽는다 — 한도에 걸린 공급자를
+  # 체인 뒤로 보내는 값이라 .env 의 고정값보다 우선하고, 일회성 환경변수보다는 뒤다 (2026-10-07).
+  for envfile in "${BARROTUBE_HOME}/workspace/ops/engine-routing.env" "${BARROTUBE_HOME}/.env"; do
+  [ -f "$envfile" ] || continue
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       BT_*=*) ;;
@@ -51,6 +53,7 @@ load_bt_env() {
     [ -n "${!key:-}" ] && continue
     export "$key=$val"
   done < "$envfile"
+  done
 }
 load_bt_env
 

@@ -3,8 +3,9 @@ import test from 'node:test';
 import {
   ageDays, vpd, baselineVpd, recentVideos, hitRate, likeRate,
   netDelta, weeklyViewsGrowth, grade, overallGrade, computeScorecard, normalizeIndex,
-  indexViewsAt, viewsAtAge, avgViewPct,
+  indexViewsAt, viewsAtAge, views48Coverage, avgViewPct, views48Index,
 } from '../scripts/automation/lib/growth-kpi.js';
+import { appendStatsHistory, CHANNEL_STATS_HISTORY_MAX } from '../scripts/automation/lib/competitor-analytics.js';
 
 const NOW = new Date('2026-08-31T12:00:00Z');
 const daysAgo = (d) => new Date(NOW.getTime() - d * 86400_000).toISOString();
@@ -70,6 +71,22 @@ test('indexViewsAt — 채널 viewCount 대신 영상별 관측을 시점으로 
   assert.equal(indexViewsAt(vs, earlier), 300, '그 시점에 관측된 것만 센다');
   assert.equal(indexViewsAt([], NOW), null, '관측 없으면 null');
   assert.equal(viewsAtAge(vidAt48(10, 500, 900), 48), 500);
+});
+
+test('viewsAtAge — 48시간에 가장 가까운 관측만 사용하고 ±6시간 밖은 제외', () => {
+  const pub = new Date(NOW.getTime() - 10 * 86400_000);
+  const sample = (age, views) => ({ at: new Date(pub.getTime() + age * 3600_000).toISOString(), views });
+  const video = { publishedAt: pub.toISOString(), stats_history: [sample(33, 100), sample(43, 200), sample(51, 300)] };
+  assert.equal(viewsAtAge(video), 300);
+  assert.equal(viewsAtAge({ ...video, stats_history: [sample(33, 100)] }), null);
+});
+
+test('views48Coverage — 표본, 결손, 실제 0을 분리해 기록', () => {
+  const rows = [vidAt48(3, 0), vidAt48(9, 100), vid(4, 12)];
+  const c = views48Coverage(rows, NOW);
+  assert.deepEqual(c.observation_window_hours, [42, 54]);
+  assert.deepEqual(c.recent, { eligible: 2, observed: 1, missing: 1, zero: 1, median_views: 0 });
+  assert.deepEqual(c.baseline, { eligible: 1, observed: 1, missing: 0, zero: 0, median_views: 100 });
 });
 
 test('likeRate — Σlikes/Σviews, 최근 조회 0이면 null', () => {
@@ -215,4 +232,40 @@ test('missing observations are not misses, zero views, or future performance', a
   card = computeScorecard({ videos: [tracked], history: observations, config, now: NOW, analytics });
   wow = card.kpis.find((k) => k.id === 'weekly_views_growth');
   assert.deepEqual([wow.value, wow.method, wow.grade], [0.5, 'analytics', 'RED']);
+});
+
+test('48h 지수 — 기준선 관측이 대상의 60% 미만이거나 10편 미만이면 NA(표본부족) (YOU-551)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const config = JSON.parse(readFileSync(new URL('../config/growth.json', import.meta.url)));
+  const recent = [3, 4, 5].map((d) => vidAt48(d, 500));
+  // 2026-10-21 재현: 기준선 대상 56편 중 48h 관측이 남은 건 젊은 19편뿐 (나머지는 stats_history 절단으로 소실).
+  const kept = Array.from({ length: 19 }, (_, i) => vidAt48(8 + i * 0.5, 1000));
+  const cut = Array.from({ length: 37 }, (_, i) => vid(18 + i * 0.5, 3000, 0, {
+    videoId: `c${i}`, stats_history: [{ at: NOW.toISOString(), views: 3000 }],
+  }));
+  assert.equal(views48Index([...recent, ...kept, ...cut], NOW), null, '19/56 = 34% 는 기준선이 아니다');
+  const card = computeScorecard({ videos: [...recent, ...kept, ...cut], history: [], config, now: NOW });
+  const k = card.kpis.find((x) => x.id === 'views_48h_index_7d');
+  assert.deepEqual([k.grade, k.method, k.display], ['NA', 'sample_short', '표본부족 19/56']);
+
+  // 충족: 관측 10편 · 대상의 60% 이상이면 지수를 낸다. 9편이면 비율이 100% 여도 NA.
+  const ok = Array.from({ length: 10 }, (_, i) => vidAt48(8 + i, 1000));
+  assert.equal(views48Index([...recent, ...ok], NOW), 0.5);
+  assert.equal(views48Index([...recent, ...ok.slice(1)], NOW), null);
+  const okCard = computeScorecard({ videos: [...recent, ...ok], history: [], config, now: NOW });
+  assert.equal(okCard.kpis.find((x) => x.id === 'views_48h_index_7d').method, 'index');
+});
+
+test('채널 인덱스는 하루 2회 수집으로 37일 지나도 48h 관측을 잃지 않는다 (YOU-551)', () => {
+  const pub = Date.parse('2026-09-01T09:00:00Z');
+  const run = (max) => {
+    let h;
+    // 08:40·18:40 KST 수집을 흉내 낸다 — 10h/14h 간격, 게시 40일 뒤까지.
+    for (let t = pub + 8 * 3600_000; t <= pub + 40 * 86400_000; t += (h?.length % 2 ? 14 : 10) * 3600_000) {
+      h = appendStatsHistory(h, { at: new Date(t).toISOString(), views: Math.round((t - pub) / 3600_000) }, max);
+    }
+    return viewsAtAge({ publishedAt: new Date(pub).toISOString(), stats_history: h }, 48);
+  };
+  assert.equal(run(30), null, '30개면 15일치뿐 — 회귀 재현');
+  assert.ok(Number.isFinite(run(CHANNEL_STATS_HISTORY_MAX)), '90개면 40일 뒤에도 48h 관측이 남는다');
 });

@@ -105,6 +105,14 @@ export function selectVideoIdsToFetch(candidates, index, { refreshWindowDays = 1
   return out;
 }
 
+/**
+ * 우리 채널 인덱스(workspace/growth/channel/videos.json)가 남기는 관측 수.
+ * 48h 지수의 기준선은 게시 7~37일 영상의 **48h 시점 관측**을 쓴다 — 그 관측이 37일 넘게 남아 있어야 한다.
+ * 수집은 하루 2회라 30개면 15일치뿐이었고, 2026-10-21 기준선 56편 중 37편의 48h 관측이 잘려 나갔다(YOU-551).
+ * 90개 = 하루 2회 × 45일 ≥ 37일 + 48h. 수집을 하루 3회 이상으로 늘리면 이 값도 같이 올린다.
+ */
+export const CHANNEL_STATS_HISTORY_MAX = 90;
+
 /** stats_history 는 최근 N개만 남긴다. 남기지 않으면 파일이 무한히 자란다. */
 export function appendStatsHistory(history, sample, max = 30) {
   const next = [...(history ?? []), sample];

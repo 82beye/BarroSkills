@@ -18,6 +18,7 @@
  *   slots: ['us-close', …]  적용 슬롯 (없으면 전체). 효과도 그 슬롯 영상으로만 잰다.
  *   target: 'script'|'metadata'|'closing'  지시가 들어갈 자리 (closing 은 closing_cta 문장)
  *   eval: { metric: 'like_rate'|'views48', min_episodes, max_episodes, keep_if_lift }
+ *         min_episodes 편이 쌓이면 판정한다 — lift ≥ keep_if_lift 면 adopted, 아니면 reverted.
  *
  * 효과는 처방이 **실제로 들어간 회차**로만 잰다. 생성기가 대본(30_script.md)·메타(70_publish_meta.json)에
  * growth_remedies 로 받은 처방을 남기고, 판정은 그 기록이 있는 영상만 센다 — 켜기 전에 만든 대본이 켠 뒤에
@@ -170,7 +171,9 @@ export function planRemediation({ findings, state, catalog, videos, now, baselin
       a.result = p;
       events.push({ at, remedy: a.remedy, transition: 'adopted', ...p });
       outbox.push({ kind: 'adopted', remedy: a.remedy, def, lift: p.lift });
-    } else if (p.episodes >= def.eval.max_episodes) {
+    } else {
+      // min_episodes 를 채우고도 기준에 못 미치면 되돌린다. max_episodes 까지 기다리지 않는다 —
+      // 48h 조회는 관측 이력이 잘려 오래된 회차가 빠지므로 14편에 닿지 못했다(2026-10-22 YOU-552: kr-cause-first 0.08×가 계속 active)
       s.active = s.active.filter((x) => x !== a);
       s.history.push({ ...a, ended_at: at, verdict: 'reverted', result: p });
       events.push({ at, remedy: a.remedy, transition: 'reverted', ...p });

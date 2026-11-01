@@ -98,7 +98,7 @@ async function main() {
   const { videos } = loadFacts(ROOT, now);
 
   const experiment = loadJSON(join(GROWTH, 'experiments.json'), {})?.current ?? null;
-  const { plan, rejected } = validatePlan(raw, { catalog, state, slots, now, experiment });
+  const { plan, rejected, warnings } = validatePlan(raw, { catalog, state, slots, now, experiment });
   const applied = applyPlan(plan, {
     dynamic: loadJSON(dynamicPath, {}), state, strategy: loadJSON(strategyPath, { hypotheses: {}, journal: [] }),
     videos, now, date,
@@ -113,6 +113,7 @@ async function main() {
   for (const e of applied.events) console.log(`   → ${e.transition}: ${e.remedy}`);
   for (const p of applied.proposals) console.log(`   📝 설계서: ${p.title}`);
   for (const r of rejected) console.log(`   ✖ 거름: ${r.item ?? '?'} — ${r.reason}`);
+  for (const w of warnings) console.warn(`   ⚠ ${w} — 처방 처리는 그대로 진행`);
   if (values['dry-run']) return;
 
   mkdirSync(join(GROWTH, 'journal'), { recursive: true });
@@ -120,7 +121,7 @@ async function main() {
   writeAtomic(dynamicPath, `${JSON.stringify(applied.dynamic, null, 2)}\n`);
   writeAtomic(statePath, `${JSON.stringify(applied.state, null, 2)}\n`);
   writeAtomic(strategyPath, `${JSON.stringify(applied.strategy, null, 2)}\n`);
-  writeAtomic(join(GROWTH, 'journal', `${date}.md`), journalMarkdown({ date, plan, rejected, events: applied.events, progress, engine }));
+  writeAtomic(join(GROWTH, 'journal', `${date}.md`), journalMarkdown({ date, plan, rejected, events: applied.events, progress, engine, desk: dossier.desk, warnings }));
   for (const p of applied.proposals) {
     const slug = String(p.id).replace(/[^\w-]+/g, '-');
     writeFileSync(join(GROWTH, 'proposals', `${date}-${slug}.md`),
@@ -130,7 +131,7 @@ async function main() {
   console.log(`✓ workspace/growth/journal/${date}.md`);
 
   try {
-    await sendTelegramText(escapeHtml(telegramText({ date, plan, events: applied.events, proposals: applied.proposals, progress })));
+    await sendTelegramText(escapeHtml(telegramText({ date, plan, events: applied.events, proposals: applied.proposals, progress, desk: dossier.desk })));
   } catch (e) {
     console.warn(`⚠ 텔레그램 실패: ${e.message}`);
   }

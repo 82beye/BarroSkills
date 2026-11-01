@@ -123,8 +123,21 @@ const jsReady = `(function(){var deep=${DEEP};
   return JSON.stringify({
     composer: deep('ytd-backstage-post-dialog-renderer, #post-dialog').length,
     multiInput: deep('ytd-backstage-multi-image-select-renderer input[type=file]').length,
-    signedOut: /로그인|Sign in/.test(document.querySelector('#buttons')?document.querySelector('#buttons').innerText:'')
+    signedOut: /로그인|Sign in/.test(document.querySelector('#buttons')?document.querySelector('#buttons').innerText:''),
+    // 실패했을 때 무엇이 보였는지 남기려는 값들 — 예전 오류는 이유 없이 「로그인 확인」만 말했다.
+    href: location.href, visibility: document.visibilityState,
+    posts: deep('ytd-backstage-post-thread-renderer').length
   });})()`;
+
+/** 컴포저를 못 찾았을 때의 사람이 읽을 이유. ready 는 마지막으로 읽은 jsReady 결과(없으면 null). */
+export function composerFailure(ready) {
+  if (!ready) return '페이지를 읽지 못했습니다 — Chrome 창·탭이 살아 있는지 확인하세요';
+  const seen = `(주소 ${ready.href} · 탭 ${ready.visibility} · 게시물 ${ready.posts}개)`;
+  if (ready.signedOut) return `YouTube 에 로그인돼 있지 않습니다 ${seen}`;
+  if (ready.visibility === 'hidden') return `탭이 화면에 그려지지 않는 상태입니다 — 화면 꺼짐·창 최소화면 작성창이 안 뜬다 ${seen}`;
+  if (!ready.posts) return `게시물 탭이 다 뜨지 않았습니다 — 네트워크·YouTube 지연 ${seen}`;
+  return `게시물은 보이는데 작성창이 없습니다 — 채널 소유 신원인지(계정 전환)·YouTube 화면 변경을 확인하세요 ${seen}`;
+}
 
 // AppleScript 의 execute 는 Promise 를 못 기다린다 — 결과 객체를 그대로 받으면
 // "[object Object]" 가 온다. 그래서 비동기 작업은 전역에 결과를 남기고 따로 폴링한다.
@@ -243,14 +256,19 @@ async function main() {
   const tab = openTab(`https://www.youtube.com/channel/${GROWTH.channel_id}/posts`);
   let posted = null;
   try {
-    // 1) 컴포저가 뜰 때까지
+    // 1) 컴포저가 뜰 때까지. 작성창은 게시물 목록보다 늦게 그려진다 — 한 번 못 찾으면 새로고침해
+    // 다시 기다린다. 2026-10-07 18:02 석간은 30초 안에 못 찾고 접었는데, 같은 저녁 다시 열어 보니
+    // 작성창·이미지 입력·게시 버튼이 다 있었다(원인은 남은 정보가 없어 모른다 — 그래서 아래에서 남긴다).
     let ready = null;
-    for (let i = 0; i < 20; i += 1) {
-      await sleep(1500);
-      try { ready = evalJSON(tab, jsReady); } catch { continue; }
-      if (ready.composer && ready.multiInput) break;
+    for (let round = 0; round < 2 && !(ready?.composer && ready?.multiInput); round += 1) {
+      if (round) { console.log('   ↻ 작성창이 안 보여 새로고침'); navigate(tab, `https://www.youtube.com/channel/${GROWTH.channel_id}/posts`); }
+      for (let i = 0; i < 20; i += 1) {
+        await sleep(1500);
+        try { ready = evalJSON(tab, jsReady); } catch { continue; }
+        if (ready.composer && ready.multiInput) break;
+      }
     }
-    if (!ready?.composer) throw new Error('커뮤니티 컴포저를 찾지 못했습니다 — Chrome 에서 채널에 로그인돼 있는지 확인하세요');
+    if (!ready?.composer) throw new Error(`커뮤니티 컴포저를 찾지 못했습니다 — ${composerFailure(ready)}`);
 
     // 2) 카드 주입 + 편집기 열기
     evalJSON(tab, jsInjectStart(urls));

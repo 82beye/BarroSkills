@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { facts } from '../scripts/automation/market-magazine.js';
-import { postBody } from '../scripts/automation/community-post.js';
+import { postBody, composerFailure } from '../scripts/automation/community-post.js';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const CFG = JSON.parse(readFileSync(join(ROOT, 'config', 'market-map.json'), 'utf-8'));
@@ -74,4 +74,16 @@ test('공개본 크기 확인은 받은 본문을 버린다 — 안 버리면 �
   const verify = src.slice(src.indexOf('async function verifyPublished'), src.indexOf('/* ── 페이지에서'));
   assert.match(verify, /const r = await fetch\([^\n]*\);[\s\S]{0,200}await r\.body\?\.cancel\(\);/,
     'fetch 직후 본문을 취소해야 한다');
+});
+
+test('작성창을 못 찾으면 그때 보인 상태로 이유를 말한다 — 「로그인 확인」 한 줄로 뭉개지 않는다', () => {
+  // 2026-10-07 18:02 석간: 이유 없이 「로그인 확인」만 남았는데, 저녁에 다시 보니 로그인·채널은 정상이었다.
+  const base = { href: 'https://www.youtube.com/channel/X/posts', visibility: 'visible', posts: 10, signedOut: false };
+  assert.match(composerFailure(null), /페이지를 읽지 못했습니다/);
+  assert.match(composerFailure({ ...base, signedOut: true }), /로그인돼 있지 않습니다/);
+  assert.match(composerFailure({ ...base, visibility: 'hidden' }), /화면에 그려지지 않는 상태/);
+  assert.match(composerFailure({ ...base, posts: 0 }), /다 뜨지 않았습니다/);
+  assert.match(composerFailure(base), /작성창이 없습니다 .*탭 visible · 게시물 10개/);
+  const src = readFileSync(join(ROOT, 'scripts', 'automation', 'community-post.js'), 'utf8');
+  assert.match(src, /for \(let round = 0; round < 2 && !\(ready\?\.composer && ready\?\.multiInput\); round \+= 1\)/, '못 찾으면 한 번 새로고침해 다시 기다린다');
 });
