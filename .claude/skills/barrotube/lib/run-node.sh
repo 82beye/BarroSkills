@@ -21,4 +21,8 @@ source "${SCRIPT_DIR}/guards.sh"
 
 [ $# -ge 1 ] || { echo "❌ 실행할 스크립트를 지정하세요" >&2; exit 2; }
 
+# 덮개가 닫힌 채 DarkWake 틈에 뜨면 네트워크가 없다 — 이 래퍼로 도는 노드 루틴은 전부
+# 네트워크를 쓴다 (2026-09-28 weekly-marketing 월 09:00: RSS 전부 fetch failed → 0건 → exit 5).
+wait_for_network 20 || echo "⚠ 네트워크 응답 없음 — 그대로 실행합니다" >&2
+
 exec node "$@"

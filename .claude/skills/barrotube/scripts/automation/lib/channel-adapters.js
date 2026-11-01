@@ -8,6 +8,7 @@ import {
 } from 'node:fs';
 import {
   basename,
+  dirname,
   extname,
   isAbsolute,
   join,
@@ -15,6 +16,41 @@ import {
   resolve,
   sep,
 } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/**
+ * 유튜브 실제 공개 상태 캐시.
+ *
+ * 왜 필요했나: 아래 parsePublishJson 은 `published = ... || Boolean(videoId)` 라서
+ * **영상 ID 만 있으면 발행됨으로 센다.** 그런데 슬롯 시각을 넘겨 예약이 걸리지 않으면
+ * 유튜브는 private 로 남긴다 — 업로드는 됐고 ID 도 있지만 아무도 못 본다.
+ * 2026-09-23 실측: 보드는 107편을 공개로 셌는데 유튜브 실제 공개는 65편이었고,
+ * 24편(그중 QA PASS 14편)이 아무도 모르게 묻혀 있었다.
+ *
+ * 캐시는 sync-youtube-state.js 가 쓴다. 없거나 그 videoId 가 없으면 **기존 판정을
+ * 그대로 둔다** — 캐시가 없다고 멀쩡한 편을 미발행으로 뒤집으면 더 나쁘다.
+ */
+// 이 파일은 scripts/automation/lib/ 에 있다 — 스킬 루트까지 세 단계다.
+const LIVE_STATE_PATH = resolve(
+  dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'workspace', 'youtube-state.json',
+);
+let liveStateCache = { mtimeMs: -1, videos: {}, checkedAt: null };
+
+function liveState(videoId) {
+  if (!videoId) return null;
+  try {
+    const m = statSync(LIVE_STATE_PATH).mtimeMs;
+    if (m !== liveStateCache.mtimeMs) {
+      const d = JSON.parse(readFileSync(LIVE_STATE_PATH, 'utf8'));
+      liveStateCache = { mtimeMs: m, videos: d.videos || {}, checkedAt: d.checked_at || null };
+    }
+  } catch {
+    // 캐시가 없거나 깨졌으면 조용히 기존 판정을 쓴다. 보드는 매일 돌아야 하고,
+    // 네트워크·권한 문제로 화면이 통째로 비면 그게 더 큰 장애다.
+    return null;
+  }
+  return liveStateCache.videos[videoId] || null;
+}
 
 const ALLOWED_EXTENSIONS = new Set([
   '.png', '.jpg', '.jpeg', '.webp',
@@ -355,24 +391,38 @@ function parsePublishJson(json, source) {
     json?.permalink,
     videoId && (json?.schema?.includes('instagram') ? null : `https://youtu.be/${videoId}`),
   );
-  const status = firstString(json?.status, youtube.status)
+  const localStatus = firstString(json?.status, youtube.status)
     || (json?.published === true ? 'published' : null);
-  const published = json?.published === true
-    || Boolean(videoId)
-    || /^(?:published|uploaded|scheduled|success|completed)$/i.test(status || '');
+  const localPrivacy = firstString(
+    json?.privacyStatus,
+    json?.privacy_status,
+    json?.privacy,
+    youtube.privacyStatus,
+    youtube.privacy_status,
+  );
+
+  // 유튜브가 정본이다. 캐시에 이 영상이 있으면 로컬 기록을 덮는다.
+  const live = liveState(videoId);
+  const status = live
+    ? (live.privacy === 'gone' ? 'gone'
+      : live.privacy === 'public' ? 'published'
+        : live.publishAt ? 'scheduled' : 'unlisted_or_private')
+    : localStatus;
+  const published = live
+    ? live.privacy === 'public'
+    : json?.published === true
+      || Boolean(videoId)
+      || /^(?:published|uploaded|scheduled|success|completed)$/i.test(localStatus || '');
 
   return {
     published,
     status,
     video_id: videoId,
     url,
-    privacy: firstString(
-      json?.privacyStatus,
-      json?.privacy_status,
-      json?.privacy,
-      youtube.privacyStatus,
-      youtube.privacy_status,
-    ),
+    privacy: live ? live.privacy : localPrivacy,
+    live_checked_at: live ? liveStateCache.checkedAt : null,
+    live_views: live ? live.views ?? null : null,
+    live_publish_at: live ? live.publishAt : null,
     published_at: firstString(
       json?.published_at,
       json?.publishedAt,
@@ -390,6 +440,9 @@ function missingPublish() {
     video_id: null,
     url: null,
     privacy: null,
+    live_checked_at: null,
+    live_views: null,
+    live_publish_at: null,
     published_at: null,
     source: null,
   };
@@ -403,19 +456,46 @@ function publishFromFiles(root, pattern = /^80_publish_result(?:\..+)?\.json$/) 
   return missingPublish();
 }
 
+/** 유튜브 URL 에서 videoId 를 되살린다. youtu.be/ID · watch?v=ID · shorts/ID 를 본다. */
+function videoIdFromUrl(url) {
+  if (typeof url !== 'string') return null;
+  const m = url.match(/(?:youtu\.be\/|\/shorts\/|[?&]v=)([A-Za-z0-9_-]{6,})/);
+  return m ? m[1] : null;
+}
+
 function publishFromS12Status(status) {
   const historyUrl = Array.isArray(status?.stage_history)
     ? status.stage_history.map(item => item?.youtube_url).filter(Boolean).pop()
     : null;
-  const videoId = firstString(status?.publish?.video_id, status?.publish?.videoId, status?.video_id, status?.videoId);
-  const url = firstString(status?.publish?.url, historyUrl, videoId ? `https://youtu.be/${videoId}` : null);
-  if (!videoId && !url) return missingPublish();
+  const url = firstString(
+    status?.publish?.url,
+    historyUrl,
+  );
+  // .episode_status.json 은 video_id 없이 URL 만 남기는 경우가 많다(stage_history 의
+  // youtube_url). 그러면 유튜브 실제 상태를 조회할 키가 없어 비공개로 묻힌 편이
+  // 계속 "발행 ✓" 로 보인다 — 2026-09-23 EP-2026-0165 실측. URL 에서 ID 를 되살린다.
+  const videoId = firstString(
+    status?.publish?.video_id, status?.publish?.videoId, status?.video_id, status?.videoId,
+    videoIdFromUrl(url),
+  );
+  const resolvedUrl = url || (videoId ? `https://youtu.be/${videoId}` : null);
+  if (!videoId && !resolvedUrl) return missingPublish();
+  // 여기도 유튜브가 정본이다. 이 폴백이 무조건 published:true 를 돌려주던 탓에
+  // parsePublishJson 쪽 판정이 조용히 뒤집혔다 (2026-09-23).
+  const live = liveState(videoId);
   return {
-    published: true,
-    status: firstString(status?.publish?.status, 'published'),
+    published: live ? live.privacy === 'public' : true,
+    status: live
+      ? (live.privacy === 'gone' ? 'gone'
+        : live.privacy === 'public' ? 'published'
+          : live.publishAt ? 'scheduled' : 'unlisted_or_private')
+      : firstString(status?.publish?.status, 'published'),
     video_id: videoId,
-    url,
-    privacy: firstString(status?.publish?.privacy, status?.publish?.privacy_status),
+    url: resolvedUrl,
+    privacy: live ? live.privacy : firstString(status?.publish?.privacy, status?.publish?.privacy_status),
+    live_checked_at: live ? liveStateCache.checkedAt : null,
+    live_views: live ? live.views ?? null : null,
+    live_publish_at: live ? live.publishAt : null,
     published_at: firstString(status?.publish?.published_at, status?.publish?.publish_at),
     source: '.episode_status.json',
   };
@@ -477,7 +557,10 @@ function scanS12Platform(episodeRoot, platformRoot, platformName, status) {
     : directMatchingFiles(platformRoot, /^60_qa_report(?:\..+)?\.json$/)[0]?.name || null;
   const qa = qaPath ? parseQaFile(platformRoot, qaPath) : { exists: false, passed: null, status: 'missing', source: null };
   let publish = publishFromFiles(platformRoot);
-  if (!publish.published) publish = publishFromS12Status(status);
+  // 폴백 조건이 `!published` 였는데, 그러면 "업로드는 됐지만 비공개"라는 **정확한**
+  // 판정이 나오자마자 S12 폴백이 published:true 로 덮어썼다. 폴백의 본래 의도는
+  // 파일에 아무 기록이 없을 때 상태 파일로 메우는 것이므로 video_id 유무로 가른다.
+  if (!publish.video_id) publish = publishFromS12Status(status);
 
   return {
     platform: platformName,
@@ -565,7 +648,11 @@ function discoverS12(context) {
         : [scanS12Platform(episodeRoot, episodeRoot, '(v1-flat)', status)];
       const platforms = Object.fromEntries(platformRecords.map(item => [item.platform, item]));
       const nativeStage = s12ArtifactStage(episodeRoot, platformRecords, status);
-      const publish = platformRecords.find(item => item.publish.published)?.publish || publishFromS12Status(status);
+      // 전부 비공개면 find 가 빈손이라 S12 폴백으로 새던 자리다. 영상 기록이 있는
+      // 플랫폼을 먼저 찾고, 그중 공개된 것이 있으면 그것을 대표로 쓴다.
+      const publish = platformRecords.find(item => item.publish.published)?.publish
+        || platformRecords.find(item => item.publish.video_id)?.publish
+        || publishFromS12Status(status);
       const qa = maxQa(platformRecords.map(item => item.qa));
       const format = firstString(
         frontmatterValue(brief, 'format'),
@@ -606,6 +693,10 @@ function discoverS12(context) {
         supported_actions: [...ACTIONS['barrotube-s12']],
         source_profile: 'barrotube-s12',
         updated_at: firstString(status?.last_updated, status?.updated_at, status?.created_at),
+        // 보드 기본 정렬 키. 00_brief.md frontmatter 의 created_at 이 «이 회차가 언제
+        // 기획됐는가» 를 말하는 유일한 값이다 — 게시 시각은 미발행 회차에 없고,
+        // updated_at 은 손댈 때마다 흔들려 목록 순서가 뒤집힌다.
+        created_at: firstString(frontmatterValue(brief, 'created_at'), status?.created_at),
         _root: episodeRoot,
         _platformRoots: Object.fromEntries(platformDirectories.map(item => [item.name, item.path])),
       };

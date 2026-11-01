@@ -79,13 +79,30 @@ function parseFrontmatter(mdPath) {
 }
 
 /**
- * Script에서 키워드 후보 추출
+ * 한글 수사로 적힌 수치 — TTS 발음용 표기라 검색어로는 쓸모가 없다(아무도 "팔십오 주"로
+ * 검색하지 않는다). emphasis_tokens 는 TTS 강조 토큰이라 이 표기로 들어온다.
+ * 2026-09-25 EP-2026-0182: 주 키워드가 "팔십오 주", 태그 6개가 "팔십오 주 왜/이유/전망"·
+ * "영점일구 퍼센트" 였다. 메타 단계(generate-metadata)가 금지한 표기를 이 단계가 되살렸다.
+ * 한 글자 수사는 일반 낱말과 겹쳐(사주·이주) 단위가 분명한 퍼센트·년물만 한 글자부터 잡는다.
+ */
+const KOREAN_NUMERAL = new RegExp([
+  '[영일이삼사오육칠팔구십백천만억조점]{2,}\\s*(?:퍼센트|주|년|달러|원|포인트|배|개월|bp|엔|위안|선)',
+  '[영일이삼사오육칠팔구십백천만억조점]+\\s*퍼센트',
+  '[일이삼오칠십]\\s*년물',
+].join('|'));
+
+export function hasKoreanNumeral(s) {
+  return KOREAN_NUMERAL.test(String(s ?? ''));
+}
+
+/**
+ * Script에서 키워드 후보 추출 (한글 수사 토큰 제외)
  */
 function extractKeywordCandidates(script) {
   const tokens = new Set();
   for (const scene of script.scenes || []) {
     for (const t of scene.emphasis_tokens || []) {
-      if (t && typeof t === 'string') tokens.add(t.trim());
+      if (t && typeof t === 'string' && !hasKoreanNumeral(t)) tokens.add(t.trim());
     }
   }
   return Array.from(tokens);
@@ -97,14 +114,28 @@ function extractKeywordCandidates(script) {
  *  2. candidates 중 숫자 토큰 + 직전 명사 토큰 결합
  *  3. emphasis_tokens 첫 항목
  */
-function pickPrimaryKeyword(candidates, title) {
+/** 서술·연결 어미로 끝나는 낱말 — 키워드는 그 앞에서 끊는다. ("최고"처럼 명사로 끝나는 낱말은 멈추지 않는다.) */
+const PREDICATE_END = /(는데|인데|은데|에도|지만|면서|[었았였했렸졌쳤왔갔섰났]다|한다|된다|린다|른다|[했었았]나|는가|[을일할]까|이유|진짜|왜)[?!]?$/;
+
+export function pickPrimaryKeyword(candidates, title) {
   if (title) {
-    const firstPhrase = title.split(/[,.()·|·#]/)[0].trim()
+    // 소수점에서는 자르지 않는다 — "5.12%" 가 "5" 로 잘려 주 키워드가
+    // "미 10년물 2007년 이후 최고 5" 가 됐다(2026-09-24 EP-2026-0179).
+    const firstPhrase = String(title).replace(/\s*#Shorts\b/gi, '')
+      .split(/[,()·|#…—:]|(?<!\d)\.|\.(?!\d)/)[0].trim()
       .replace(/\s+(시대|시장|전망|분석|뉴스|핵심|소식|정보|이야기|이슈)$/, '')
       .trim();
     if (firstPhrase.length >= 3 && firstPhrase.length <= 20) {
       return firstPhrase;
     }
+    // 첫 구절이 길면 앞에서부터 낱말을 모으되 서술어 앞에서 멈춘다.
+    // 예전에는 여기서 곧장 TTS 강조 토큰(한글 수사)으로 넘어갔다.
+    const head = [];
+    for (const w of firstPhrase.split(/\s+/)) {
+      if (PREDICATE_END.test(w) || [...head, w].join(' ').length > 20) break;
+      head.push(w);
+    }
+    if (head.join(' ').length >= 3) return head.join(' ');
   }
   if (candidates.length) {
     // 숫자 포함 토큰의 직전 토큰과 결합 시도
@@ -210,13 +241,29 @@ function assembleTags(primary, secondary, longTails, related, brand) {
 }
 
 /**
+ * 최종 태그 — 출처의 신뢰도 순으로 채우고 25개에서 자른다.
+ *
+ * 순서: 주 키워드 → LLM 태그(표기 규칙을 지키며 쓴 것) → 브랜드 → 대본 강조어 → 롱테일 → 사전 연관어.
+ * LLM 태그를 살리자 한 편에 38개가 됐다(2026-09-26 시험). 설계 목표는 18~25개이고, 뒤로 갈수록
+ * 품질이 낮은 출처라 넘치면 뒤에서부터 떨어진다. LLM 이 태그를 거의 안 줬으면 뒤쪽이 채운다.
+ */
+export const MAX_TAGS = 25;
+export function mergeTags({ primary, llmTags = [], secondary = [], longTails = [], related = [], brand = [] }) {
+  return assembleTags(primary, [...llmTags, ...brand, ...secondary], longTails, related, [])
+    .filter((x) => !hasKoreanNumeral(x))
+    .slice(0, MAX_TAGS);
+}
+
+/**
  * SEO 친화적 description 재구성.
  * format-aware brand 해시태그 사용 — long-3min에 'Shorts'/'60초경제' 해시태그 새어드는 회귀 차단.
  */
 function rebuildDescription(script, seo, existingDesc, format) {
   const lines = [];
-  // 첫 줄: primary keyword 포함 훅
-  const hook = script.scenes?.[0]?.narration || seo.primary_keyword;
+  // 첫 줄: primary keyword 포함 훅. narration 은 TTS 표기(한글 수사)라 표기용 subtitle_text 를 먼저 쓴다.
+  const first = script.scenes?.[0];
+  const hook = (first?.subtitle_text ? String(first.subtitle_text).replace(/\s*\|\s*/g, ' — ') : first?.narration)
+    || seo.primary_keyword;
   lines.push(hook);
   lines.push('');
 
@@ -317,8 +364,14 @@ async function main() {
   };
   if (presetSource) meta.seo.primary_keyword_source = presetSource;
 
-  // 6. tags 조립
-  meta.tags = assembleTags(primary, secondary, longTails, related, brand);
+  // 6. tags 조립 — 메타 단계(LLM)가 규칙대로 쓴 태그를 버리지 않는다.
+  // 예전에는 이 단계가 tags 를 통째로 새로 만들어, 아라비아 숫자로 쓴 LLM 태그가 사라지고
+  // TTS 강조 토큰 기반 태그(한글 수사)만 남았다. 한글 수사 태그는 마지막에 한 번 더 거른다.
+  meta.tags = mergeTags({
+    primary,
+    llmTags: (Array.isArray(meta.tags) ? meta.tags : []).filter((x) => typeof x === 'string'),
+    secondary, longTails, related, brand,
+  });
   meta.categoryId = meta.categoryId || lex.categoryId;
 
   // 7. description 재구성 (기존 있으면 preserve) — format에 따라 brand hashtag 분기

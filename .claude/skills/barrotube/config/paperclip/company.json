@@ -1,0 +1,584 @@
+{
+  "version": 1,
+  "_comment": "페이퍼클립 BarroTube 회사의 정본 — 에이전트(역할·어댑터·모델·한도)·프로젝트·목표·루틴. scripts/automation/paperclip/setup.js 가 이 파일대로 페이퍼클립을 맞춘다(--plan 으로 차이만 보고, --apply 로 적용). UI 에서 바꾼 값은 다음 --apply 때 되돌아가니 바꿀 거면 여기를 고친다. 2026-10-07 개편: 4~5월 체제(17 에이전트가 단계마다 LLM 으로 일하고 타이머로 깨던 구조)는 토큰 10억+ 캐시 입력·stranded 루프로 접혔다. 새 체제는 생산을 결정론 파이프라인에 두고, LLM 에이전트는 판단이 필요한 4곳(전략·성장 분석·수리·리뷰)만 맡는다.",
+  "company_id": "46041d31-43ca-4135-8db6-8a84ba0d22de",
+  "description": "바로경제 — 한국어 경제 쇼츠 채널의 자동화 관제. 생산은 결정론 파이프라인(lib/auto-pipeline.sh)이 하고, 페이퍼클립은 언제·누가·얼마나·무엇이 깨졌나를 맡는다. 현역 7명: CEO(주간 경영 리뷰·막힘 점검)·CMO(주간 성장 분석)·SRE Engineer(장애 수리·재개)·Code Reviewer(수리 리뷰)는 LLM, Producer(발행 슬롯)·Ops Runner(운영 잡)·Token Governor(토큰 관제)는 모델 없는 실행기. [휴면] 14명은 4~5월 단계별 체제의 기록이다.",
+  "timezone": "Asia/Seoul",
+  "env": {
+    "PATH": "/Users/beye/.local/bin:/Users/beye/.nvm/versions/node/v24.11.1/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+    "HOME": "/Users/beye",
+    "TZ": "Asia/Seoul",
+    "BARROTUBE_HOME": "/Users/beye/workspace/BarroSkills/.claude/skills/barrotube",
+    "PAPERCLIP_DISABLED": "1",
+    "BT": "/Users/beye/workspace/BarroSkills/.claude/skills/barrotube"
+  },
+  "agents": {
+    "ceo": {
+      "id": "74285529-59a7-4070-8255-d07958df51ff",
+      "name": "CEO",
+      "title": "전략·목표 오너 — 주간 경영 리뷰, 성장 제안 채택, 막힘 점검",
+      "role": "ceo",
+      "reports_to": null,
+      "kind": "llm",
+      "why_model": "주 1회 짧게 깊게 판단한다 — 무엇을 바꿀지·바꾸지 않을지. 실수 비용이 크고 호출은 적어 상위 추론 모델이 맞다.",
+      "primary": {
+        "adapterType": "claude_local",
+        "model": "claude-opus-5-5",
+        "effort": "high"
+      },
+      "economy": {
+        "adapterType": "claude_local",
+        "model": "claude-sonnet-5-5",
+        "effort": "medium"
+      },
+      "alternate": {
+        "adapterType": "codex_local",
+        "model": "gpt-6-astra",
+        "modelReasoningEffort": "high"
+      },
+      "max_turns": 60,
+      "timeout_sec": 1800,
+      "wake_on_demand": true,
+      "max_concurrent": 1,
+      "daily_cost_cap_usd": 8,
+      "cwd": "/Users/beye/BarroTubeData/workspace/growth",
+      "instructions": "ceo.md"
+    },
+    "cmo": {
+      "id": "7e43d049-bbd2-4c14-92f0-df62f48d4386",
+      "name": "CMO",
+      "title": "성장 분석 — KPI·실험·경쟁 인텔을 읽고 주간 성장 메모",
+      "role": "cmo",
+      "reports_to": "ceo",
+      "kind": "llm",
+      "why_model": "주간 수치·가설 장부를 읽는 복합 분석은 Codex 6.1 Sol, 한도가 노랑일 때는 Luna로 처리한다. 성장 매니저도 Codex 우선이다.",
+      "primary": {
+        "adapterType": "codex_local",
+        "model": "gpt-6.1-sol",
+        "modelReasoningEffort": "medium"
+      },
+      "economy": {
+        "adapterType": "codex_local",
+        "model": "gpt-6-luna",
+        "modelReasoningEffort": "high"
+      },
+      "alternate": {
+        "adapterType": "claude_local",
+        "model": "claude-sonnet-5-5",
+        "effort": "high"
+      },
+      "max_turns": 40,
+      "timeout_sec": 1500,
+      "wake_on_demand": true,
+      "max_concurrent": 1,
+      "daily_cost_cap_usd": 5,
+      "cwd": "/Users/beye/BarroTubeData/workspace/growth",
+      "instructions": "cmo.md"
+    },
+    "producer": {
+      "id": "8f440921-8463-4127-a45e-0cb478334480",
+      "name": "Producer",
+      "title": "생산 실행 — 발행 슬롯·재개를 결정론 파이프라인으로 (모델 없음, 토큰 0)",
+      "role": "producer",
+      "reports_to": "ceo",
+      "kind": "process",
+      "why_model": "회차 생산은 이미 단계마다 검증된 스크립트다. LLM 이 그 위에서 지휘하면 토큰만 쓰고 결정론이 깨진다 — 실행만 한다.",
+      "process": {
+        "command": "bash",
+        "args": [
+          "lib/run-node.sh",
+          "scripts/automation/paperclip/dispatch.js"
+        ],
+        "timeoutSec": 0,
+        "graceSec": 30
+      },
+      "wake_on_demand": true,
+      "max_concurrent": 1,
+      "cwd": "/Users/beye/workspace/BarroSkills/.claude/skills/barrotube",
+      "instructions": "producer.md"
+    },
+    "ops": {
+      "id": null,
+      "name": "Ops Runner",
+      "title": "운영 실행 — 수집·KPI·마켓맵·진단 잡 (모델 없음, 토큰 0)",
+      "role": "devops",
+      "reports_to": "sre",
+      "kind": "process",
+      "why_model": "정해진 시각의 결정론 잡. 15:45 KRX 스냅샷처럼 시각이 생명인 잡이 앞 잡 뒤에 줄 서지 않게 동시 3개까지 돈다.",
+      "process": {
+        "command": "bash",
+        "args": [
+          "lib/run-node.sh",
+          "scripts/automation/paperclip/dispatch.js"
+        ],
+        "timeoutSec": 7200,
+        "graceSec": 30
+      },
+      "wake_on_demand": true,
+      "max_concurrent": 3,
+      "cwd": "/Users/beye/workspace/BarroSkills/.claude/skills/barrotube",
+      "instructions": "ops-runner.md"
+    },
+    "governor": {
+      "id": null,
+      "name": "Token Governor",
+      "title": "토큰 관제 — 60초마다 전 회사 중앙 구독 한도·예약·모델 전환 점검 (모델 없음, 토큰 0)",
+      "role": "devops",
+      "reports_to": "ceo",
+      "kind": "process",
+      "why_model": "한도 판단은 숫자 비교다. LLM 이 토큰을 세면 그 자체가 토큰을 쓴다.",
+      "process": {
+        "command": "/Users/beye/.nvm/versions/node/v24.11.1/bin/node",
+        "args": [
+          "/Users/beye/workspace/BarroSkills/.claude/skills/barrotube/scripts/automation/paperclip/token-governor.js"
+        ],
+        "timeoutSec": 300,
+        "graceSec": 15
+      },
+      "timer_sec": 60,
+      "wake_on_demand": false,
+      "max_concurrent": 1,
+      "cwd": "/Users/beye/workspace/BarroSkills/.claude/skills/barrotube",
+      "instructions": "token-governor.md"
+    },
+    "sre": {
+      "id": null,
+      "name": "SRE Engineer",
+      "title": "장애 수리·재개 — 원인 확인, 격리 사본에서 수정·테스트, 리뷰 후 반영, 회차 재개",
+      "role": "engineer",
+      "reports_to": "ceo",
+      "kind": "llm",
+      "why_model": "운영 코드의 디버깅·수정은 이 저장소의 원칙상 Claude 몫(메인 코딩·디버깅). 장애는 드물지만 한 번이 회차 하나라 상위 모델을 쓴다.",
+      "primary": {
+        "adapterType": "claude_local",
+        "model": "claude-opus-5-5",
+        "effort": "high"
+      },
+      "economy": {
+        "adapterType": "claude_local",
+        "model": "claude-sonnet-5-5",
+        "effort": "high"
+      },
+      "alternate": {
+        "adapterType": "codex_local",
+        "model": "gpt-6.1-sol",
+        "modelReasoningEffort": "high"
+      },
+      "max_turns": 150,
+      "timeout_sec": 3600,
+      "wake_on_demand": true,
+      "max_concurrent": 1,
+      "daily_cost_cap_usd": 20,
+      "cwd": "/Users/beye/BarroTubeData/workspace/ops/repairs",
+      "instructions": "sre.md",
+      "codex_bypass": true,
+      "_codex_bypass": "Codex 대체 모드일 때 반영 스크립트가 운영 트리·장애 기록에 써야 해서 샌드박스를 끈다(Claude 모드의 skip-permissions 와 같은 수준). 리뷰어는 사본 안에서만 쓰므로 샌드박스를 유지한다."
+    },
+    "reviewer": {
+      "id": null,
+      "name": "Code Reviewer",
+      "title": "수리 리뷰 — SRE 패치를 다른 모델의 눈으로 검토·테스트하고 승인/반려",
+      "role": "qa",
+      "reports_to": "sre",
+      "kind": "llm",
+      "why_model": "수리 담당 Claude와 다른 공급자인 Codex 6.1 Sol로 패치를 검토한다. 한도가 노랑이면 같은 모델의 추론 강도만 낮춰 검증 품질을 지킨다.",
+      "primary": {
+        "adapterType": "codex_local",
+        "model": "gpt-6.1-sol",
+        "modelReasoningEffort": "high"
+      },
+      "economy": {
+        "adapterType": "codex_local",
+        "model": "gpt-6.1-sol",
+        "modelReasoningEffort": "medium"
+      },
+      "alternate": {
+        "adapterType": "claude_local",
+        "model": "claude-sonnet-5-5",
+        "effort": "high"
+      },
+      "max_turns": 40,
+      "timeout_sec": 1500,
+      "wake_on_demand": true,
+      "max_concurrent": 1,
+      "daily_cost_cap_usd": 6,
+      "cwd": "/Users/beye/BarroTubeData/workspace/ops/repairs",
+      "instructions": "reviewer.md"
+    }
+  },
+  "retired": {
+    "_comment": "4~5월 단계별 에이전트. 그 단계는 지금 auto-pipeline.sh 가 결정론으로 한다. 기록 보존을 위해 지우지 않고 휴면(pause)만 한다.",
+    "ids": [
+      "ecb951d8-608b-45a2-8589-0ea65659d56b",
+      "5f12035e-f442-411c-8841-1c3b8d9364ae",
+      "509e7e4b-6611-4db5-ab46-a19a01f05d33",
+      "082570c0-5904-4165-960f-0ed6c28d82bf",
+      "79872d75-ed27-4f4a-abb1-0adaf0ceb38f",
+      "0dfe99f5-78a1-4f3f-9f41-01b8e7503a37",
+      "a5ba4b5b-3f2a-482c-8c1d-41c71863d7dc",
+      "f75f442f-abf3-4d46-a25a-79c7a6778b7b",
+      "df5beefe-999b-4e54-8b1e-26596dd55dd4",
+      "e3954def-face-47b4-8c68-1a8b6c304a89",
+      "9b611f2d-fef6-45c3-8cff-e9b0846bc1e8",
+      "42b07f9e-6ebf-4d9b-8bf2-58badf92fe65",
+      "8acee7f4-bc3c-47af-b234-a802b028163b",
+      "567d02aa-2507-42a9-859f-a6a5a771c4f6"
+    ],
+    "title_prefix": "[휴면 2026-10] "
+  },
+  "projects": {
+    "production": {
+      "name": "생산 — 발행 슬롯",
+      "icon": "rocket",
+      "color": "#e5484d",
+      "lead": "producer"
+    },
+    "ops": {
+      "name": "운영 — 수집·진단·마켓맵",
+      "icon": "cog",
+      "color": "#3e63dd",
+      "lead": "ops"
+    },
+    "growth": {
+      "name": "성장 — KPI·전략",
+      "icon": "target",
+      "color": "#30a46c",
+      "lead": "cmo"
+    },
+    "reliability": {
+      "name": "안정성 — 장애·수리",
+      "icon": "wrench",
+      "color": "#f76b15",
+      "lead": "sre"
+    }
+  },
+  "goals": {
+    "north_star": {
+      "title": "주간 순증 구독 +10 (north star)",
+      "level": "company",
+      "owner": "ceo",
+      "kpis": [
+        "weekly_net_subs"
+      ]
+    },
+    "publishing": {
+      "title": "편성대로 발행 — 주 17편 100%",
+      "level": "team",
+      "parent": "north_star",
+      "owner": "sre",
+      "kpis": [
+        "publish_consistency_7d"
+      ]
+    },
+    "reach": {
+      "title": "도달 — 48h 조회 지수 1.0×·히트율 25%",
+      "level": "team",
+      "parent": "north_star",
+      "owner": "cmo",
+      "kpis": [
+        "views_48h_index_7d",
+        "video_hit_rate_7d",
+        "weekly_views_growth"
+      ]
+    },
+    "engagement": {
+      "title": "참여 — 좋아요율 1.2%·구독 전환",
+      "level": "team",
+      "parent": "north_star",
+      "owner": "cmo",
+      "kpis": [
+        "like_rate_7d",
+        "subs_per_1k_views_7d"
+      ]
+    },
+    "efficiency": {
+      "title": "효율 — 자동화가 구독 한도를 넘기지 않는다",
+      "level": "team",
+      "parent": "north_star",
+      "owner": "ceo",
+      "kpis": []
+    }
+  },
+  "routines": [
+    {
+      "key": "us-close",
+      "title": "생산 · 미국 증시 마감 브리핑",
+      "project": "production",
+      "goal": "publishing",
+      "agent": "producer",
+      "tier": 0,
+      "priority": "high",
+      "action": "slot:us-close",
+      "crons": [
+        "0 6 * * *"
+      ],
+      "concurrency": "skip_if_active"
+    },
+    {
+      "key": "omnibus",
+      "title": "생산 · 점심 옴니버스",
+      "project": "production",
+      "goal": "publishing",
+      "agent": "producer",
+      "tier": 0,
+      "priority": "high",
+      "action": "slot:omnibus",
+      "crons": [
+        "0 10 * * 1-4"
+      ],
+      "concurrency": "skip_if_active"
+    },
+    {
+      "key": "realestate",
+      "title": "생산 · 주간 부동산 브리핑",
+      "project": "production",
+      "goal": "publishing",
+      "agent": "producer",
+      "tier": 0,
+      "priority": "high",
+      "action": "slot:realestate",
+      "crons": [
+        "0 10 * * 5"
+      ],
+      "concurrency": "skip_if_active"
+    },
+    {
+      "key": "kr-close",
+      "title": "생산 · 국내 증시 마감 브리핑",
+      "project": "production",
+      "goal": "publishing",
+      "agent": "producer",
+      "tier": 0,
+      "priority": "high",
+      "action": "slot:kr-close",
+      "crons": [
+        "0 16 * * 1-5"
+      ],
+      "concurrency": "skip_if_active"
+    },
+    {
+      "key": "publish-resume",
+      "title": "생산 · 승인됐는데 미게시인 EP 회수",
+      "project": "production",
+      "goal": "publishing",
+      "agent": "producer",
+      "tier": 0,
+      "priority": "medium",
+      "action": "job:publish-resume",
+      "crons": [
+        "30 7 * * *",
+        "30 17 * * *"
+      ],
+      "concurrency": "coalesce_if_active"
+    },
+    {
+      "key": "market-map",
+      "title": "운영 · 마켓맵 카드뉴스 (조간·석간)",
+      "project": "ops",
+      "goal": "reach",
+      "agent": "ops",
+      "tier": 0,
+      "priority": "medium",
+      "action": "job:market-map",
+      "crons": [
+        "0 8 * * *",
+        "0 18 * * *"
+      ],
+      "concurrency": "coalesce_if_active"
+    },
+    {
+      "key": "market-map-krclose",
+      "title": "운영 · 석간용 KRX 공식 종가 스냅샷",
+      "project": "ops",
+      "goal": "reach",
+      "agent": "ops",
+      "tier": 0,
+      "priority": "medium",
+      "action": "job:market-map-krclose",
+      "crons": [
+        "45 15 * * 1-5"
+      ],
+      "concurrency": "coalesce_if_active"
+    },
+    {
+      "key": "competitor-scan",
+      "title": "운영 · 경쟁 인텔 수집→분석",
+      "project": "ops",
+      "goal": "reach",
+      "agent": "ops",
+      "tier": 1,
+      "priority": "medium",
+      "action": "job:competitor-scan",
+      "crons": [
+        "20 5 * * *",
+        "20 15 * * *"
+      ],
+      "concurrency": "coalesce_if_active"
+    },
+    {
+      "key": "oauth-renew",
+      "title": "운영 · YouTube OAuth 만료 점검",
+      "project": "ops",
+      "goal": "publishing",
+      "agent": "ops",
+      "tier": 0,
+      "priority": "medium",
+      "action": "job:oauth-renew",
+      "crons": [
+        "40 6 * * *"
+      ],
+      "concurrency": "coalesce_if_active"
+    },
+    {
+      "key": "doctor",
+      "title": "운영 · 자동 진단 (doctor)",
+      "project": "ops",
+      "goal": "publishing",
+      "agent": "ops",
+      "tier": 0,
+      "priority": "medium",
+      "action": "job:doctor",
+      "crons": [
+        "10 7 * * *"
+      ],
+      "concurrency": "coalesce_if_active"
+    },
+    {
+      "key": "growth",
+      "title": "성장 · KPI 루프 (수집→진단→처방)",
+      "project": "growth",
+      "goal": "north_star",
+      "agent": "ops",
+      "tier": 0,
+      "priority": "medium",
+      "action": "job:growth",
+      "crons": [
+        "40 5 * * *",
+        "40 15 * * *"
+      ],
+      "concurrency": "coalesce_if_active"
+    },
+    {
+      "key": "weekly-marketing",
+      "title": "성장 · 주간 마케팅 인텔리전스 수집",
+      "project": "growth",
+      "goal": "reach",
+      "agent": "ops",
+      "tier": 1,
+      "priority": "low",
+      "action": "job:weekly-marketing",
+      "crons": [
+        "0 9 * * 1"
+      ],
+      "concurrency": "coalesce_if_active"
+    },
+    {
+      "key": "growth-manager",
+      "title": "성장 · 성장 매니저 (일일 가설·처방)",
+      "project": "growth",
+      "goal": "north_star",
+      "agent": "ops",
+      "tier": 1,
+      "priority": "medium",
+      "action": "job:growth-manager",
+      "crons": [
+        "40 19 * * *"
+      ],
+      "concurrency": "coalesce_if_active",
+      "llm_providers": [
+        "codex",
+        "claude"
+      ]
+    },
+    {
+      "key": "cmo-weekly",
+      "title": "성장 · CMO 주간 성장 메모",
+      "project": "growth",
+      "goal": "reach",
+      "agent": "cmo",
+      "tier": 2,
+      "priority": "medium",
+      "crons": [
+        "30 8 * * 1"
+      ],
+      "concurrency": "skip_if_active",
+      "description": "지난 7일 성장 자료를 읽고 주간 성장 메모를 쓴다. 지침의 「주간 성장 메모」 절차를 따른다. 산출: workspace/growth/weekly/<월요일 날짜>-cmo.md + 이 이슈 댓글 요약."
+    },
+    {
+      "key": "ceo-weekly",
+      "title": "성장 · CEO 주간 경영 리뷰",
+      "project": "growth",
+      "goal": "north_star",
+      "agent": "ceo",
+      "tier": 2,
+      "priority": "high",
+      "crons": [
+        "30 9 * * 1"
+      ],
+      "concurrency": "skip_if_active",
+      "description": "CMO 주간 메모·대기 중인 제안 설계서·토큰 리포트를 읽고 이번 주 결정을 내린다. 지침의 「주간 경영 리뷰」 절차를 따른다. 산출: workspace/growth/decisions.jsonl 기록 + 채택 시 SRE 구현 이슈 1건 이하 + 이 이슈 댓글 요약."
+    },
+    {
+      "key": "token-report",
+      "title": "관제 · 토큰 일일 리포트",
+      "project": "ops",
+      "goal": "efficiency",
+      "agent": "ops",
+      "tier": 0,
+      "priority": "low",
+      "action": "job:token-report",
+      "crons": [
+        "0 21 * * *"
+      ],
+      "concurrency": "coalesce_if_active"
+    }
+  ],
+  "keep_on_launchd": {
+    "telegram-bot": "상시 데몬(KeepAlive) — 스케줄 잡이 아니라 대화 창구다",
+    "deadman-*": "생산 슬롯·마켓맵 폴백 — 페이퍼클립이 회차를 못 띄웠을 때만 직접 실행"
+  },
+  "deadman": {
+    "_comment": "슬롯 정시 + 20분. 마커가 있거나 페이퍼클립 큐에 대기 중이면 아무것도 안 한다.",
+    "us-close": {
+      "action": "slot:us-close",
+      "at": "06:20"
+    },
+    "omnibus": {
+      "action": "slot:omnibus",
+      "at": "Mon-Thu 10:20"
+    },
+    "realestate": {
+      "action": "slot:realestate",
+      "at": "Fri 10:20"
+    },
+    "kr-close": {
+      "action": "slot:kr-close",
+      "at": "Mon-Fri 16:20"
+    },
+    "market-map": {
+      "action": "job:market-map",
+      "at": "08:20,18:20"
+    }
+  },
+  "triage": {
+    "_comment": "막힘 점검 — 토큰 거버너 순회(60초; 이슈 점검 간격·하루 상한은 아래 정책)가 멈춘 이슈(blocked·도는 실행 없는 진행 중·board 확인 대기 검토)를 결정론으로 가르고, 판단할 것이 있을 때만 CEO 에게 [막힘 점검] 이슈를 연다. CEO 는 scripts/automation/paperclip/triage.js 의 허용 동작(재개·위임·사람에게·정리)으로만 서브에이전트에게 다시 맡긴다. 2026-10-25 운영자 「블럭이 너무 많다 — CEO 가 체크해서 서브에이전트들이 처리하게」: 그날 blocked 23건 중 9건이 아무도 다시 깨우지 않아 멈춰 있었다.",
+    "enabled": true,
+    "min_stuck_minutes": 60,
+    "_min_stuck_minutes": "막힌 지 이만큼 지나야 판단 대상 — 페이퍼클립 자동 복구·담당의 진행 중 대기와 겹치지 않게.",
+    "stale_wait_hours": 48,
+    "board_remind_hours": 72,
+    "_board_remind_hours": "운영자 몫은 이만큼 묵으면 CEO 가 다시 확인·알림. 같은 항목은 이 간격으로만 다시 올라온다.",
+    "recheck_hours": 24,
+    "max_per_day": 2,
+    "min_interval_hours": 4,
+    "variant": "economy",
+    "_variant": "CEO 가 기본 모델(Opus)이면 점검 이슈만 같은 공급자의 절약 모델로 돌린다(이슈 assigneeAdapterOverrides). 10-21 CEO 가 하루 상한($8)을 넘겨 멈춘 적이 있다 — 멈춘 CEO 는 점검도 못 한다.",
+    "rewake_per_issue_per_day": 2,
+    "max_actions_per_day": 30,
+    "assign_to": [
+      "sre",
+      "reviewer",
+      "cmo"
+    ]
+  }
+}

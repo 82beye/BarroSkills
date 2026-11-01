@@ -17,6 +17,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, existsSync, unlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import { codexUsageFromJsonl, parseClaudeEnvelope, recordLlmUsage } from './llm-ledger.js';
 
 const ROOT = resolve(import.meta.dirname, '../../..');
 
@@ -49,20 +50,26 @@ function buildPrompt(systemPrompt, userPrompt, extra = []) {
 export function callClaudeCode(systemPrompt, userPrompt, model = 'sonnet', timeoutSec = 600) {
   const prompt = buildPrompt(systemPrompt, userPrompt, ['- 표준출력에 JSON 만 낸다.']);
 
-  const r = spawnSync('claude', [
+  // --output-format json: 응답 텍스트와 함께 토큰·환산 비용이 온다 → 장부(llm-ledger)로.
+  const started = Date.now();
+  const r = spawnSync(join(ROOT, 'scripts/automation/paperclip/quota-claude'), [
     '-p', prompt,
     '--model', model,
     '--permission-mode', 'default',
     '--allowed-tools', '',
+    '--output-format', 'json',
   ], { cwd: ROOT, encoding: 'utf-8', timeout: timeoutSec * 1000, maxBuffer: 10 * 1024 * 1024, env: process.env });
 
   if (r.error?.code === 'ENOENT') {
     throw new Error('claude CLI 를 찾을 수 없다. launchd PATH 에 ~/.local/bin 이 있는지 확인하라.');
   }
   if (r.signal === 'SIGTERM') throw new Error(`claude -p 타임아웃 (${timeoutSec}s)`);
-  if (r.status !== 0) throw new Error(`claude -p 종료코드 ${r.status}: ${(r.stderr || '').slice(0, 300)}`);
+  const env = parseClaudeEnvelope(r.stdout || '');
+  recordLlmUsage({ engine: 'claude', model: env.model ?? model, input: env.input, cached: env.cached, output: env.output, costUsd: env.costUsd, ms: Date.now() - started, ok: r.status === 0 && !env.isError });
+  if (r.status !== 0) throw new Error(`claude -p 종료코드 ${r.status}: ${(r.stderr || env.text || '').slice(0, 300)}`);
+  if (env.isError) throw new Error(`claude -p 오류: ${env.text.slice(0, 300)}`);
 
-  const out = (r.stdout || '').trim();
+  const out = env.text.trim();
   if (!out) throw new Error('claude -p 응답이 비었다');
   return extractJson(out, 'claude -p');
 }
@@ -79,12 +86,15 @@ export function callCodex(systemPrompt, userPrompt, model = null, timeoutSec = 6
   const outFile = join(tmpdir(), `bt-engine-${process.pid}-${Math.random().toString(36).slice(2)}.txt`);
   const args = ['-a', 'never', '-s', 'read-only'];
   if (model) args.push('-m', model);
-  args.push('exec', '--ephemeral', '-o', outFile, prompt);
+  // --json: 진행 이벤트가 stdout JSONL 로 온다 — 마지막 응답은 여전히 -o 파일, 토큰은 turn.completed 에서.
+  args.push('exec', '--ephemeral', '--json', '-o', outFile, prompt);
 
   try {
-    const r = spawnSync('codex', args, {
+    const started = Date.now();
+    const r = spawnSync(join(ROOT, 'scripts/automation/paperclip/quota-codex'), args, {
       cwd: ROOT, encoding: 'utf-8', timeout: timeoutSec * 1000, maxBuffer: 10 * 1024 * 1024, env: process.env,
     });
+    recordLlmUsage({ engine: 'codex', model, ...codexUsageFromJsonl(r.stdout || ''), ms: Date.now() - started, ok: r.status === 0 });
     if (r.error?.code === 'ENOENT') throw new Error('codex CLI 를 찾을 수 없다 (launchd PATH 확인)');
     if (r.signal === 'SIGTERM') throw new Error(`codex 타임아웃 (${timeoutSec}s)`);
     if (r.status !== 0) throw new Error(`codex 종료코드 ${r.status}: ${(r.stderr || '').slice(0, 300)}`);
@@ -116,7 +126,10 @@ export function resolveChain(envValue, fallback = 'claude,codex,gemini') {
  */
 export async function runEngineChain(chain, runners, { log = console.log, warn = console.warn, error = console.error } = {}) {
   const failures = [];
+  let quotaDenied = false, lastError;
   for (const [i, name] of chain.entries()) {
+    // A subscription reserve denial must not turn into an unbudgeted API call.
+    if (quotaDenied && !['claude', 'codex'].includes(name)) continue;
     const runner = runners[name];
     if (!runner) throw new Error(`알 수 없는 엔진: ${name} (가능: ${Object.keys(runners).join(' | ')})`);
     try {
@@ -128,6 +141,8 @@ export async function runEngineChain(chain, runners, { log = console.log, warn =
         failures,
       };
     } catch (e) {
+      lastError = e;
+      quotaDenied ||= /PAPERCLIP_RESERVE_GUARD/.test(String(e.message));
       failures.push({ name, message: String(e.message).slice(0, 120) });
       if (i === chain.length - 1) {
         error(`❌ 모든 엔진 실패:\n${failures.map((f) => `   - ${f.name}: ${f.message}`).join('\n')}`);
@@ -138,5 +153,5 @@ export async function runEngineChain(chain, runners, { log = console.log, warn =
       warn(`   ⚠ ${name} 실패${isExhausted(e) ? ' [크레딧·쿼터 고갈]' : ''}(${failures.at(-1).message}) → 다음 엔진`);
     }
   }
-  throw new Error('빈 엔진 체인');
+  throw lastError || new Error('빈 엔진 체인');
 }

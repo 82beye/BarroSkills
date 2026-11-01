@@ -165,7 +165,7 @@ test('blocked or unreachable evidence never escalates a claim', () => {
 test('the factcheck gate is not bound to a single provider', () => {
   const src = readFileSync(join(ROOT, 'scripts', 'automation', 'run-factcheck.js'), 'utf-8');
   assert.match(src, /callClaudeFactcheck/, 'claude must be an available engine');
-  assert.match(src, /BT_FACTCHECK_ENGINE_CHAIN \|\| 'claude,gemini'/, 'claude first — Gemini 크레딧 고갈 전력');
+  assert.match(src, /BT_FACTCHECK_ENGINE_CHAIN \|\| 'claude,gemini,codex'/, 'claude first — Gemini 크레딧 고갈 전력, codex 가 마지막 폴백');
   assert.match(src, /requested === 'auto' \? ENGINE_CHAIN : \[requested\]/,
     'an explicit --engine must yield a one-element chain (no silent fallback)');
 
@@ -176,4 +176,9 @@ test('the factcheck gate is not bound to a single provider', () => {
   assert.match(src, /await verifyEvidenceUrls\(claimUrls\)/, 'verification is engine-independent');
   assert.match(src, /escalateFabricatedEvidence\(result\.claims, verification\)/);
   assert.match(src, /backend: \$\{backend\}/, 'the report must name the engine that produced it');
+});
+
+test('마크다운 표기에 붙은 백틱·표 구분자·한글은 URL 에 넣지 않는다', () => {
+  assert.deepEqual(extractEvidenceUrls('근거 `https://a.example/x?syn=1` | https://b.example/y|\nhttps://c.example/z의 기사'),
+    ['https://a.example/x?syn=1', 'https://b.example/y', 'https://c.example/z']);
 });

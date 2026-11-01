@@ -36,6 +36,24 @@ cd "$BARROTUBE_HOME"
 
 DRY_RUN="${DRY_RUN:-0}"
 FORCE_TOPIC="${FORCE_TOPIC:-}"
+# ── 슬립 방지 ────────────────────────────────────────────────────────────
+# 이 기계는 서버가 아니라 노트북이다. 파이프라인이 도는 도중 유휴 슬립에 들어가면
+# 작업이 통째로 정지하고, 깨어날 때쯤엔 예약 공개 시각이 이미 지나 있다.
+# 2026-09-16 EP-2026-0156 실측: 07:18 시작 → 08:05 수면 → 13:09 업로드.
+# 실제 작업은 1시간 안쪽이었는데 10:00 예약이 3시간 전이 돼 즉시 공개돼 버렸다.
+#
+# install-schedule.js 가 만드는 래퍼에 caffeinate 가 있었지만(FR-S-002),
+# 설치된 launchd 는 이 스크립트를 **직접** 부르고 있어서 한 번도 적용되지 않았다.
+# 래퍼가 아니라 여기에 두면 launchd 로 돌든 손으로 돌든 항상 걸린다.
+#
+# ⚠️ -i 는 '유휴 슬립'만 막는다. 뚜껑을 닫으면(클램셸) 이걸로도 잠든다 —
+#    일과 중 회차는 pmset 기상 예약과 함께 써야 한다 (lib/install-cron.sh wake).
+if [ -z "${BT_NO_CAFFEINATE:-}" ] && command -v caffeinate >/dev/null 2>&1; then
+  caffeinate -i -w $$ &
+  BT_CAFFEINATE_PID=$!
+  trap 'kill "$BT_CAFFEINATE_PID" 2>/dev/null || true' EXIT
+fi
+
 RESUME_EP="${RESUME_EP:-}"
 SLOT="${SLOT:-}"
 BT_SKIP_MEDIA_RENDER="${BT_SKIP_MEDIA_RENDER:-0}"
@@ -50,6 +68,19 @@ while [ $# -gt 0 ]; do
     *) echo "알 수 없는 인자: $1" >&2; exit 2 ;;
   esac
 done
+
+# 슬롯 이름의 정본은 config/routines.json 하나다 — 여기서는 **형식만** 본다.
+# 고정 목록을 하나 더 두면 새 슬롯이 늘 때 이쪽만 조용히 낡는다: 2026-09-16 에 추가된
+# omnibus 가 routines.json·install-cron.sh·generate-script.js 에는 들어갔는데 이 줄에만
+# 빠져서, 09-17·19·20 세 번의 점심 회차가 전부 Phase 0 에 닿지도 못하고 "Invalid slot"
+# exit 2 로 죽었다 (logs/cron/omnibus.log 0바이트). 모르는 슬롯은 아래 routines.json
+# 조회(≈200행)가 이름까지 찍어 거른다.
+if [ -n "$SLOT" ] && [[ ! "$SLOT" =~ ^[a-z][a-z0-9-]*$ ]]; then
+  echo "Invalid slot" >&2; exit 2
+fi
+if [ -n "$RESUME_EP" ] && [[ ! "$RESUME_EP" =~ ^EP-[0-9]{4}-[0-9]{4}$ ]]; then
+  echo "Invalid RESUME_EP" >&2; exit 2
+fi
 
 source "${SCRIPT_DIR}/guards.sh"
 
@@ -66,11 +97,27 @@ run_or_echo() {
   "$@"
 }
 
+# 멈춤·실패를 사람에게 넘기기 전에 원인 분석과 수정 설계서를 붙인다 (2026-10-07).
+# 「대본을 손보고 재개하세요」 한 줄만 받던 사람이 원인을 찾으러 로그를 파지 않게 한다 —
+# EP-2026-0214 의 원인은 대본이 아니라 팩트체커가 요약 원자료를 못 받은 것이었다.
+# 코드는 바꾸지 않는다(설계서까지, scripts/automation/incident-analyze.js). 분석이 실패해도 알림은 나간다.
+incident_analysis() {
+  [ "${DRY_RUN:-0}" = "0" ] && [ "${BT_INCIDENT_ANALYSIS:-1}" = "1" ] || return 0
+  local out
+  out="$(node scripts/automation/incident-analyze.js --ep "${EP_ID:-}" --slot "${SLOT:-}" --kind "$1" \
+    --stage "$2" --detail "$3" --log "logs/cron/${CRON_LOG_NAME:-auto-pipeline}" --timeout 150)" || true
+  printf '%s\n' "$out" | grep -v '^INCIDENT' >&2 || true
+  printf '%s\n' "$out" | sed -n 's/^INCIDENT_SUMMARY=//p' | tail -1 | sed 's/&/\&amp;/g; s/</\&lt;/g'
+}
+
 fail_with_alert() {
   local stage="$1"; local detail="$2"
   echo "❌ FAIL at $stage: $detail" >&2
-  audit "auto_pipeline_fail" "ERROR" "slot=$SLOT stage=$stage detail=$detail"
-  notify_telegram "❌ <b>auto-pipeline 실패</b>\nslot: ${SLOT:-adhoc}\nstage: $stage\n$detail\n\n로그: <code>tail -50 ${BARROTUBE_HOME}/logs/cron/${CRON_LOG_NAME}.log</code>"
+  # 에피소드 ID 를 싣는다. 예전 알림에는 slot·stage 만 있어서 어느 회차가 죽었는지
+  # 로그를 파야 알 수 있었다 (2026-09-23 EP-2026-0175 추적에 그대로 걸렸다).
+  audit "auto_pipeline_fail" "ERROR" "slot=$SLOT ep=${EP_ID:-?} stage=$stage detail=$detail"
+  local ia; ia="$(incident_analysis fail "$stage" "$detail")"
+  notify_telegram "❌ <b>auto-pipeline 실패</b>\nslot: ${SLOT:-adhoc}\nEP: ${EP_ID:-(에피소드 생성 전)}\nstage: $stage\n$detail${ia:+\n\n🔎 $ia}\n\n로그: <code>tail -50 ${BARROTUBE_HOME}/logs/cron/${CRON_LOG_NAME}.log</code>"
   exit 1
 }
 
@@ -80,7 +127,8 @@ halt_for_human() {
   local stage="$1"; local detail="$2"
   echo "🖐  $stage: $detail" >&2
   audit "auto_pipeline_halt" "WARN" "slot=$SLOT stage=$stage detail=$detail ep=${EP_ID:-}"
-  notify_telegram "🖐 <b>사람이 필요합니다</b>\nslot: ${SLOT:-adhoc}\nEP: ${EP_ID:-?}\nstage: $stage\n$detail\n\n이어서 진행:\n<code>RESUME_EP=${EP_ID:-EP-...} bash ${BARROTUBE_HOME}/lib/auto-pipeline.sh --slot ${SLOT:-us-close}</code>"
+  local ia; ia="$(incident_analysis halt "$stage" "$detail")"
+  notify_telegram "🖐 <b>사람이 필요합니다</b>\nslot: ${SLOT:-adhoc}\nEP: ${EP_ID:-?}\nstage: $stage\n$detail${ia:+\n\n🔎 $ia}\n\n이어서 진행:\n<code>RESUME_EP=${EP_ID:-EP-...} bash ${BARROTUBE_HOME}/lib/auto-pipeline.sh --slot ${SLOT:-us-close}</code>"
   exit 0
 }
 
@@ -93,7 +141,7 @@ log_stage() {
 }
 
 json_get() {  # json_get <file> <python-expr on d>
-  python3 -c "import json,sys;d=json.load(open('$1'));print($2)" 2>/dev/null
+  python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print($2)" "$1" 2>/dev/null
 }
 
 # macOS 에는 GNU coreutils 의 timeout 이 없다 (이 머신에 timeout·gtimeout 둘 다 부재 — 실측).
@@ -124,14 +172,33 @@ run_with_timeout() {
 #             셋 다 이미지·클립은 5/5 였고 인트로·썸네일만 없었다.)
 #   stills — 이미지만. 브라우저가 정말 필요한 건 시트를 붙이는 스틸뿐인 단계에서 쓴다.
 media_assets_ready() {
-  local base="$1" mode="${2:-full}" id path hash hashes="" missing=""
+  local base="$1" mode="${2:-full}" id path hash hashes="" missing="" ihash ihashes=""
   # 이 게이트는 **브라우저가 만들어야 할 자산**만 본다. 모션 정본이 Wan(헤드리스)으로
   # 바뀐 뒤로 클립은 Phase 8 의 S6c 가 만들므로, 여기서 클립을 요구하는 건 브라우저가
   # 실제로 클립을 굽는 grok 일 때뿐이다. (2026-09-02 기본값 grok → wan)
   local motion_engine="${BT_MOTION_ENGINE:-grok}"
-  for id in 001 002 003 004 005; do
+  # 편당 Grok 예산이 로컬 모션으로 배정한 씬은 Grok 클립을 요구하지 않는다 (lib/grok-budget.js).
+  local planned_local="" plan_file="${base}/40_assets/videos/_grok_plan.json"
+  if [ -s "$plan_file" ]; then
+    planned_local=$(python3 -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1])).get("local",[])))' "$plan_file" 2>/dev/null)
+  fi
+  for id in $(seq -f "%03g" 1 "${SLOT_SCENES:-5}"); do
     path="${base}/40_assets/images/scene_${id}.png"
-    [ -s "$path" ] || missing="${missing}${missing:+, }images/scene_${id}.png"
+    if [ ! -s "$path" ]; then
+      missing="${missing}${missing:+, }images/scene_${id}.png"
+    else
+      # 같은 그림이 두 씬에 박히면 같은 화면이 두 번 나간다. 영상에는 이 검사가 있었는데
+      # 이미지에는 없어서 2026-09-21 EP-2026-0169 의 씬 002·005 가 각각 직전 씬의 바이트
+      # 복사본으로 이 게이트를 통과했다. 원인은 브라우저 워커가 blob 다운로드에 실패하면
+      # $TMPDIR/browser-use/assets 를 -mmin -20 으로 뒤져 **직전 씬이 남긴 자산**을 복사하는
+      # 폴백이다. 워커는 그때도 "생성·검수해 저장했습니다" 라고 보고한다 — 판정은 산출물로만 한다.
+      # 중복이면 그 씬을 missing 으로 잡아 top-up 루프가 다시 만들게 한다.
+      ihash=$(shasum -a 256 "$path" | awk '{print $1}')
+      if printf '%s\n' "$ihashes" | grep -qx "$ihash"; then
+        missing="${missing}${missing:+, }images/scene_${id}.png(duplicate bytes)"
+      fi
+      ihashes="${ihashes}${ihashes:+$'\n'}${ihash}"
+    fi
 
     # stills 모드는 이름 그대로 스틸만 본다 — 브라우저가 정말 필요한 건 시트를 붙이는
     # 스틸뿐이고, 클립은 Phase 8 의 ensureMotion()(로컬 HyperFrames)이 스틸을 누가
@@ -140,6 +207,7 @@ media_assets_ready() {
     if [ "$mode" = "stills" ] || [ "$motion_engine" != "grok" ]; then
       continue
     fi
+    case " $planned_local " in *" $id "*) continue ;; esac
 
     path="${base}/40_assets/videos/scene_${id}.mp4"
     if [ ! -s "$path" ] || ! ffprobe -v error "$path" >/dev/null 2>&1; then
@@ -181,14 +249,50 @@ if [ -n "$SLOT" ]; then
   [ -f "$ROUTINES" ] || { echo "❌ config/routines.json 없음" >&2; exit 2; }
   python3 -c "import json;d=json.load(open('$ROUTINES'));exit(0 if '$SLOT' in d.get('slots',{}) else 1)" \
     || { echo "❌ 알 수 없는 슬롯: $SLOT" >&2; exit 2; }
-  CRON_LOG_NAME="routine-${SLOT}"
+  # install-cron 이 plist 에 박는 경로(logs/cron/<routine>.log)와 같아야 한다 — 예전 "routine-<slot>"
+  # 은 없는 파일이라, 실패 알림의 tail 명령을 그대로 치면 "No such file" 이었다 (2026-09-30).
+  CRON_LOG_NAME="${SLOT}"
   SLOT_LABEL=$(json_get "$ROUTINES" "d['slots']['$SLOT']['label']")
   NEWS_SOURCES=$(json_get "$ROUTINES" "','.join(d['slots']['$SLOT']['news_sources'])")
   PUBLISH_AT=$(json_get "$ROUTINES" "d['slots']['$SLOT']['publish_at']")
+
+  # ── 다음 회차까지 깨워 두기 (기상 예약 없이) ─────────────────────────────
+  # pmset 기상 예약은 root 가 필요해 무인으로 걸 수 없다. 대신 **이미 깨어 있는 회차**가
+  # 다음 회차 시작 시각까지 슬립을 붙잡아 두면 같은 효과가 난다.
+  #
+  # 운영자 환경(2026-09-16): 08~18시 일과 중 손을 못 댄다. 06:00 회차는 기상 시간에 도니
+  # 그 실행이 10:00 회차 시작까지 다리를 놓아 주면 점심 회차가 성립한다.
+  # 16:00 회차는 다리를 놓지 않는다 — 11시부터 5시간을 더 깨워 두면 가방 속에서
+  # 배터리와 발열을 태운다. 그 회차는 퇴근 후 노트북을 여는 순간 launchd 가 만회 실행하고,
+  # 18:00 목표를 6시간 이내로 놓쳤으면 늦은-게시 유예가 즉시 공개한다.
+  #
+  # config/routines.json 의 slots.<slot>.keep_awake_until ("HH:MM") 이 정본이다. 없으면 안 건다.
+  if [ -z "${BT_NO_CAFFEINATE:-}" ] && [ -n "${SLOT:-}" ] && command -v caffeinate >/dev/null 2>&1; then
+    KEEP_UNTIL=$(json_get "$ROUTINES" "d['slots'].get('$SLOT',{}).get('keep_awake_until','')" 2>/dev/null || echo "")
+    if [ -n "$KEEP_UNTIL" ]; then
+      KEEP_SECS=$(BT_KU="$KEEP_UNTIL" python3 -c "
+  import datetime, os
+  kst = datetime.timezone(datetime.timedelta(hours=9))
+  now = datetime.datetime.now(kst)
+  h, m = os.environ['BT_KU'].split(':')
+  t = now.replace(hour=int(h), minute=int(m), second=0, microsecond=0)
+  if t <= now: t += datetime.timedelta(days=1)
+  print(int((t - now).total_seconds()))
+  " 2>/dev/null || echo 0)
+      if [ "${KEEP_SECS:-0}" -gt 0 ] && [ "${KEEP_SECS:-0}" -lt 43200 ]; then
+        nohup caffeinate -i -t "$KEEP_SECS" >/dev/null 2>&1 &
+        disown 2>/dev/null || true
+        echo "  ☕ ${KEEP_UNTIL} 까지 슬립을 막습니다 ($((KEEP_SECS/60))분) — 다음 회차가 잠든 채로 넘어가지 않게"
+      fi
+    fi
+  fi
   # 슬롯이 포맷·페르소나를 지정할 수 있다. 예전엔 create-episode 에 안 넘겨서
   # 부동산 슬롯(shorts-3min·barro-analyst)도 기본값(shorts 60초·barro-alert)으로 만들어졌다.
   SLOT_FORMAT=$(json_get "$ROUTINES" "d['slots']['$SLOT'].get('format','')")
   SLOT_PERSONA=$(json_get "$ROUTINES" "d['slots']['$SLOT'].get('persona','')")
+  # 「미국 증시 요약」 같은 포맷 전환 (config/market-summary.json). 적용 여부는 Phase 1b 가
+  # 전날 미국 장 종가가 실제로 있는지 보고 정한다 — 일요일 결산·월요일 준비는 원래 쇼츠로 간다.
+  SLOT_FORM=$(json_get "$ROUTINES" "d['slots']['$SLOT'].get('form','')")
   # 씬 수도 슬롯에서 읽는다. 아래 codex 지시문이 '5장·5개' 로 박혀 있어서
   # 7씬 슬롯(realestate)은 두 컷이 빈 채로 렌더까지 갔다 (2026-08-31 dry-run 에서 발견).
   SLOT_SCENES=$(json_get "$ROUTINES" "d['slots']['$SLOT'].get('scene_count') or d.get('defaults',{}).get('scene_count',5)")
@@ -215,14 +319,19 @@ TODAY=$(date +%Y-%m-%d)
 NEWS_DIR="${BARROTUBE_HOME}/workspace/daily-news/${TODAY}"
 # Phase 2a 산출물. Phase 3 이 에피소드로 복사하므로 RESUME·FORCE_TOPIC 경로(= Phase 2 를
 # 통째로 건너뛰는 경로)에서도 정의돼 있어야 한다 — set -u 라 미정의면 그 자리에서 죽는다.
-# 슬롯별 파일이 정본. 예전 이름은 2026-08-30 이전 산출물 폴백이다.
+# 슬롯별 파일만 정본이다. 여기서 [ -f ] 로 예전 이름(desk-briefing.md)에 폴백하던 동안은
+# 파일이 Phase 2a 에서야 생기므로 매번 폴백으로 떨어졌고, 08-31 부터 4주 동안
+# 05_desk_briefing.md 가 한 번도 설치되지 않았다(2026-09-28 발견). 예전 이름은 더 생기지 않는다.
 DESK_BRIEF_MD="${NEWS_DIR}/desk-briefing-${SLOT}.md"
 DESK_TOPIC_JSON="${NEWS_DIR}/desk-topic-${SLOT}.json"
-[ -f "$DESK_BRIEF_MD" ]  || DESK_BRIEF_MD="${NEWS_DIR}/desk-briefing.md"
-[ -f "$DESK_TOPIC_JSON" ] || DESK_TOPIC_JSON="${NEWS_DIR}/desk-topic.json"
 # 성장 처방 (growth-pipeline.sh 05:40/15:40 산출). 슬롯별 파일만 정본 — 없으면 없는 것.
 # DESK_BRIEF_MD 와 같은 이유로 Phase 0 에서 정의한다 (set -u + RESUME 경로).
 GROWTH_DIRECTIVES_MD="${BARROTUBE_HOME}/workspace/growth/directives/${TODAY}-${SLOT}.md"
+
+# 덮개가 닫힌 채 DarkWake 틈에 시작하면 네트워크가 없다 — 알림·수집 전에 기다린다 (guards.sh).
+if [ "$DRY_RUN" = "0" ]; then
+  wait_for_network || echo "⚠️  네트워크 응답 없음 — 그대로 진행합니다 (수집이 비면 헤드라인 폴백)"
+fi
 
 audit "auto_pipeline_start" "INFO" "slot=$SLOT dry_run=$DRY_RUN force_topic=$FORCE_TOPIC resume=$RESUME_EP"
 notify_telegram "🤖 <b>${SLOT_LABEL} 시작</b>$([ "$DRY_RUN" = "1" ] && echo " (DRY_RUN)")"
@@ -251,6 +360,39 @@ if [ -z "$RESUME_EP" ] && [ -z "$FORCE_TOPIC" ] && [ -n "$SLOT" ]; then
         || echo "⚠️  경쟁 채널 수집 실패 (OAuth 만료 가능) — 없이 진행"
       run_or_echo node scripts/automation/analyze-competitors.js --date "$TODAY" \
         || echo "⚠️  경쟁 인텔 분석 실패 — 없이 진행"
+    fi
+  fi
+fi
+
+# 「미국 증시 요약」 포맷 (config/market-summary.json, 2026-10-01 오선 「증시 요약」 427편 벤치마크).
+# 화면은 쇼츠와 같다(세로·마시) — 씬 1 지수 카드 + 마시 컷 6장(라이브러리 먼저). 수집이 하나라도
+# 실패하면 이 회차는 원래 쇼츠 포맷으로 간다 — 포맷 때문에 회차를 잃지 않는다.
+SUMMARY_FORM=0
+SUMMARY_CFG="${BARROTUBE_HOME}/config/market-summary.json"
+if [ -z "${RESUME_EP:-}" ] && [ -z "$FORCE_TOPIC" ] && [ "${SLOT_FORM:-}" = "market-summary" ] && [ "$DRY_RUN" = "0" ]; then
+  # 판정은 content_mode 가 아니라 **전날 미국 종가가 실제로 있는가**로 한다. content_mode 는
+  # 토요일을 일괄 closed_market_issue 로 두지만 토요일 06:00 에는 금요일 종가가 막 나와 있다
+  # (벤치마크도 화~토 발행). 미국 휴장 다음 날은 세션이 어긋나 기존 쇼츠로 간다.
+  KST_DOW=$(date +%u)   # 1=월 … 7=일
+  YESTERDAY=$(python3 -c "import datetime,sys;d=datetime.date.fromisoformat(sys.argv[1]);print(d-datetime.timedelta(days=1))" "$TODAY")
+  if [ "$KST_DOW" = "1" ] || [ "$KST_DOW" = "7" ]; then
+    echo "  ⏭  요약 포맷 미적용 (일·월요일 편성) — 기존 쇼츠 포맷"
+  else
+    log_stage "🗞  Phase 1b — 미국 증시 요약 데이터 (일정·84종목·종목 이유)"
+    node scripts/automation/fetch-econ-calendar.js --date "$TODAY" \
+      || echo "  ⚠ 경제 일정 수집 실패 — 일정 없이 진행"
+    SUMMARY_JSON="${BARROTUBE_HOME}/workspace/daily-news/${TODAY}/summary-us.json"
+    if node scripts/automation/collect-summary-data.js --date "$TODAY" \
+        && [ "$(json_get "$SUMMARY_JSON" "d.get('us_session','')")" = "$YESTERDAY" ]; then
+      node scripts/automation/research-movers.js --date "$TODAY" || true
+      SUMMARY_FORM=1
+      SLOT_FORMAT=$(json_get "$SUMMARY_CFG" "d['format']")
+      SLOT_SCENES=$(json_get "$SUMMARY_CFG" "len(d['scenes'])")
+      SLOT_PERSONA="barro-teacher"
+      audit "summary_form_on" "INFO" "slot=$SLOT session=$YESTERDAY"
+    else
+      echo "  ⚠ 전날(${YESTERDAY}) 미국 종가가 없거나 수집 실패 — 이 회차는 기존 쇼츠 포맷으로 진행"
+      audit "summary_form_skip" "WARN" "slot=$SLOT reason=no_fresh_session"
     fi
   fi
 fi
@@ -333,9 +475,12 @@ if [ -z "$RESUME_EP" ] && [ -z "$FORCE_TOPIC" ]; then
     [ -f "$MODE_FILE" ] && CONTENT_MODE=$(json_get "$MODE_FILE" "d.get('content_mode','')")
   fi
   if [ -z "$CONTENT_MODE" ]; then
-    case "$(date +%u)" in
-      6) CONTENT_MODE="closed_market_issue" ;;
-      7) CONTENT_MODE="sunday_preopen" ;;
+    # us-close 는 일=한 주 결산 · 월=이번 주 준비 (2026-09-28 운영자 결정 — config/routines.json).
+    case "$SLOT:$(date +%u)" in
+      us-close:7) CONTENT_MODE="weekly_recap" ;;
+      us-close:1) CONTENT_MODE="weekly_preview" ;;
+      *:6) CONTENT_MODE="closed_market_issue" ;;
+      *:7) CONTENT_MODE="sunday_preopen" ;;
     esac
   fi
 
@@ -345,6 +490,12 @@ if [ -z "$RESUME_EP" ] && [ -z "$FORCE_TOPIC" ]; then
       ;;
     sunday_preopen)
       case "$TOPIC" in "다음 장 전 이슈 정리:"*) ;; *) TOPIC="다음 장 전 이슈 정리: $TOPIC" ;; esac
+      ;;
+    weekly_recap)
+      case "$TOPIC" in "한 주 결산:"*) ;; *) TOPIC="한 주 결산: $TOPIC" ;; esac
+      ;;
+    weekly_preview)
+      case "$TOPIC" in "이번 주 준비:"*) ;; *) TOPIC="이번 주 준비: $TOPIC" ;; esac
       ;;
   esac
   if [ -n "$CONTENT_MODE" ] && [ "$CONTENT_MODE" != "market_close" ]; then
@@ -359,6 +510,34 @@ fi
 if [ -z "$RESUME_EP" ]; then
   log_stage "📝 Phase 3 — S0 Brief 생성 (무비용)"
   echo "Topic: $TOPIC"
+
+  # 토픽에 실린 인용을 **여기서** 검증한다. 토픽은 00_brief.md 에 통째로 들어가고,
+  # 팩트체커는 나레이션뿐 아니라 그 배경 문서까지 채점한다.
+  # 2026-09-16 실측 두 건:
+  #   EP-2026-0157 — 데스크 브리핑이 197일 전 기사(확전)를 오늘 것(휴전)으로 인용 →
+  #                  재작성 3회가 내용을 통째로 지워 「배경은 확인이 필요합니다」만 남았다.
+  #   EP-2026-0158 — 운영자가 넘긴 FORCE_TOPIC 의 수치가 틀려 HIGH 가 안 내려갔다.
+  #                  나레이션을 아무리 고쳐도 배경 문서가 계속 채점돼 게이트가 안 풀렸다.
+  # 대본에 토큰을 쓰기 전에 잡으면 두 사고 모두 여기서 끝난다.
+  if [ "$DRY_RUN" = "0" ] && [ -n "${BT_SKIP_TOPIC_CITATION_CHECK:-}" ]; then
+    echo "  ⏭  토픽 인용 검증 건너뜀 (BT_SKIP_TOPIC_CITATION_CHECK)"
+  elif [ "$DRY_RUN" = "0" ]; then
+    TOPIC_CITE=$(BT_TOPIC="$TOPIC" BT_DATE="$(date '+%Y-%m-%d')" node -e '
+      const t = process.env.BT_TOPIC || "";
+      import("./scripts/automation/lib/evidence-verify.js").then(async (m) => {
+        const urls = m.extractEvidenceUrls(t);
+        if (!urls.length) { console.log("SKIP no-url"); return; }
+        const stale = await m.findStaleCitations(urls, process.env.BT_DATE, { maxAgeDays: 3 });
+        if (!stale.length) { console.log(`OK ${urls.length}건`); return; }
+        for (const c of stale) console.log(`STALE ${c.date} (${c.staleDays}일 전) ${c.url}`);
+      }).catch((e) => console.log("SKIP " + e.message));
+    ' 2>/dev/null || echo "SKIP error")
+    echo "$TOPIC_CITE" | sed 's/^/  🔗 /'
+    if echo "$TOPIC_CITE" | grep -q '^STALE'; then
+      halt_for_human "Phase 3 brief" \
+        "토픽이 오늘 사건의 근거로 **오래된 기사**를 인용했습니다. 같은 사건의 오늘 기사로 바꾸거나 그 사건을 빼세요. 이대로 진행하면 팩트체크가 뒤늦게 잡고 재작성이 내용을 지웁니다."
+    fi
+  fi
   if [ "$DRY_RUN" = "1" ]; then
     EP_ID="EP-2026-DRYRUN"
     EP_DIR="${BARROTUBE_HOME}/workspace/episodes/${EP_ID}"
@@ -366,6 +545,11 @@ if [ -z "$RESUME_EP" ]; then
     CREATE_ARGS=(--channel econ-daily --topic "$TOPIC")
     [ -n "$SLOT_FORMAT" ]  && CREATE_ARGS+=(--format "$SLOT_FORMAT")
     [ -n "$SLOT_PERSONA" ] && CREATE_ARGS+=(--persona "$SLOT_PERSONA")
+    # 요약 포맷의 씬 목표(150초)를 brief 에도 기록한다. shorts-3min 의
+    # 일반 기본값(172초)을 쓰면 QA 는 통과해도 brief 와 영상 길이가 어긋난다.
+    if [ "$SUMMARY_FORM" = "1" ]; then
+      CREATE_ARGS+=(--length "$(json_get "$SUMMARY_CFG" "d['target_total_seconds']")")
+    fi
     CREATE_OUT=$(node scripts/automation/create-episode.js "${CREATE_ARGS[@]}" 2>&1)
     echo "$CREATE_OUT"
     EP_ID=$(echo "$CREATE_OUT" | grep -oE "EP-[0-9]{4}-[0-9]+" | head -1)
@@ -410,12 +594,42 @@ echo "▶ 디렉토리: $EP_DIR"
 log_stage "✍️  Phase 4 — S4 대본 생성 (Gemini)"
 
 SCRIPT_PATH="${EP_DIR}/platforms/${PLATFORM}/30_script.md"
+# 재개 회차는 대본이 정한다 — 요약 포맷으로 만든 EP 는 재개해도 요약 포맷이다.
+if [ -n "$RESUME_EP" ] && [ -s "$SCRIPT_PATH" ] && grep -q '^form: market-summary' "$SCRIPT_PATH"; then
+  SUMMARY_FORM=1
+  SLOT_SCENES=$(json_get "$SUMMARY_CFG" "len(d['scenes'])")
+fi
+# 대본 생성기 — 내용 계약 실패(exit 3)는 다른 작가로 우회하지 않는다.
+generate_episode_script() {
+  if [ "$SUMMARY_FORM" = "1" ]; then
+    local summary_status=0
+    node scripts/automation/generate-summary-script.js --episode "$EP_ID" --date "$TODAY" || summary_status=$?
+    [ "$summary_status" = "0" ] && return 0
+    if [ "$summary_status" = "3" ]; then
+      echo "  ❌ 요약 대본 내용 계약 실패 — 일반 대본으로 우회하지 않음"
+      return 3
+    fi
+    echo "  ⚠ 요약 대본 실패 — 같은 EP 를 일반 대본으로 진행"
+    audit "summary_script_fallback" "WARN" "ep=$EP_ID"
+    SUMMARY_FORM=0
+  fi
+  node scripts/automation/generate-script.js --episode "$EP_DIR" --platform "$PLATFORM" --slot "$SLOT" "$@"
+}
 if [ -n "$RESUME_EP" ] && [ -s "$SCRIPT_PATH" ]; then
   echo "⏭  RESUME: 기존 대본 유지 — $SCRIPT_PATH"
+elif [ "$DRY_RUN" = "1" ]; then
+  echo "[DRY_RUN] 대본 생성 ($([ "$SUMMARY_FORM" = "1" ] && echo generate-summary-script.js || echo generate-script.js))"
 else
-  run_or_echo node scripts/automation/generate-script.js \
-    --episode "$EP_DIR" --platform "$PLATFORM" \
-    || fail_with_alert "Phase 4 script" "generate-script.js 실패"
+  generate_episode_script || fail_with_alert "Phase 4 script" "대본 생성 실패"
+fi
+
+# 생성기 재시도와 별도로 저장된 최종본을 검사한다. RESUME·요약 포맷도 같은 문턱을 지난다.
+# --strict 는 error 만 막고, 과탐 가능성이 있는 warn 은 보고서에 남긴다.
+if [ "$DRY_RUN" = "1" ]; then
+  echo "[DRY_RUN] validate-script-quality.js --file $SCRIPT_PATH --strict"
+else
+  node scripts/automation/validate-script-quality.js --file "$SCRIPT_PATH" --strict \
+    || fail_with_alert "Phase 4 대본 품질" "품질 계약 error 가 남았습니다. 대본을 수정한 뒤 재개하세요."
 fi
 
 # ─────────────────────────────────────────────────
@@ -429,8 +643,10 @@ else
   if ! node scripts/automation/validate-image-prompts.js --episode "$EP_DIR" --platform "$PLATFORM"; then
     echo "⚠️  계약 위반 — 대본 1회 재생성 후 재검사"
     audit "auto_pipeline_prompt_retry" "WARN" "slot=$SLOT ep=$EP_ID"
-    node scripts/automation/generate-script.js --episode "$EP_DIR" --platform "$PLATFORM" --force \
+    generate_episode_script --force \
       || fail_with_alert "Phase 5 rewrite" "대본 재생성 실패"
+    node scripts/automation/validate-script-quality.js --file "$SCRIPT_PATH" --strict \
+      || fail_with_alert "Phase 5 재생성 대본 품질" "재생성된 대본에 품질 계약 error 가 남았습니다."
     node scripts/automation/validate-image-prompts.js --episode "$EP_DIR" --platform "$PLATFORM" \
       || halt_for_human "Phase 5 계약" "재생성 후에도 image_prompt 계약 위반 — 이미지를 굽지 않고 멈췄습니다. 대본을 손보고 재개하세요."
   fi
@@ -445,14 +661,114 @@ FACTCHECK_PATH="${EP_DIR}/platforms/${PLATFORM}/35_factcheck.md"
 if [ -n "$RESUME_EP" ] && [ -s "$FACTCHECK_PATH" ] && grep -q '^pass: true$' "$FACTCHECK_PATH"; then
   echo "⏭  RESUME: 기존 PASS 팩트체크 유지 — $FACTCHECK_PATH"
 else
-  run_or_echo node scripts/automation/run-factcheck.js \
-    --episode "$EP_ID" --platform "$PLATFORM" \
+  # 재개는 실패한 리포트를 다시 쓰지 않는다 — run-factcheck 는 --force 가 없으면 있는 리포트를
+  # 캐시로 돌려준다. 멈춘 뒤 대본이나 검사기를 고쳐 재개해도 옛 판정(HIGH)이 그대로 게이트에
+  # 걸려 같은 자리에서 다시 멈췄다 (2026-10-07 EP-2026-0214 재개 때 손으로 리포트를 치워야 했다).
+  FC_ARGS=(--episode "$EP_ID" --platform "$PLATFORM")
+  if [ -n "$RESUME_EP" ] && [ -s "$FACTCHECK_PATH" ]; then FC_ARGS+=(--force); fi
+  run_or_echo node scripts/automation/run-factcheck.js "${FC_ARGS[@]}" \
     || fail_with_alert "Phase 6 factcheck" "run-factcheck.js 실패"
 fi
 
 # 게이트가 걸리면 곧장 사람을 부르지 않는다 — 리포트가 claim 마다 `수정 제안` 을 써 주므로
 # 그걸 적용하고 다시 검증한다. guards.factcheck_max_rewrites 만큼 시도하고 그래도 남으면 halt.
 # (2026-08-17: 이 루프가 없어서 8/16·8/17 이틀 연속 EP 가 여기서 멈추고 게시가 0건이 됐다.)
+# 리포트가 **지금 대본**을 심사한 게 맞는지 본다.
+# 2026-09-14 EP-2026-0154: run-factcheck 가 모델의 \u 이스케이프 오타로 죽으면서
+# 35_factcheck.md 가 직전 판(script_revision 4)으로 남았다. 대본은 revision 5 인데
+# 게이트는 옛 리포트를 읽는다 — 고친 지적이 그대로 살아 있고, 새 문장은 아무도 안 봤다.
+factcheck_report_stale() {
+  [ -s "$FACTCHECK_PATH" ] || return 1
+  local sr er
+  sr=$(sed -n 's/^script_revision:[[:space:]]*//p' "$FACTCHECK_PATH" | head -1)
+  er=$(sed -n 's/^revision:[[:space:]]*//p' "$SCRIPT_PATH" 2>/dev/null | head -1)
+  [ -n "$sr" ] && [ -n "$er" ] && [ "$sr" != "$er" ]
+}
+
+# 대본이 "왜"를 말하는 씬이 몇 개인가. 팩트체크 재작성이 설명을 지웠는지 재는 자다.
+#
+# 2026-09-16 EP-2026-0157: 재작성이 insight 씬의 「휴전 뒤 재건·무기 현대화 수요 기대
+# 때문에 매수세가 몰렸다」를 「정확한 상승 배경은 후속 보도로 다시 확인이 필요합니다」로
+# 바꿔 버렸다. 팩트체크 지적은 줄었지만(그래서 옛 점수로는 '더 좋은 판본') 시청자가
+# 60초를 쓴 이유가 사라졌다 — 제목은 '급등한 이유'를 약속했는데 본문이 안 갚았다.
+# 지적 수만 재면 이 손실이 안 보인다. 그래서 인과 밀도를 점수에 넣는다.
+causal_scene_count() {
+  node -e '
+    const { readFileSync } = require("node:fs");
+    import("./scripts/automation/lib/script-quality-contract.js").then((m) => {
+      const t = readFileSync(process.argv[1], "utf8");
+      const nar = [...t.matchAll(/narration:\s*([\s\S]*?)(?=\n    \w+:)/g)].map((x) => x[1]);
+      const has = (s) => m.MECHANISM_MARKERS.some((k) => s.includes(k))
+        || m.MECHANISM_VERB_JA.test(s) || m.MECHANISM_CONDITIONAL.test(s);
+      // 책임 회피 문장은 인과로 치지 않는다 — 시청자를 다른 데로 보내는 말이다.
+      const dodge = /확인이 필요|다시 확인|후속 보도|지켜봐야 알|알 수 없/;
+      console.log(nar.filter((s) => has(s) && !dodge.test(s)).length);
+    }).catch(() => console.log(-1));
+  ' "$1" 2>/dev/null || echo -1
+}
+
+# 게이트 위반의 무게. 낮을수록 좋은 판본이다.
+# 두 번째 인자로 대본을 주면 인과 손실도 함께 잰다.
+factcheck_score() {
+  local f="$1" script="${2:-}" high med bad causal=0
+  high=$(sed -n 's/^high_risk_count:[[:space:]]*//p' "$f" | head -1)
+  med=$(sed -n 's/^med_risk_count:[[:space:]]*//p' "$f" | head -1)
+  case "${high:-0}" in ''|*[!0-9]*) high=0 ;; esac
+  case "${med:-0}" in ''|*[!0-9]*) med=0 ;; esac
+  # grep -c 는 0건이면 exit 1 이라, `|| echo 0` 를 붙이면 "0\n0" 이 나와 산술이 깨진다.
+  # (2026-09-16 실측: `bad math expression: operator expected at '0'`)
+  bad=$(grep -c '\*\*검증 결과\*\*: 부정확' "$f" 2>/dev/null | head -1)
+  case "${bad:-0}" in ''|*[!0-9]*) bad=0 ;; esac
+  if [ -n "$script" ] && [ -s "$script" ]; then
+    causal=$(causal_scene_count "$script")
+    case "${causal:-0}" in ''|*[!0-9-]*) causal=0 ;; esac
+    [ "$causal" -lt 0 ] && causal=0
+  fi
+  # 인과 씬 하나는 MED 지적 15개어치다 — HIGH(100)보다는 가볍게 두어
+  # 진짜 사실 오류를 인과로 덮지는 못하게 한다.
+  echo $(( high * 100 + bad * 10 + med - causal * 15 ))
+}
+
+# 재작성은 대본을 나아지게 할 수도, 나빠지게 할 수도 있다. 2026-09-14 EP-2026-0154 는
+# HIGH 1 → 2 → 3 → 4 로 **매 판 나빠지며** 예산을 다 쓰고, 사람에게 가장 나쁜 판본을
+# 넘겼다 (재작성기가 미확인 지적을 고치랬더니 없는 최상급을 지어냈다). EP-2026-0153 은
+# 2·4판이 pass:true 였는데도 마지막 판만 남아 halt 했다.
+# 그래서 매 판을 떠 두고, 멈출 때는 **가장 점수가 낮은 판본으로 되돌린 뒤** 사람을 부른다.
+fc_snapshot() {
+  local tag="$1" dir="${EP_DIR}/platforms/${PLATFORM}/.factcheck-revs"
+  mkdir -p "$dir"
+  cp -f "$SCRIPT_PATH" "${dir}/${tag}.script.md" 2>/dev/null || true
+  cp -f "$FACTCHECK_PATH" "${dir}/${tag}.report.md" 2>/dev/null || true
+}
+
+# "a,b,c" 를 n 칸 돌린다 — fc_rotate "claude,gemini,codex" 1 → gemini,codex,claude
+fc_rotate() {
+  local IFS=','
+  local -a c=($1)
+  local n=$(( $2 % ${#c[@]} ))
+  local out="${c[*]:n},${c[*]:0:n}"
+  out="${out%,}"; echo "${out#,}"
+}
+
+fc_restore_best() {
+  local dir="${EP_DIR}/platforms/${PLATFORM}/.factcheck-revs"
+  [ -d "$dir" ] || return 0
+  local best="" bestscore=999999 s
+  for r in "$dir"/*.report.md; do
+    [ -s "$r" ] || continue
+    s=$(factcheck_score "$r" "${r%.report.md}.script.md")
+    if [ "$s" -lt "$bestscore" ]; then bestscore="$s"; best="${r%.report.md}"; fi
+  done
+  [ -n "$best" ] || return 0
+  local cur; cur=$(factcheck_score "$FACTCHECK_PATH" "$SCRIPT_PATH")
+  if [ "$bestscore" -lt "$cur" ]; then
+    cp -f "${best}.script.md" "$SCRIPT_PATH"
+    cp -f "${best}.report.md" "$FACTCHECK_PATH"
+    echo "   ↩ 재작성이 대본을 악화시켰다 — 가장 나은 판본($(basename "$best"), 점수 ${bestscore} < 현재 ${cur})으로 되돌렸다"
+    audit "auto_pipeline_factcheck_rollback" "WARN" "slot=$SLOT ep=$EP_ID to=$(basename "$best") score=${bestscore} from=${cur}"
+  fi
+}
+
 factcheck_gate_blocks() {
   [ -s "$FACTCHECK_PATH" ] || return 1
   local high med grounded
@@ -463,6 +779,11 @@ factcheck_gate_blocks() {
   case "${med:-0}" in ''|*[!0-9]*) med=0 ;; esac
   # HIGH 는 근거가 없는 주장이다 — 이 줄이 없어서 run-factcheck 의 pass:false 가
   # 파이프라인 어디에서도 막히지 않았다 (파일 머리의 "5. Fact-check HIGH 자동 회귀" 는 문서만 있었다).
+  # 옛 대본을 심사한 리포트로는 통과도 차단도 판단할 수 없다 — 무조건 막는다.
+  if factcheck_report_stale; then
+    echo "   ⚠ 팩트체크 리포트가 대본 판본과 어긋난다 (리포트 script_revision != 대본 revision)" >&2
+    return 0
+  fi
   if [ "$high" -gt 0 ]; then return 0; fi
   { [ "$med" -gt 0 ] && [ "$grounded" != "true" ]; } || \
     { grep -q '^### \[MED\]' "$FACTCHECK_PATH" && grep -q '\*\*검증 결과\*\*: 부정확' "$FACTCHECK_PATH"; }
@@ -474,6 +795,7 @@ if [ "$DRY_RUN" = "0" ] && [ -s "$FACTCHECK_PATH" ]; then
   FC_REWRITES=0
   FC_REGROUNDS=0
   FC_MAX_REGROUNDS=2
+  fc_snapshot "rev0"
 
   while factcheck_gate_blocks; do
     # grounded=false 는 대본의 잘못이 아니다 — 팩트체크 백엔드가 실시간 검색을 못 붙인 것이다
@@ -485,20 +807,27 @@ if [ "$DRY_RUN" = "0" ] && [ -s "$FACTCHECK_PATH" ]; then
       FC_REGROUNDS=$((FC_REGROUNDS + 1))
       echo "   ↻ 접지 실패(grounded=false) — 팩트체크 재실행 ${FC_REGROUNDS}/${FC_MAX_REGROUNDS} (재작성 아님)"
       audit "auto_pipeline_factcheck_reground" "WARN" "slot=$SLOT ep=$EP_ID attempt=$FC_REGROUNDS"
-      node scripts/automation/run-factcheck.js \
+      # 같은 엔진에 다시 물으면 같은 이유(검색 미호출·URL 대신 출처명)로 또 미접지가 된다 — 재실행마다
+      # 엔진 순서를 한 칸씩 돌린다. 2026-09-26 EP-2026-0186 은 claude 로만 두 번 재실행하고 예산을 다 썼다
+      # (소급 분석 growth/incidents/IR-20261007-0723.md). 엔진 하나가 막혀도 run-factcheck 가 다음으로 넘긴다.
+      FC_CHAIN="$(fc_rotate "${BT_FACTCHECK_ENGINE_CHAIN:-claude,gemini,codex}" "$FC_REGROUNDS")"
+      echo "     엔진 순서: ${FC_CHAIN}"
+      BT_FACTCHECK_ENGINE_CHAIN="$FC_CHAIN" node scripts/automation/run-factcheck.js \
         --episode "$EP_ID" --platform "$PLATFORM" --force \
         || fail_with_alert "Phase 6 factcheck" "접지 재시도 중 run-factcheck.js 실패"
       continue
     fi
 
     if [ "$FC_REWRITES" -ge "$FC_MAX_REWRITES" ]; then
+      fc_restore_best
       halt_for_human "Phase 6 factcheck" \
-        "MED 부정확 또는 미접지(grounded=false) 주장이 ${FC_MAX_REWRITES}회 재작성·${FC_REGROUNDS}회 접지 재시도 후에도 남았습니다. 수치·최상급 표현을 중립 문구로 고치고 팩트체크를 다시 실행하세요."
+        "MED 부정확 또는 미접지(grounded=false) 주장이 ${FC_MAX_REWRITES}회 재작성·${FC_REGROUNDS}회 접지 재시도 후에도 남았습니다. 수치·최상급 표현을 중립 문구로 고치고 팩트체크를 다시 실행하세요. (남아 있는 대본은 시도한 판본 중 지적이 가장 적은 것입니다.)"
     fi
     # 게이트는 걸리는데 고칠 주장이 없으면(모든 판정이 '사실') 재작성은 헛돈다.
     # --check 는 파일만 읽으므로 비용이 없다. exit 10 = 고칠 게 있다.
     if node scripts/automation/revise-script-factcheck.js \
          --episode "$EP_DIR" --platform "$PLATFORM" --check; then
+      fc_restore_best
       if [ "$FC_GROUNDED" != "true" ]; then
         halt_for_human "Phase 6 factcheck" \
           "팩트체크가 ${FC_MAX_REGROUNDS}회 재실행 후에도 접지되지 않았습니다(grounded=false, 실시간 검색 0건). 대본 문제가 아니라 검색 백엔드 문제입니다 — 네트워크·검색 도구 상태를 확인하고 재개하세요."
@@ -511,20 +840,53 @@ if [ "$DRY_RUN" = "0" ] && [ -s "$FACTCHECK_PATH" ]; then
     echo "   ↻ 팩트체크 지적 반영 재작성 ${FC_REWRITES}/${FC_MAX_REWRITES}"
     audit "auto_pipeline_factcheck_rewrite" "WARN" "slot=$SLOT ep=$EP_ID attempt=$FC_REWRITES"
 
-    node scripts/automation/revise-script-factcheck.js \
-      --episode "$EP_DIR" --platform "$PLATFORM" \
-      || halt_for_human "Phase 6 재작성" \
-           "MED 부정확 또는 미접지(grounded=false) 주장을 대본에 반영하지 못했습니다. 대본을 손보고 재개하세요."
+    # 재작성 한 번이 계약을 못 맞췄다고 회차를 접지 않는다 — 대본은 그대로 두고 남은 재작성
+    # 예산으로 다시 시도한다(새 표본). 예산을 다 쓰면 위 상한 분기가 가장 나은 판본으로 멈춘다.
+    # 2026-10-07 EP-2026-0214: 재작성 1/3 이 수치 초과로 실패하자 곧장 사람을 불러 08:00 편이 빠졌다.
+    if ! node scripts/automation/revise-script-factcheck.js \
+         --episode "$EP_DIR" --platform "$PLATFORM"; then
+      echo "   ⚠ 재작성 ${FC_REWRITES}/${FC_MAX_REWRITES} 이 계약을 못 맞췄다 — 대본 유지, 남은 예산으로 다시"
+      audit "auto_pipeline_factcheck_rewrite_rejected" "WARN" "slot=$SLOT ep=$EP_ID attempt=$FC_REWRITES"
+      continue
+    fi
 
     node scripts/automation/run-factcheck.js \
       --episode "$EP_ID" --platform "$PLATFORM" --force \
       || fail_with_alert "Phase 6 factcheck" "재작성 후 run-factcheck.js 실패"
+    fc_snapshot "rev${FC_REWRITES}"
   done
 
   if [ "$FC_REWRITES" -gt 0 ]; then
     echo "   ✅ 재작성 ${FC_REWRITES}회로 팩트체크 게이트 통과"
     audit "auto_pipeline_factcheck_recovered" "INFO" "slot=$SLOT ep=$EP_ID rewrites=$FC_REWRITES"
   fi
+fi
+
+# 팩트체크 재작성은 대본을 바꿀 수 있다. 비용이 드는 자산 생성 전에 최종본을 다시 검사한다.
+if [ "$DRY_RUN" = "0" ]; then
+  node scripts/automation/validate-script-quality.js --file "$SCRIPT_PATH" --strict \
+    || fail_with_alert "Phase 6 최종 대본 품질" "팩트체크 후 품질 계약 error 가 남았습니다. 근거를 유지하며 대본을 수정하세요."
+fi
+
+# 공인 인물 캐리커처 보강 (2026-09-29 — lib/ensure-caricature.js). 대본이 CHARACTERIZE 인물
+# (외국 정치인·CEO·경제 인사)을 불렀는데 캐리커처 씬이 없으면 QA(정책 §6.2.1)가 자산을 다 만든
+# 뒤에야 게시를 막는다 — 09-29 us-close 가 06:27 에 그렇게 멈춰 08:00 편이 수동 복구됐다.
+# 팩트체크 재작성까지 끝난 최종 대본에, 이미지를 굽기 전에 채운다. 못 맞춰도 QA 가 여전히 판정한다.
+if [ "$DRY_RUN" = "0" ] && [ "$SUMMARY_FORM" = "0" ]; then
+  node scripts/automation/ensure-caricature.js --episode "$EP_DIR" --platform "$PLATFORM" \
+    || echo "  ⚠ 캐리커처 보강이 정책을 못 맞췄습니다 — QA 가 판정합니다"
+fi
+
+# 「미국 증시 요약」 자산 — 씬 1 지수 카드를 굽고, 마시 컷은 라이브러리에서 먼저 채운다.
+# 비는 씬만 아래 Phase 7 이 대본의 범용 프롬프트로 굽는다(구운 컷은 다음 분류 때 라이브러리로).
+SUMMARY_MEDIA_NOTE=""
+if [ "$SUMMARY_FORM" = "1" ] && [ "$DRY_RUN" = "0" ]; then
+  log_stage "🃏 Phase 6b — 요약 카드 + 라이브러리 마시 컷"
+  node scripts/automation/render-summary-cards.js --episode "$EP_ID" --platform "$PLATFORM" \
+    || fail_with_alert "Phase 6b summary card" "지수 요약 카드 렌더 실패"
+  node scripts/automation/summary-assets.js --script "$SCRIPT_PATH" \
+    || echo "  ⚠ 라이브러리 채우기 실패 — 마시 컷을 전부 새로 굽습니다"
+  SUMMARY_MEDIA_NOTE="★ 이 회차는 「미국 증시 요약」이다. scene_001.png(지수 카드)와 이미 있는 씬 이미지는 라이브러리에서 고른 정본이니 절대 다시 만들거나 덮어쓰지 마라. 비어 있는 씬 이미지만 만든다. 대본의 image_prompt 는 다른 날에도 다시 쓸 범용 장면이다 — 회사명·숫자·로고를 덧붙이지 말고 그대로 그려라."
 fi
 
 # ─────────────────────────────────────────────────
@@ -539,6 +901,25 @@ fi
 # 떨어뜨렸고 그 결과물이 게시 불가 판정을 받았다. 배경 움직임 실측 Grok 2.067 · Wan 1.689 ·
 # HyperFrames 0.439 — 피사체가 움직이는 화면이 이 채널의 기준이다.
 MOTION_ENGINE="${BT_MOTION_ENGINE:-grok}"
+
+# Grok 주간 한도를 편마다 나눠 쓴다 (2026-09-28 운영자 결정 — lib/grok-budget.js).
+# 이번 편에 쓸 Grok 컷이 0 이면(한도 소진 백오프·주간 예산 소진) 이 회차는 로컬 모션으로 간다.
+# 그러지 않으면 브라우저가 Grok 용 스틸을 먼저 굽고(09-28 점심 31분) 거절될 요청을 컷마다
+# 6분씩 기다린다. 확인 자체가 실패하면(코드 오류 등) 예전대로 Grok 을 시도한다.
+if [ "$MOTION_ENGINE" = "grok" ] && [ "$DRY_RUN" = "0" ]; then
+  GROK_BUDGET_OUT=$(node scripts/automation/lib/grok-budget.js --episode "$EP_DIR" --platform "$PLATFORM" 2>&1)
+  GROK_BUDGET_RC=$?
+  if [ "$GROK_BUDGET_RC" -eq 3 ]; then
+    echo "  ⏭  ${GROK_BUDGET_OUT} → 이번 회차는 로컬 모션"
+    audit "grok_budget_skip" "INFO" "ep=$EP_ID ${GROK_BUDGET_OUT}"
+    MOTION_ENGINE="local-only"
+    export BT_MOTION_ENGINE="local-only"
+  elif [ "$GROK_BUDGET_RC" -ne 0 ]; then
+    echo "  ⚠ Grok 예산 확인 실패 — 예전대로 Grok 을 시도합니다: ${GROK_BUDGET_OUT}"
+  else
+    echo "  🎯 ${GROK_BUDGET_OUT}"
+  fi
+fi
 
 # 브라우저가 **무엇을 만들 담당인지**는 config/image-engines.json 이 정한다.
 # 예전에는 이 프롬프트가 설정과 무관하게 씬·인트로·썸네일을 항상 요청했다. 2026-08-20 에
@@ -606,13 +987,12 @@ else
   # 첨부가 막히면 조용히 폴백하지 말고 Phase 7 게이트에서 멈춘다(아래) — 무엇을 켜야 하는지
   # 알려 주는 편이, 덜 사는 화면을 매일 내보내는 것보다 낫다.
   if [ "$MOTION_ENGINE" = "grok" ]; then
-    MOTION_PATH_LINE="  모션 클립  ${MEDIA_BASE_REAL}/40_assets/videos/scene_NNN.mp4"
-    MOTION_STEP_LINE="2. 위 이미지가 모두 저장된 뒤에만 Chrome의 Grok Imagine에서 각 scene_NNN.png를 첨부해 영상 ${SLOT_SCENES}개를 한 번에 하나씩 생성·저장하고 ffprobe한다."
-    MOTION_RULES="Grok은 image-to-video 9:16/720p/10s만 사용한다. 매 컷 전 Video audio 버튼이 aria-pressed=true인지 확인한다.
-Grok 로컬 이미지 선택이 확장 파일 접근 제한으로 막히면 해당 PNG를 macOS 클립보드에 넣어 Cmd+V로 첨부하고 계속한다. 파일 URL 권한 때문에 중단하거나 운영자에게 다시 묻지 마라.
-첨부 완료는 filename이 아니라 Remove image/thumbnail로 판정하고, 다운로드 뒤 H.264 세로 영상+AAC 오디오를 ffprobe한다.
-AAC가 없으면 완료로 세지 말고 Video audio를 켠 뒤 같은 컷을 재생성한다. 결제·구독은 절대 하지 마라.
-영상 ${SLOT_SCENES}개 저장 후 SHA-256을 비교해 중복 바이트가 있으면 해당 뒤쪽 컷을 재생성한다."
+    # 브라우저는 스틸만 만든다. Grok 영상은 아래 grok-motion-applescript.js 가 편당 예산
+    # (lib/grok-budget.js) 안에서만 만든다 — 여기서 에이전트가 영상 N개를 만들면 주간 한도를
+    # 원장 밖에서 쓴다(2026-09-28: 이 지시 때문에 한 편이 5컷을 다 요청할 수 있었다).
+    MOTION_PATH_LINE=""
+    MOTION_STEP_LINE="2. 모션 클립은 만들지 마라. Grok Imagine 을 열지 마라 — Grok 영상은 다음 단계 스크립트가 편당 예산 안에서 만든다."
+    MOTION_RULES=""
   else
     MOTION_PATH_LINE=""
     MOTION_STEP_LINE="2. 모션 클립은 만들지 마라. Grok Imagine 을 열 필요가 없다 — 저장된 스틸로 다음 단계(S6c)가 만든다."
@@ -635,7 +1015,13 @@ AAC가 없으면 완료로 세지 말고 Video audio를 켠 뒤 같은 컷을 �
   숨은 input 주입·컴포저 파일 선택 UI·Cmd+V 가 전부 실패하고(2026-08-17 EP-0096·0097 실측,
   서로 다른 실행에서 반복), control-chrome 스킬이 외부 Playwright MCP 사용도 금지한다.
   첨부를 시도하느라 시간을 쓰지 마라. 시드 대화에서 이어 만들면 캐릭터 일관성이 유지된다(같은 날 실측).
-  시드 대화가 열리지 않거나 맨 위 시트가 안 보이면 「시드 대화 없음」 이라고 보고하고 중단해라.
+  ★ ChatGPT 는 대화 본문을 **지연 렌더**한다. 열자마자 비어 보이는 것이 정상이다
+    (2026-09-10 실측: 내비게이션 직후 본문이 비었고 15초 이상 지나서야 메시지가 나타났다.
+     그 사이에 판정해서 멀쩡한 시드 대화를 「없음」 으로 버린 회차가 있다 —
+     2026-09-11 에도 메인 패스에서만 3건 재발했다).
+    최소 20초를 기다리고, 그래도 비어 있으면 한 번 새로고침해 다시 20초를 기다려라.
+    본문에 메시지가 하나라도 렌더된 뒤에만 시트 유무를 판정한다.
+  두 번의 대기 후에도 본문 자체가 비어 있으면 그때 「시드 대화 없음」 이라고 보고하고 중단해라.
 
 ★ 브라우저는 반드시 **로그인된 Chrome 확장**을 명시적으로 잡아라:
     globalThis.chrome = await agent.browsers.get(\"extension\");
@@ -655,6 +1041,7 @@ ${MOTION_PATH_LINE}
   인트로     ${MEDIA_BASE_REAL}/45_intro.png
   썸네일     ${MEDIA_BASE_REAL}/47_thumbnail.png
 
+${SUMMARY_MEDIA_NOTE}
 순서를 바꾸지 마라:
 1. Chrome의 ChatGPT에서 씬 이미지 ${SLOT_SCENES}장, 인트로, 썸네일을 한 번에 하나씩 생성·저장·검증한다.
    매 요청 전에 컴포저 도구 메뉴에서 【이미지 만들기】를 선택해 칩이 붙은 것을 스크린샷으로
@@ -748,7 +1135,12 @@ ChatGPT 탭이 여러 개면 하나의 로그아웃 탭만 보고 중단하지 �
   # (2026-08-17 EP-0096 실측: 170k 토큰 쓰고 1/5장. 그 뒤 Grok·API 가 다 막혀 정지.)
   # 남은 씬을 한 장씩, 매번 새 컨텍스트로 잇는다. 프롬프트에 image_prompt 를 인라인하지 않고
   # 씬 번호만 준다 — 739자 프롬프트를 셸로 따옴표 처리하다 깨지는 것보다 낫다.
-  BT_CHATGPT_TOPUP_MAX="${BT_CHATGPT_TOPUP_MAX:-6}"
+  # 재시도 상한은 **씬 수에서 나온다**. 6 으로 고정돼 있던 동안 7씬 슬롯(realestate)은
+  # 완주가 산술적으로 불가능했다 — 첫 패스가 0장을 내면(2026-09-10 실측: 워커가 206k 토큰을
+  # 쓰고 씬 001 요청만 보낸 채 종료) 남은 6회로 7장을 채울 수 없다. 실제로 그날
+  # 1/6 씬001 · 2/6 씬002 · 3/6 씬002(재시도) · 4/6 씬003 · 5/6 씬004 · 6/6 씬005 로
+  # 상한을 소진하고 5/7 에서 멈췄다. 실패 재시도 여유로 +2 를 둔다.
+  BT_CHATGPT_TOPUP_MAX="${BT_CHATGPT_TOPUP_MAX:-$(( SLOT_SCENES + 2 ))}"
   TOPUP_TRIES=0
   TOPUP_STALLED=0
   while [ "$TOPUP_TRIES" -lt "$BT_CHATGPT_TOPUP_MAX" ] \
@@ -756,6 +1148,14 @@ ChatGPT 탭이 여러 개면 하나의 로그아웃 탭만 보고 중단하지 �
      && ! media_assets_ready "$MEDIA_BASE" stills; do
     NEXT_SCENE=$(printf '%s' "$MEDIA_ASSETS_MISSING" | grep -o 'scene_[0-9]\{3\}\.png' | head -1 | sed 's/scene_\([0-9]*\)\.png/\1/')
     [ -n "$NEXT_SCENE" ] || break
+    # 중복으로 걸린 스틸은 **지우고** 다시 만든다. 파일을 남겨 두면 덮어쓰기가 실패했을 때
+    # 중복이 그대로 발행되고, 워커가 "이미 있음" 으로 판단할 여지도 남는다.
+    # 2026-09-21 EP-2026-0169 에서는 사람이 손으로 지워야 재생성이 돌았다.
+    if printf '%s' "$MEDIA_ASSETS_MISSING" | grep -q "scene_${NEXT_SCENE}\.png(duplicate bytes)"; then
+      echo "     ♻︎ 씬 ${NEXT_SCENE} 스틸이 앞 씬과 같은 바이트다 — 지우고 다시 만든다"
+      audit "media_render_duplicate_still" "WARN" "ep=$EP_ID scene=$NEXT_SCENE"
+      rm -f "${MEDIA_BASE}/40_assets/images/scene_${NEXT_SCENE}.png"
+    fi
     TOPUP_TRIES=$((TOPUP_TRIES + 1))
     echo "  ➕ ChatGPT 이어 만들기 ${TOPUP_TRIES}/${BT_CHATGPT_TOPUP_MAX} — 씬 ${NEXT_SCENE}"
     audit "media_render_chatgpt_topup" "INFO" "ep=$EP_ID scene=$NEXT_SCENE try=$TOPUP_TRIES"
@@ -782,7 +1182,12 @@ ChatGPT 탭이 여러 개면 하나의 로그아웃 탭만 보고 중단하지 �
   이 표면은 로컬 파일 첨부가 막혀 있다(2026-08-17 실측). 첨부를 시도하느라 시간을 쓰지 마라.
 ★ 브라우저는 반드시 로그인된 Chrome 확장을 명시적으로 잡아라: globalThis.chrome = await agent.browsers.get(\"extension\");
   getDefault() 는 in-app browser 를 우선하는데 거기엔 ChatGPT 세션이 없어 로그인 화면이 뜬다(2026-08-18 EP-0098 실패 원인).
-  시드 대화가 안 열리거나 맨 위 시트가 안 보이면, extension 브라우저를 다시 잡아 확인한 뒤에도 같으면 「시드 대화 없음」 이라고 보고하고 끝내라.
+  ★ ChatGPT 는 대화 본문을 **지연 렌더**한다. 열자마자 비어 보이는 것이 정상이다
+    (2026-09-10 실측: 내비게이션 직후 본문이 비었고 15초 이상 지나서야 메시지가 나타났다.
+     그 사이에 판정해서 멀쩡한 시드 대화를 「없음」 으로 버린 회차가 있다).
+    최소 20초를 기다리고, 그래도 비어 있으면 한 번 새로고침해 다시 20초를 기다려라.
+    본문에 메시지가 하나라도 렌더된 뒤에만 시트 유무를 판정한다.
+  두 번의 대기 후에도 본문 자체가 비어 있으면 그때 「시드 대화 없음」 이라고 보고하고 끝내라.
 전송 전 컴포저 도구 메뉴에서 【이미지 만들기】 칩이 붙은 것을 확인해라. 칩 없이 보내면 일반 응답으로 새어 생성이 안 된다.
 프롬프트는 영문으로 입력해라 — 한글을 타이핑하면 공백이 사라지고 뒤 문장이 잘린다(실측).
 수락 기준: 마시가 화면 세로 40~60% 의 중앙 주인공, 굵은 아웃라인+평면 채색, 배경은 흐리고 작게, 읽히는 글자 없음.
@@ -917,8 +1322,49 @@ SuperGrok 구독 모달이 뜨면 결제·무료 체험 절대 하지 말고 닫
     rm -f "$API_FALLBACK_LOG"
   fi
 
+  # 마지막 폴백 — 기존 마시 자산 재사용 (2026-09-22 추가).
+  #
+  # 앞의 세 경로(브라우저 ChatGPT·codex imagegen·이미지 API)는 전부 **생성**이고,
+  # 셋이 같은 날 동시에 마르는 조합이 실제로 나왔다. 2026-09-22 us-close 실측:
+  #   ChatGPT/codex imagegen : "usage limit … try again at Sep 25th, 2026 7:17 AM" (같은 계정·주간 한도)
+  #   gpt-image-1            : 크레딧 고갈
+  #   Gemini                 : 402 prepayment credits depleted
+  #   Grok                   : 주간 한도 소진
+  # 이 상태에서는 코드로 풀 수 있는 생성 경로가 하나도 없다. 충전이나 한도 해제를
+  # 기다리는 동안 채널이 며칠 비는 것보다, 같은 캐릭터로 이미 구운 컷(2026-09-22 기준
+  # 스틸 792장·클립 427개)에서 대본에 맞는 것을 골라 내보내는 편이 낫다는 판단이다.
+  #
+  # 재사용이 **맨 뒤**인 것이 중요하다. 순서를 올리면 신선한 컷을 구울 수 있는 날에도
+  # 재활용이 나간다. 실제 모션이 있는 클립(grok 출신)은 함께 복사돼 Grok 쿼터 없이
+  # 모션이 실린다 — HyperFrames 클립은 스틸에서 로컬로 다시 만들 수 있으므로 복사하지 않는다.
+  # 정책(연령·쿨다운·원본 EP 당 상한)의 정본은 config/asset-reuse.json 이다.
   if ! media_assets_ready "$MEDIA_BASE" stills; then
-    HALT_DETAIL="브라우저·API 폴백 후에도 씬 자산이 불완전합니다: ${MEDIA_ASSETS_MISSING}"
+    REUSE_ENABLED=$(json_get "${BARROTUBE_HOME}/config/asset-reuse.json" "'1' if d.get('enabled', True) else '0'")
+    if [ "${BT_ASSET_REUSE:-$REUSE_ENABLED}" = "1" ]; then
+      echo "  ♻︎ 자산 재사용 폴백 (생성 호출 0회): ${MEDIA_ASSETS_MISSING}"
+      audit "media_render_asset_reuse" "WARN" "ep=$EP_ID missing=${MEDIA_ASSETS_MISSING}"
+      REUSE_LOG=$(mktemp)
+      run_or_echo node scripts/automation/reuse-scene-assets.js \
+        --script "${MEDIA_BASE}/30_script.md" > "$REUSE_LOG" 2>&1 \
+        || echo "  ⚠ 자산 재사용 폴백도 실패 — 아래 게이트가 판정합니다"
+      cat "$REUSE_LOG"
+      # 운영자에게 **무엇을 재활용했는지**를 알린다. 조용히 나가면 아무도 모르는 사이에
+      # 같은 컷이 반복된다. 재사용은 정상 운영이 아니라 한도 소진의 증상이다.
+      REUSE_LINES=$(grep '♻︎ 씬' "$REUSE_LOG" | sed 's/^ *//' | head -7)
+      if [ -n "$REUSE_LINES" ]; then
+        notify_telegram "♻︎ <b>${EP_ID}</b> 이미지 생성 경로가 전부 막혀 <b>기존 자산을 재사용</b>했습니다\n\n${REUSE_LINES}\n\n한도 해제 전까지 이 상태로 발행됩니다."
+      fi
+      if grep -q '⚠약함' "$REUSE_LOG"; then
+        audit "asset_reuse_weak_match" "WARN" "ep=$EP_ID 시각 매칭이 약한 컷이 섞였다"
+      fi
+      rm -f "$REUSE_LOG"
+    else
+      echo "  ⏭  자산 재사용 폴백 꺼짐 (config/asset-reuse.json enabled=false 또는 BT_ASSET_REUSE=0)"
+    fi
+  fi
+
+  if ! media_assets_ready "$MEDIA_BASE" stills; then
+    HALT_DETAIL="브라우저·API·재사용 폴백 후에도 씬 자산이 불완전합니다: ${MEDIA_ASSETS_MISSING}"
     # 브라우저가 왜 못 만들었는지를 먼저 보여 준다 — 크레딧은 그 다음이다.
     # 브라우저가 정본이고 API 는 폴백이라, 순서가 바뀌면 운영자가 엉뚱한 데를 고친다.
     if [ -n "${BROWSER_FAIL_REASON:-}" ]; then
@@ -944,6 +1390,20 @@ SuperGrok 구독 모달이 뜨면 결제·무료 체험 절대 하지 말고 닫
 
 🧩 codex 가 로그아웃 상태입니다 — 크레딧 없이 굽는 폴백이 막혔습니다.
    \`codex login\` 으로 ChatGPT 계정에 다시 로그인하세요 (API 키가 아니라 계정 인증입니다)."
+    fi
+    # 생성이 전부 막힌 날에는 재사용이 마지막 줄이다. 그것까지 못 채웠다면 후보가
+    # 마른 것이지 생성이 문제가 아니다 — 충전·재로그인이 아니라 정책을 풀어야 한다.
+    if [ "${BT_ASSET_REUSE:-1}" = "0" ] || [ "${REUSE_ENABLED:-1}" = "0" ]; then
+      HALT_DETAIL="${HALT_DETAIL}
+
+♻︎ 자산 재사용 폴백이 꺼져 있습니다 — 생성이 전부 막힌 날의 마지막 경로가 빠졌습니다.
+   config/asset-reuse.json 의 enabled 또는 BT_ASSET_REUSE 를 확인하세요."
+    else
+      HALT_DETAIL="${HALT_DETAIL}
+
+♻︎ 자산 재사용 폴백도 컷을 못 채웠습니다 — 생성 문제가 아니라 후보가 마른 것입니다.
+   config/asset-reuse.json 의 min_source_age_days / cooldown_days 를 낮추면 후보가 늘어납니다.
+   확인:  node scripts/automation/reuse-scene-assets.js --script ${MEDIA_BASE}/30_script.md --dry-run"
     fi
     halt_for_human "Phase 7 media-render" "$HALT_DETAIL"
   fi
@@ -971,12 +1431,23 @@ SuperGrok 구독 모달이 뜨면 결제·무료 체험 절대 하지 말고 닫
     # (2026-08-24 실측). AppleScript 의 execute javascript 는 CDP 포트도
     # webdriver 플래그도 쓰지 않아 자동화 지문이 없고, launchd(Aqua 세션)에서 그대로 돈다.
     # 첨부는 DataTransfer 주입 — 파일 선택 UI·클립보드·Playwright 파일 API 를 전부 우회한다.
-    if node scripts/automation/grok-motion-applescript.js --check >/dev/null 2>&1; then
+    #
+    # 실패 사유를 버리지 않는다. 예전에는 --check 출력을 /dev/null 로 보내고 "Chrome 로그아웃/차단"
+    # 이라고만 알렸는데, 실제 사유는 Grok UI 개편(720p·10s 가 드롭다운으로 바뀜)이었다 —
+    # 그 사이 EP-2026-0156~0159 가 전부 HyperFrames 로 나갔다 (2026-09-17 확인).
+    GROK_CHECK_OUT=$(node scripts/automation/grok-motion-applescript.js --check 2>&1)
+    GROK_CHECK_RC=$?
+    GROK_REASON=$(printf '%s\n' "$GROK_CHECK_OUT" | grep -m1 '❌')
+    if [ "$GROK_CHECK_RC" -eq 0 ]; then
       echo "  🎬 Grok 모션 (실제 Chrome · AppleScript): ${MEDIA_ASSETS_MISSING}"
       audit "grok_motion_applescript" "INFO" "ep=$EP_ID missing=${MEDIA_ASSETS_MISSING}"
+      GROK_RUN_ERR=$(mktemp "${TMPDIR:-/tmp}/bt-grok-run.XXXXXX")
       run_or_echo node scripts/automation/grok-motion-applescript.js \
-        --episode "$MEDIA_BASE" --platform "$PLATFORM" \
+        --episode "$MEDIA_BASE" --platform "$PLATFORM" 2>"$GROK_RUN_ERR" \
         || echo "  ⚠ AppleScript Grok 모션 일부 실패 — 아래 게이트가 판단합니다"
+      cat "$GROK_RUN_ERR" >&2
+      GROK_REASON=$(grep -m1 '❌' "$GROK_RUN_ERR")
+      rm -f "$GROK_RUN_ERR"
     # 2순위: 기존 Playwright 경로 (프로필 로그인 시). Cloudflare 가 풀린 환경용.
     elif node scripts/automation/grok-motion.js --status >/dev/null 2>&1; then
       echo "  🎬 Grok 모션 폴백 (Playwright 전용 프로필): ${MEDIA_ASSETS_MISSING}"
@@ -985,7 +1456,8 @@ SuperGrok 구독 모달이 뜨면 결제·무료 체험 절대 하지 말고 닫
         --episode "$MEDIA_BASE" --platform "$PLATFORM" \
         || echo "  ⚠ Playwright Grok 모션 일부 실패 — 아래 게이트가 판단합니다"
     else
-      echo "  ⏭  Grok 경로 없음 — 건너뜀 (Chrome 로그아웃/차단, Playwright 프로필 미로그인)"
+      echo "  ⏭  Grok 경로 없음 — 건너뜀 (실제 Chrome 확인 실패, Playwright 프로필 미로그인)"
+      echo "     실제 Chrome 사유: ${GROK_REASON:-알 수 없음}"
       echo "     실제 Chrome 확인: node scripts/automation/grok-motion-applescript.js --check"
       echo "     확인: node scripts/automation/grok-motion.js --status"
       echo "     로그인: node scripts/automation/grok-motion.js --login"
@@ -1001,10 +1473,14 @@ SuperGrok 구독 모달이 뜨면 결제·무료 체험 절대 하지 말고 닫
     # 비우는 것보다, 덜 좋은 화면을 내보내고 알리는 편이 낫다는 결정이다.
     audit "grok_motion_missing" "WARN" "ep=$EP_ID missing=${MEDIA_ASSETS_MISSING} action=fallback_to_hyperframes"
     echo "  ⚠️  Grok 모션 클립 없음: ${MEDIA_ASSETS_MISSING}"
+    echo "     사유: ${GROK_REASON:-알 수 없음}"
     echo "     → Phase 8 의 S6c 가 HyperFrames 로 채웁니다 (경보 발송됨)"
     echo "     Grok 계정 확인: node ${BARROTUBE_HOME}/scripts/automation/grok-motion-applescript.js --check"
+    # 텔레그램은 HTML 모드다 — 사유에 < > & 가 섞이면 전송 자체가 거절된다.
+    GROK_REASON_HTML=$(printf '%s' "${GROK_REASON:-알 수 없음}" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')
     notify_telegram "⚠️ <b>${EP_ID}</b> Grok 모션 실패 → HyperFrames 폴백
 누락: ${MEDIA_ASSETS_MISSING}
+사유: ${GROK_REASON_HTML}
 계정 확인: grok-motion-applescript.js --check"
   fi
 fi
@@ -1045,6 +1521,13 @@ fi
 
 audit "auto_pipeline_produced" "INFO" "slot=$SLOT ep=$EP_ID"
 
+# S9 를 건너뛴 재개 회차도 저장된 배포 문구를 다시 본다. 대본에 없는
+# 코스피·외국인 수치를 설명문에 넣은 채 QA/자동 승인을 통과시키지 않는다.
+if [ "$SUMMARY_FORM" = "1" ] && [ "$DRY_RUN" = "0" ]; then
+  node scripts/automation/generate-metadata.js --episode "$EP_DIR" --platform "$PLATFORM" --validate \
+    || fail_with_alert "Phase 8 요약 메타데이터" "저장된 배포 문구가 영상 대본과 다릅니다. S9 메타데이터를 고쳐 재개하세요."
+fi
+
 # Grok 이 정본인데 HyperFrames 로 대체돼 나가면 화면이 죽는다 — Grok 은 피사체가 실제로
 # 움직이고, HyperFrames 는 스틸에 팬·줌을 거는 것뿐이다. QA 는 "hyperframes 5" 라고 적기만
 # 하고 아무도 안 본다. 정본이 아닌 엔진으로 나갔으면 그 사실이 사람에게 도착해야 한다.
@@ -1052,7 +1535,13 @@ audit "auto_pipeline_produced" "INFO" "slot=$SLOT ep=$EP_ID"
 if [ "$DRY_RUN" = "0" ] && { [ "$MOTION_ENGINE" = "grok" ] || [ "$MOTION_ENGINE" = "wan" ]; }; then
   MOTION_MANIFEST="${MEDIA_BASE}/40_assets/videos/_engines.json"
   if [ -s "$MOTION_MANIFEST" ]; then
-    FALLBACK_CLIPS=$(grep -c '"engine": *"hyperframes"' "$MOTION_MANIFEST" 2>/dev/null || echo 0)
+    # 편당 Grok 예산이 처음부터 로컬로 배정한 씬(_grok_plan.json 의 local)은 폴백이 아니라 계획이다.
+    FALLBACK_CLIPS=$(python3 -c 'import json,sys
+m=json.load(open(sys.argv[1]))
+try: local=set(json.load(open(sys.argv[2])).get("local",[]))
+except Exception: local=set()
+print(sum(1 for k,v in m.items() if isinstance(v,dict) and v.get("engine")=="hyperframes" and k not in local))' \
+      "$MOTION_MANIFEST" "${MEDIA_BASE}/40_assets/videos/_grok_plan.json" 2>/dev/null || echo 0)
     case "${FALLBACK_CLIPS:-0}" in ''|*[!0-9]*) FALLBACK_CLIPS=0 ;; esac
     if [ "$FALLBACK_CLIPS" -gt 0 ]; then
       echo "  ⚠️  모션 ${FALLBACK_CLIPS}컷이 HyperFrames 폴백 — Grok 이 정본이다"
@@ -1068,7 +1557,7 @@ fi
 log_stage "🔍 Phase 9 — QA Gate (score ≥ 60, blocker = 0)"
 
 if [ "$DRY_RUN" = "0" ]; then
-  guard_qa_pass "$EP_DIR" || {
+  guard_qa_pass "$MEDIA_BASE" || {
     notify_telegram "🛑 <b>${EP_ID}</b> QA FAIL — publish 차단\n수동 검토 후 <code>/approve ${EP_ID}</code> 또는 <code>/cancel ${EP_ID}</code>"
     exit 0
   }
@@ -1098,6 +1587,8 @@ elif [ ! -s "$APPROVAL_PATH" ]; then
   AUTO_APPROVE=$(json_get "$AUTONOMY_FILE" "d.get('guards',{}).get('auto_approve_on_qa_pass',False)")
   if [ "$AUTO_APPROVE" = "True" ]; then
     echo "🤖 auto_approve_on_qa_pass=true — QA PASS 근거로 S10 토큰 자동 발급"
+    mkdir -p "${BARROTUBE_HOME}/workspace/.reject-window"
+    printf '%s\n' 'awaiting_notification' > "${BARROTUBE_HOME}/workspace/.reject-window/${EP_ID}.open"
     if node scripts/automation/approve-episode.js --episode "$EP_ID" --platform "$PLATFORM" \
          --by "auto-pipeline (QA PASS, slot=$SLOT)" >/dev/null 2>&1 && [ -s "$APPROVAL_PATH" ]; then
       audit "auto_pipeline_auto_approved" "INFO" "slot=$SLOT ep=$EP_ID"

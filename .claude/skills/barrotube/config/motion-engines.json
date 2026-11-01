@@ -2,6 +2,14 @@
   "version": 1,
   "_comment": "모션 엔진 우선순위. BT_MOTION_ENGINE 환경변수가 이 기본값을 덮어쓴다. 순서·의미의 정본은 이 파일이고, lib/auto-pipeline.sh 와 scripts/automation/produce-episode.js 가 같은 값을 쓴다.",
   "default": "grok",
+  "grok_budget": {
+    "max_clips_per_episode": 2,
+    "weekly_budget": 30,
+    "window_days": 7,
+    "exhausted_backoff_hours": 24,
+    "scene_priority": ["hook", "driver", "movers", "insight", "cause", "implication", "impact", "context", "numbers", "counterview", "supply", "cta", "closing"],
+    "_note": "2026-09-28 운영자 결정: Grok 주간 한도(실측 30~35컷)를 편마다 나눠 쓴다. 편당 5컷 × 주 17편 = 85컷을 요구하던 동안 목·일요일쯤 한도가 바닥나 그 뒤 회차가 컷마다 6분씩 헛돌았다. 편당 상한만큼 훅부터 Grok 에 맡기고 나머지는 계획된 로컬 모션(폴백 경보 제외). 최근 7일 제출이 weekly_budget 에 닿거나 소진이 감지되면 그 편은 Grok 을 건너뛴다. 원장: workspace/grok-usage.json · 코드: scripts/automation/lib/grok-budget.js"
+  },
   "options": [
     {
       "order": 0,
@@ -77,5 +85,7 @@
     "이번 회차만 로컬 폴백으로: BT_MOTION_ENGINE=local-only bash lib/auto-pipeline.sh --slot us-close",
     "Grok 로그인 확인:          node scripts/automation/grok-motion-applescript.js --check",
     "자동 경로는 grok → local-only 둘뿐이다. wan·ltx 는 명시 지정해야 돈다."
-  ]
+  ],
+  "grok_account": "pushnpullwise@savatv.com",
+  "_grok_account_comment": "2026-09-17 운영자 확정: Chrome 에 로그인된 pushnpullwise@savatv.com(SuperGrok)을 쓴다. grok-motion-applescript.js의 계정 검사 기준이며 BT_GROK_ACCOUNT 환경변수가 이 값을 덮는다."
 }

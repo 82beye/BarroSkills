@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "_comment": "2026-10-26 전 회사 중앙 구독 한도 정책. 주간 60%부터 절약, 70%부터 신규 LLM 실행 중단으로 최소 30%를 보존한다. 진행 중 예약·모델별 예상 소비·5%p 안전 여유와 15분 이내 관측을 적용한다. P0·CEO·PM 예외 없이 구독 연결만 사용하며 외부 세션 소비에 대한 공급자 측 절대 보장은 아니다.",
+  "providers": {
+    "claude": {
+      "quota_provider": "anthropic",
+      "label": "Claude"
+    },
+    "codex": {
+      "quota_provider": "openai",
+      "label": "Codex"
+    }
+  },
+  "thresholds": {
+    "session": {
+      "yellow": 70,
+      "red": 90
+    },
+    "week": {
+      "yellow": 60,
+      "red": 70
+    },
+    "week_pace_margin": 10,
+    "week_pace_min": 20,
+    "hysteresis": 5,
+    "stale_minutes": 15
+  },
+  "routing": {
+    "_comment": "파이프라인 엔진 순서(BT_*_ENGINE_CHAIN). 여기 값은 각 스크립트의 기본 순서와 같다. 한 공급자가 RED 이고 다른 쪽이 아니면 RED 쪽을 뒤로 보낸다. 둘 다 GREEN 이면 아무것도 쓰지 않는다(스크립트 기본값).",
+    "chains": {
+      "BT_SCRIPT_ENGINE_CHAIN": "claude,codex,gemini",
+      "BT_METADATA_ENGINE_CHAIN": "claude,codex,gemini",
+      "BT_CARD_ENGINE_CHAIN": "claude,codex",
+      "BT_FACTCHECK_ENGINE_CHAIN": "claude,gemini,codex",
+      "BT_GROWTH_MANAGER_CHAIN": "codex,claude",
+      "BT_INCIDENT_ENGINE_CHAIN": "codex,claude"
+    },
+    "yellow_prefers_other": true,
+    "_yellow_prefers_other": "한쪽이 YELLOW 이고 다른 쪽이 GREEN 이면 GREEN 쪽을 앞에 둔다 — 노랑일 때 미리 덜어 두면 RED 까지 안 간다."
+  },
+  "routine_tiers": {
+    "_comment": "0 = 늘 돈다(생산·수집·진단). 1 = 두 공급자 모두 RED 면 보류(경쟁 인텔·성장 매니저·주간 마케팅). 2 = 담당 에이전트의 기본 공급자가 YELLOW 이상이면 보류(주간 CMO·CEO). 다른 공급자의 RED 만으로 담당 에이전트를 멈추지 않는다. 보류된 루틴은 풀리면 놓친 회차가 한 번 돈다."
+  },
+  "notify": {
+    "on_level_change": true,
+    "daily_report_at": "21:00"
+  },
+  "cost_estimate_per_mtok": {
+    "_comment": "실행 기록에 환산 비용(costUsd)이 없는 공급자(Codex — 2026-10-07 실측: usageJson 에 토큰만 온다)의 하루 상한·리포트용 추정 단가(USD/백만 토큰). 청구액이 아니라 한도 소모를 Claude 쪽 환산값과 같은 눈금으로 보려는 대리 지표다.",
+    "codex": {
+      "input": 1.25,
+      "cached": 0.125,
+      "output": 10.0
+    }
+  },
+  "global_reserve": {
+    "enabled": true,
+    "reserve_percent": 30,
+    "safety_buffer_percent": 5,
+    "_comment": "token-governor.js는 전 회사 quota-switch.js에 위임한다. 실제 실행 직전 quota-cli가 공유 예약을 확인한다. 개별 가드는 중앙 상태 활성 시 설정을 변경하지 않는다. 2026-11-02 생산 회차 호출(dispatch 의 BT_QUOTA_CLASS=production)은 호출당 0.6% 로 예약하고 에이전트 예약에 막히지 않으며 70% 까지 간다 — 에이전트는 그대로 65% 에서 멈추므로 30% 보존선은 유지된다. 값은 quota-reserve-policy.js PIPELINE_CALL_PERCENT."
+  },
+  "barrojo_unblock": {
+    "enabled": true,
+    "_comment": "2026-10-28 바로조 막힘 지휘(barrojo unblock)가 전 회사의 막힌 이슈를 가르고 CEO 를 호출한다. 켜져 있으면 token-governor 의 BarroTube 막힘 점검(triage.js) 자동 열기를 건너뛴다 — 같은 CEO 를 두 곳이 깨우지 않게. 끄려면 enabled=false."
+  }
+}

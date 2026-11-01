@@ -16,16 +16,20 @@ Examples:
 Exit code 0 on success, non-zero on failure. Prints a JSON summary on stdout.
 """
 import argparse
+import hashlib
 import json
 import os
+import re
 import shutil
-import struct
 import subprocess
 import sys
+import tempfile
 import time
 
+from PIL import Image
+
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
-VIDEO_EXTS = (".mp4", ".mov", ".webm", ".m4v")
+VIDEO_EXTS = (".mp4",)
 
 
 def newest_match(folder, exts, prefer_prefix=None, max_age_sec=None):
@@ -40,7 +44,7 @@ def newest_match(folder, exts, prefer_prefix=None, max_age_sec=None):
     now = time.time()
     for name in entries:
         p = os.path.join(folder, name)
-        if not os.path.isfile(p):
+        if os.path.islink(p) or not os.path.isfile(p):
             continue
         if not name.lower().endswith(exts):
             continue
@@ -57,25 +61,12 @@ def newest_match(folder, exts, prefer_prefix=None, max_age_sec=None):
     return max(candidates)[1]
 
 
-def is_png(path):
-    try:
-        with open(path, "rb") as f:
-            return f.read(8) == b"\x89PNG\r\n\x1a\n"
-    except OSError:
-        return False
-
-
-def png_size(path):
-    try:
-        with open(path, "rb") as f:
-            f.read(8)
-            f.read(4)
-            if f.read(4) != b"IHDR":
-                return None
-            w, h = struct.unpack(">II", f.read(8))
-            return w, h
-    except OSError:
-        return None
+def sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def ffprobe_video(path):
@@ -91,7 +82,7 @@ def ffprobe_video(path):
                 "-show_entries", "format=duration",
                 "-of", "json", path,
             ],
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, timeout=30,
         )
         data = json.loads(out)
         stream = (data.get("streams") or [{}])[0]
@@ -103,7 +94,7 @@ def ffprobe_video(path):
             "codec": stream.get("codec_name"),
             "duration": round(float(dur), 2) if dur else None,
         }
-    except (subprocess.CalledProcessError, ValueError, KeyError):
+    except (subprocess.SubprocessError, OSError, ValueError, KeyError):
         return None
 
 
@@ -124,9 +115,13 @@ def main():
                     help="Explicit source file (skip the newest-in-Downloads search)")
     ap.add_argument("--no-delete", action="store_true",
                     help="Keep the original in Downloads (default: try to remove it)")
+    ap.add_argument("--overwrite", action="store_true",
+                    help="Explicitly replace an existing destination after verification")
     ap.add_argument("--max-age", type=int, default=600,
                     help="Only consider downloads modified within this many seconds (default 600)")
     args = ap.parse_args()
+    if args.slug in (".", "..") or not re.fullmatch(r"[^/\\\x00-\x1f]+", args.slug):
+        ap.error("--slug must be a single file name without path separators")
 
     if args.kind == "image":
         exts, subdir, prefer = IMAGE_EXTS, "Image", None
@@ -134,7 +129,7 @@ def main():
         exts, subdir, prefer = VIDEO_EXTS, "video", "grok-video-"
 
     src = args.source or newest_match(args.downloads, exts, prefer, args.max_age)
-    if not src or not os.path.isfile(src):
+    if not src or os.path.islink(src) or not os.path.isfile(src):
         print(json.dumps({
             "ok": False,
             "error": f"no recent {args.kind} found in {args.downloads}",
@@ -145,33 +140,57 @@ def main():
     # validate
     validation = {}
     if args.kind == "image":
-        validation["png"] = is_png(src)
-        size = png_size(src) if validation["png"] else None
-        if size:
-            validation["width"], validation["height"] = size
-        ext = ".png" if validation.get("png") else os.path.splitext(src)[1].lower()
+        with Image.open(src) as img:
+            ext = {"PNG": ".png", "JPEG": ".jpg", "WEBP": ".webp"}.get(img.format)
+            if not ext or img.width <= 0 or img.height <= 0:
+                raise ValueError("unsupported or invalid image")
+            validation.update(format=img.format, width=img.width, height=img.height)
+            img.verify()
+        with Image.open(src) as img:
+            img.load()
     else:
         info = ffprobe_video(src)
-        if info:
+        if info and info.get("width") and info.get("height") and (info.get("duration") or 0) > 0:
             validation.update(info)
             # Grok nominally 720x1280; real downloads measure 720x1264 — both OK.
             if info.get("height") and info["height"] not in (1280, 1264):
                 validation["note"] = f"height={info['height']} (expected 1280/1264 for 9:16/720p)"
         else:
-            validation["ffprobe"] = "unavailable (trusting browser download)"
+            raise ValueError("video validation failed or ffprobe unavailable; original preserved")
+        if os.path.splitext(src)[1].lower() != ".mp4":
+            raise ValueError("expected an MP4 download; convert other containers separately")
         ext = ".mp4"
 
     dest_dir = args.dest_dir or os.path.join(args.dest_root, subdir)
     os.makedirs(dest_dir, exist_ok=True)
     dest = os.path.join(dest_dir, args.slug + ext)
 
-    shutil.copy2(src, dest)
+    if os.path.lexists(dest) and not args.overwrite:
+        raise FileExistsError("destination exists; use --overwrite to replace it")
+    if os.path.exists(dest) and os.path.samefile(src, dest):
+        raise ValueError("source and destination must differ")
+    expected_hash = sha256(src)
+    fd, tmp = tempfile.mkstemp(prefix=".media-", suffix=ext, dir=dest_dir)
+    os.close(fd)
+    try:
+        shutil.copyfile(src, tmp)
+        if sha256(tmp) != expected_hash or sha256(src) != expected_hash:
+            raise ValueError("source changed or copy hash mismatch; original preserved")
+        with open(tmp, "rb") as copied:
+            os.fsync(copied.fileno())
+        if args.overwrite:
+            os.replace(tmp, dest)
+        else:
+            os.link(tmp, dest)  # atomic no-overwrite, including dangling symlinks
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
 
     deleted = False
     delete_note = None
     if not args.no_delete:
         # verify the copy matches before removing the original
-        if os.path.getsize(dest) == os.path.getsize(src):
+        if sha256(dest) == expected_hash and sha256(src) == expected_hash:
             try:
                 os.remove(src)
                 deleted = True
@@ -182,7 +201,7 @@ def main():
             except OSError as e:
                 delete_note = f"could not delete original: {e}"
         else:
-            delete_note = "size mismatch after copy; left original in place"
+            delete_note = "hash mismatch after copy; left original in place"
 
     print(json.dumps({
         "ok": True,
@@ -198,4 +217,8 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except (OSError, ValueError, Image.DecompressionBombError) as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
+        sys.exit(2)

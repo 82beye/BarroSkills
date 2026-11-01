@@ -102,6 +102,7 @@ OUTRO — 정의. 그 회차가 무엇이었는지 한 줄로 규정한다. CTA 
 - 줄바꿈 위치는 | 로 표시한다 (2~3조각).
 - 가장 중요한 한 덩어리를 **…** 로 감싼다.
 - 대본에 없는 수치·사실을 만들지 않는다.
+- INTRO 는 「주제」를 말한다 — 주제의 핵심어를 그대로 쓰고, 대본 요약의 다른 수치·사실로 주제를 바꾸지 않는다.
 - 출력은 JSON 한 줄: {"intro":"…","intro_sub":"…","outro":"…"}
   intro_sub 는 14자 이내의 보조 한 줄. 없으면 빈 문자열.`;
 
@@ -118,6 +119,20 @@ function parseCardJson(raw) {
  * 잘린다 — "AMD는 정규장에서 7% 올랐습니다. 그런데 실적을" 같은 식이다. 그래서 모델에게
  * 카드용으로 다시 쓰게 한다. 엔진이 다 죽으면 위의 잘라쓰기로 떨어진다.
  */
+/**
+ * 카드 문안의 주제. 「미국 증시 요약」은 대본이 정한 그날의 사건(제목 훅·기록)이 주제다 — 브리프 토픽은
+ * 데스크가 잡은 한·미 대비라, 2026-10-07 EP-2026-0214 인트로가 나스닥·S&P500 사상 최고치인 날
+ * 「외국인은 1조 7,661억 원 던졌다」(전날 한국장)를 걸었다. 다른 포맷은 예전처럼 브리프 토픽.
+ */
+export function cardTopic(meta, briefFM) {
+  if (meta?.form === 'market-summary' && meta.title_hook) {
+    // thesis(2026-10-15~)가 있으면 같이 준다 — 제목 훅만 주자 카드가 「CPI 0.1%p 서프라이즈」처럼
+    // 대본 요약의 다른 수치로 주제를 바꿨다(EP-2026-0234, 주제는 연준 추가 인상 공포).
+    return [meta.title_hook, ...(meta.thesis ? [meta.thesis] : []), ...(Array.isArray(meta.events) ? meta.events : [])].join(' · ');
+  }
+  return briefFM?.topic || meta?.topic || '';
+}
+
 export async function writeCardCopy({ briefFM, scenes, topic }) {
   const { callClaudeCode, callCodex, resolveChain, runEngineChain } = await import('./lib/text-engine.js');
   const digest = scenes.map(s => `[${s.role || '?'}] ${s.subtitle_text || s.narration || ''}`).join('\n');
@@ -192,8 +207,10 @@ async function stampIntroBrand({ outPath, briefFM, meta, headline }) {
   if (!channel || !title) return;
   let brands;
   try {
-    // 카드는 타이틀 블록이 화면 30% 지점이라 위쪽이 비어 있고, 스크림도 위가 가장 짙다.
-    brands = resolveBrandsForTitle(channel, briefFM || {}, title, { logoPosition: 'top-right' });
+    // 오른쪽 아래(Shorts 하단 UI 위로 클램프) — 다른 인트로 경로(generate-intro·compose-intro-brand)와 같다.
+    // 예전엔 「타이틀이 화면 30% 지점이라 위가 비어 있다」며 오른쪽 위였는데, 헤드라인이 3줄이면 블록이
+    // y≈18% 까지 올라와 로고가 첫 줄을 덮었다(2026-10-09 EP-0220 「뛰자」 판독 불가).
+    brands = resolveBrandsForTitle(channel, briefFM || {}, title, { logoPosition: 'bottom-right' });
   } catch (e) {
     console.warn(`   ⚠ 브랜드 해석 실패 (${String(e.message).slice(0, 80)}) — CI 없이 간다`);
     return;
@@ -216,6 +233,22 @@ async function stampIntroBrand({ outPath, briefFM, meta, headline }) {
     if (existsSync(tmp)) rmSync(tmp, { force: true });
     console.warn(`   ⚠ CI 합성 실패 (${String(e.message).slice(0, 100)}) — 카드는 그대로 둔다`);
   }
+}
+
+/**
+ * 인트로·아웃트로 카드의 배경 씬. 데이터 카드(card) 씬은 건너뛰고 그림 씬에서 고른다.
+ *
+ * 인트로 카드는 영상 맨 앞 2초에 붙는 첫 인상이라 그날 이야기를 보여 주는 그림이어야 한다.
+ * 「미국 증시 요약」은 씬 1 이 지수 요약 카드라 예전처럼 씬 1 을 깔면 인트로가 지수표가 되고,
+ * 바로 이어지는 씬 1 과 같은 화면이 두 번 나왔다(2026-10-09 운영자: 「인트로에 왜 지수 지표 이미지를
+ * 넣냐, 훅이 될 그림이어야 한다」). 그 포맷의 첫 그림 씬은 그날의 원인(driver) 컷이다.
+ */
+export function cardBackgroundScenes(scenes = []) {
+  const pictures = scenes.map((s, i) => (s?.card ? -1 : i)).filter((i) => i >= 0);
+  return {
+    intro: pictures.length ? pictures[0] : 0,
+    outro: pictures.length ? pictures[pictures.length - 1] : Math.max(0, scenes.length - 1),
+  };
 }
 
 export async function generateCards({ episodeDir, platform = null, kind = 'both', force = false }) {
@@ -245,7 +278,7 @@ export async function generateCards({ episodeDir, platform = null, kind = 'both'
   const needsCopy = !(th.intro_headline_text && th.outro_definition);
   if (needsCopy) {
     try {
-      copy = await writeCardCopy({ briefFM, scenes, topic: briefFM.topic || meta.topic });
+      copy = await writeCardCopy({ briefFM, scenes, topic: cardTopic(meta, briefFM) });
       console.log(`   문안 생성: intro="${copy.intro}" / outro="${copy.outro}"`);
     } catch (e) {
       console.warn(`   ⚠ 문안 생성 실패 (${String(e.message).slice(0, 80)}) — 대본에서 잘라 쓴다`);
@@ -259,14 +292,15 @@ export async function generateCards({ episodeDir, platform = null, kind = 'both'
     ? { title: th.outro_definition }
     : (copy ? { title: copy.outro } : deriveOutro(briefFM, scenes));
 
+  const bgScene = cardBackgroundScenes(scenes);
   const jobs = [];
   if (kind === 'intro' || kind === 'both') {
     jobs.push({ name: 'intro', cfg: loadCardConfig('intro'), variant: intro,
-      bg: sceneImg(0), out: join(baseDir, '45_intro.png') });
+      bg: sceneImg(bgScene.intro), out: join(baseDir, '45_intro.png') });
   }
   if (kind === 'outro' || kind === 'both') {
     jobs.push({ name: 'outro', cfg: loadCardConfig('outro'), variant: outro,
-      bg: sceneImg(scenes.length - 1), out: join(baseDir, '48_outro.png') });
+      bg: sceneImg(bgScene.outro), out: join(baseDir, '48_outro.png') });
   }
 
   const results = [];

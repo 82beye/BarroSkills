@@ -19,6 +19,8 @@
  * 검증기가 쓸 수치를 한 파일에 두고, 갈라지면 테스트가 깨지게 한다.
  */
 
+import { poseRepeat } from './image-prompt-contract.js';
+
 /** 한글 수사 음절. "영점이육", "천사백이십오" 처럼 이어 붙는다. */
 const NUM = '[영공일이삼사오육칠팔구십백천만억조점]';
 
@@ -42,15 +44,123 @@ export const SPOKEN_NUMBER = new RegExp(
  * 인과를 주장하는 말. 하나도 없으면 그 씬은 사실을 나란히 놓기만 한 것이다.
  * 넉넉하게 잡는다 — 이 규칙은 바닥이지 천장이 아니다.
  */
+/**
+ * 통념을 뒤집는 표지. 인과("A 때문에 B")와 짝을 이루는 다른 쪽 절반이다 —
+ * "예상과 달랐다", "반대로 갔다", "진짜 이유는 따로 있다".
+ *
+ * 2026-09-16 영상별 구독 실측(2026-08-25~09-16, 26편): 제목·훅에 이 구조가 있으면
+ * 구독/1k뷰 2.12, 없으면 0.63 (3.4배). 시기를 갈라도 유지된다(이전 2.61 vs 1.35,
+ * 이후 0.91 vs 0.17). 조회는 수치 나열로도 받지만 구독은 안 따라온다 — 최근 8편 중
+ * 7편이 수치 나열이었고 그 8편의 순증 구독 합이 1 이었다.
+ */
+/**
+ * 책임 회피 문장 — 답할 자리에서 "나중에 확인하라"고 시청자를 다른 데로 보내는 말.
+ *
+ * 2026-09-16 EP-2026-0157 실측: 제목이 「이란 휴전설에도 방산주가 급등한 **이유**」인데
+ * insight 씬이 「정확한 상승 배경은 후속 보도로 다시 확인이 필요합니다」로 나갔다.
+ * 원본(rev0)에는 「휴전 뒤 중동 재건과 무기 현대화 수요가 열릴 거란 기대 때문에 매수세가
+ * 몰렸습니다」라는 답이 있었는데, 팩트체크 재작성이 검증이 안 된다고 지워 버린 것이다.
+ *
+ * 제목은 답을 약속하고 본문은 안 갚는다 — 시청자 입장에서는 60초를 쓸 이유가 사라진다.
+ * 검증이 안 되면 **지우지 말고 해석으로 표시**하는 게 맞다("~라는 해석이 나옵니다").
+ * 그래서 이건 warn 이 아니라 error 다: 이 문장이 분석 씬에 있으면 그 회차는 내보내면 안 된다.
+ */
+/**
+ * 지수 이름 — 이것이 훅의 주어가 되면 「오늘 지수가 몇 % 움직였다」 회차가 된다.
+ * 운영자 지시(2026-09-16): "단순 영향이 없는 지수 수치는 에피소드 주제가 되면 안 된다."
+ */
+/**
+ * 일상 등락률의 하한 — **기계 게이트의 정본은 이 상수 하나다.**
+ * config/growth.json 의 index_move_thresholds.index_pct 는 프롬프트 문장으로만 소비되므로
+ * (growth-directives.js·generate-metadata.js) 반드시 같은 값이어야 한다. 갈라지면 작가가
+ * 한 프롬프트 안에서 서로 다른 두 임계를 받는다 — tests 의 드리프트 검사가 그걸 잡는다.
+ *
+ * 2026-09-21 운영자 지시: "3% 를 넘지 못한 지수 등락은 에피소드 주제가 될 수 없다."
+ * 계기는 EP-2026-0169 — 코스피 +2.66% 가 훅의 주어로 나갔다. 그때 이 규칙은 임계 비교에
+ * 닿지도 못했다(정수 낭독 "이 퍼센트" 미파싱 + 대조어 면제). 숫자만 올리면 같은 훅이 또 샌다.
+ */
+export const INDEX_MOVE_PCT_FLOOR = 3.0;
+
+export const INDEX_NAMES = [
+  '코스피', '코스닥', '나스닥', '다우', '에스앤피', 's&p', '스탠더드앤드푸어스',
+  // 2026-09-21 추가. 목록에 없으면 그 지수로 연 훅은 검사 자체를 받지 않는다.
+  '니케이', '닛케이', '항셍', '상하이종합', '선전종합', '빅스', 'vix',
+  '필라델피아반도체', '러셀', '유로스톡스', '닥스', 'dax', '에프티에스이', 'ftse',
+];
+
+/**
+ * 낭독체 소수 → 숫자. "일점삼칠" → 1.37
+ * 훅이 말한 등락률이 임계를 넘는지 기계적으로 보려면 숫자로 바꿔야 한다.
+ * 프롬프트 지시(generate-script 10a)만으로는 지켜지는지 확인할 방법이 없었다.
+ */
+const DIGIT = { 영: 0, 공: 0, 일: 1, 이: 2, 삼: 3, 사: 4, 오: 5, 육: 6, 칠: 7, 팔: 8, 구: 9 };
+/**
+ * 훅이 말한 등락률을 찾는 토큰. 낭독체 소수("일점삼칠 퍼센트")만 보던 것을 정수 낭독
+ * ("이 퍼센트")·띄어쓴 소수("육 점 구칠")·아라비아 표기("1.74%")까지 넓힌다.
+ * EP-2026-0169 가 「이 퍼센트 넘게」로 임계 비교를 통째로 건너뛴 것이 계기다.
+ */
+const SPOKEN_INT = '[영공일이삼사오육칠팔구십]+';
+export const PCT_TOKEN = new RegExp(
+  `(?:(${SPOKEN_INT})(?:\\s*점\\s*([영공일이삼사오육칠팔구]+))?|(\\d+(?:\\.\\d+)?))\\s*(?:퍼센트|%)`,
+  'g',
+);
+
+/** PCT_TOKEN 매치 하나를 숫자로 읽는다. 아라비아 표기는 그대로, 낭독체는 spokenToNumber 로. */
+export function readPct(m) {
+  if (m[3] !== undefined) {
+    const v = Number(m[3]);
+    return Number.isFinite(v) ? v : null;
+  }
+  return spokenToNumber(m[2] ? `${m[1]}점${m[2]}` : m[1]);
+}
+
+export function spokenToNumber(token) {
+  // 소수부는 선택이다. "이" → 2 를 못 읽으면 정수로 말한 등락률이 전부 검사 밖으로 샌다.
+  const m = String(token).match(/^([영공일이삼사오육칠팔구십]+)(?:\s*점\s*([영공일이삼사오육칠팔구]+))?$/);
+  if (!m) return null;
+  const whole = m[1] === '십' ? 10
+    : m[1].includes('십')
+      ? (DIGIT[m[1][0]] ?? 1) * 10 + (DIGIT[m[1].slice(-1)] ?? 0)
+      : [...m[1]].reduce((n, c) => (DIGIT[c] === undefined ? n : n * 10 + DIGIT[c]), 0);
+  if (!m[2]) return Number.isFinite(whole) ? whole : null;
+  const frac = [...m[2]].map((c) => DIGIT[c]).join('');
+  const v = Number(`${whole}.${frac}`);
+  return Number.isFinite(v) ? v : null;
+}
+
+export const DODGE_PHRASES = [
+  '확인이 필요', '다시 확인', '후속 보도', '지켜봐야 알', '알 수 없습니다',
+  '확인해야 합니다', '재확인이 필요', '판단하기 이릅', '단정하기 어렵',
+];
+
+export const CONTRAST_MARKERS = [
+  '왜', '진짜 이유', '아니라', '인데도', '에도 불구', '지만', '는데', '반대로', '오히려',
+  '예상과', '통념', '역전', '역주행', '틀렸', '착각', '의외', '숨은', '정작', '그런데도',
+];
+
 export const MECHANISM_MARKERS = [
   '때문', '덕분', '덕에', '탓', '이유', '영향', '여파', '반영', '이어', '이끌',
   '의미', '뜻', '신호', '셈', '결과', '따라서', '그래서', '바람에', '까닭',
   // 2026-09-05 추가: 실제 대본이 쓰는데 목록에 없어 오탐하던 연결어미.
   // "고용이 잘 나오자 확률이 뛰었다"(EP-0138 씬003)는 명백한 인과인데 걸렸다.
   '면서', '겹쳐', '겹치', '상쇄', '작용', '로 인', '에 힘입', '끌어내', '끌어올', '촉발',
+  // 2026-09-16 추가: 이 채널의 주력 서술인 '전이' 계열. 미국 금리가 국내로 옮겨붙는
+  // 이야기를 매 회차 하는데 목록에 없었다.
+  '전이', '옮겨가', '옮겨붙', '번지', '퍼지', '전가',
 ];
 
 /** "…나오자 / 터지자" 처럼 용언 + '자' 로 붙는 인과. 감탄사 "자," 와 구분해야 한다. */
+/**
+ * 조건부 인과: 「X-면 … Y도/따라 …」.
+ *
+ * 2026-09-16 EP-2026-0156 씬 004: 「미국 금리가 오르면 국내 은행채와 주택담보대출
+ * 금리도 따라 오르고」 — 이 채널이 파는 전이 메커니즘 그 자체인데 no-mechanism 으로
+ * 잡혔다. '면서' 는 목록에 있는데 '-으면'(조건)이 없었다.
+ * 조건 어미만으로는 과탐한다("어쩌면", "하면 됩니다") — 뒤에 **결과절 표지**가
+ * 따라올 때만 인과로 센다.
+ */
+export const MECHANISM_CONDITIONAL = /(?:으면|면)\s[^.!?]{0,40}?(?:도\s|따라|덩달아|같이\s|함께\s|이어서)/;
+
 export const MECHANISM_VERB_JA = /(?:되|하|오|나오|가|뛰|빠지|오르|내리|터지|꺾이|풀리|막히)자[\s,]/;
 
 /** 결론 자리를 차지하고 아무것도 말하지 않는 표현. */
@@ -74,6 +184,18 @@ export const FILLER_PHRASES = [
 ];
 
 /**
+ * 제작 과정 말 — 기사 본문을 읽었는지, 검증했는지, 스냅샷·자료에 있는지는 작가·팩트체커의
+ * 메모다. 낭독문·자막에 들어가면 시청자는 「이 채널은 모른다」만 듣는다.
+ * 2026-10-15 운영자(EP-2026-0234): 「확인되지 않았습니다, 검증되지 않았습니다」가 씬 세 곳에 낭독됐다.
+ * 과거 206편 중 16편, 최근 회차일수록 잦았다. 확인 못 한 것은 빼고, 해석은 출처의 해석으로 전한다.
+ */
+export const PROCESS_TALK = /확인되지 않|확인하지 못|확인이 안 됐|검증되지 않|검증하지 못|검증이 안 됐|본문을 (?:확인|읽)|본문은|제목과 요약만|제목·요약만|스냅샷|자료에서는? 확인|자료에는|자료로는|추정입니다|추정이다|인과는 추정/g;
+
+export function processTalk(text) {
+  return [...new Set(String(text || '').match(PROCESS_TALK) || [])];
+}
+
+/**
  * 인과를 요구하는 씬 역할.
  * hook 은 질문이어도 되고, context 는 스타일가이드상 데이터 제시가 본업이고,
  * cta 는 행동 유도다. "그래서 무슨 의미인가" 를 맡은 역할에만 요구한다.
@@ -85,6 +207,23 @@ export const ANALYTIC_ROLES = ['insight', 'implication', 'cause', 'impact'];
  * ("에스앤피오백이" → 오백이). 수치로 세면 작성자가 쓰지도 않은 예산이 깎인다.
  */
 export const PROPER_NOUN_NUMERALS = ['에스앤피오백', '러셀이천', '유로스톡스오십', '니케이이백이십오'];
+
+/**
+ * 훅(씬 1)이 써도 되는 초. 60초 포맷 기준.
+ *
+ * 근거 — 2026-09-10 YouTube Analytics 실측(60초 포맷 15편):
+ *   훅 ≥ 10초 : 3편, 평균 시청률 56.5%
+ *   훅 <  10초 : 12편, 평균 시청률 70.4%
+ * 리텐션 곡선을 보면 승부는 영상 길이의 5~20% 구간, 즉 3~12초에서 갈린다.
+ * 상위 2편은 그 구간에서 30~35%p 를 잃는데 하위 2편은 47~48%p 를 잃는다.
+ * 훅이 길어질수록 그 구간을 훅 하나로 다 쓰게 되고, 시청자는 다음 장면을 보기 전에 떠난다.
+ *
+ * 이 채널은 유입의 96.9% 가 Shorts 피드다 — 시청률이 곧 노출이고, 노출이 곧 조회다.
+ */
+export const HOOK_MAX_SECONDS = 10;
+
+/** 이 상한을 적용할 대본 길이. 3분 포맷은 표본이 2편뿐이라 단정하지 않는다. */
+export const HOOK_RULE_MAX_TOTAL_SECONDS = 90;
 
 /**
  * 씬 하나가 말해도 되는 수치 개수.
@@ -107,7 +246,9 @@ export function countSpokenNumbers(narration) {
 
 function hasMechanism(narration) {
   const text = String(narration || '');
-  return MECHANISM_MARKERS.some((m) => text.includes(m)) || MECHANISM_VERB_JA.test(text);
+  return MECHANISM_MARKERS.some((m) => text.includes(m))
+    || MECHANISM_VERB_JA.test(text)
+    || MECHANISM_CONDITIONAL.test(text);
 }
 
 function countHedges(narration) {
@@ -121,11 +262,61 @@ function countHedges(narration) {
  * 헤지를 error 로 두지 않는 이유: 팩트체크가 근거 부족을 이유로 톤을 낮추라고
  * 지시하는 경우가 정상 경로에 있다. 그때 헤지는 결함이 아니라 준수다.
  */
+/**
+ * 훅의 주어가 '지수 일간 등락률' 인지 판정한다.
+ *
+ * **문장 단위로 본다.** 지수명과 등락률이 같은 문장에 있고 지수명이 앞설 때만 그 지수가
+ * 움직임의 주어다. narration.slice(0,40) 창을 쓰던 예전 방식은 도입부가 한 문장만 길어도
+ * 수치를 창 밖으로 밀어내 검사를 놓쳤다.
+ *
+ * **대조 면제는 수치 뒤에 오는 대조만 인정한다.** 원래 취지는 "대조의 앞쪽 절로 쓰인 수치는
+ * 주어가 아니다" 였다(「코스피가 1.37% 올랐**지만** 개인은 팔았다」 — 주제는 괴리다).
+ * 그런데 narration 전체에서 마커를 찾는 바람에 「연준이 올렸**는데** 코스피가 이 퍼센트
+ * 뛰었습니다」처럼 **수치가 대조의 결론인** 훅까지 면제됐다(2026-09-21 EP-2026-0169).
+ * 그 훅에서 지수 등락은 정확히 주어다. 이 채널 훅은 거의 항상 대조어를 포함하므로,
+ * 좁히지 않으면 임계를 몇으로 올리든 규칙이 상시 무력화된다.
+ *
+ * 레벨 돌파·N년래 최고·연속기록은 등락률이 아니라 사건이라 여기서 제외한다
+ * (config/growth.json content_policy.always_newsworthy).
+ */
+export function findIndexMoveSubject(narration) {
+  const text = String(narration || '');
+  if (/돌파|뚫|붕괴|최고|최저|이후 처음|만에|연속/.test(text)) return null;
+  // 숫자 사이의 마침표는 문장 경계가 아니다. `[^.!?]+` 로 끊으면 "나스닥이 1.74%" 가
+  // "나스닥이 1." / "74%" 로 쪼개져 지수명과 수치가 서로 다른 문장이 된다(2026-09-21 실측).
+  for (const s of text.split(/(?<![0-9])[.!?]+(?![0-9])/)) {
+    const found = INDEX_NAMES
+      .map((n) => ({ n, at: s.toLowerCase().indexOf(n.toLowerCase()) }))
+      .filter((o) => o.at >= 0)
+      .sort((a, b) => a.at - b.at)[0];
+    if (!found) continue;
+    PCT_TOKEN.lastIndex = 0;
+    let pct = null, m;
+    while ((m = PCT_TOKEN.exec(s))) { if (m.index > found.at) { pct = m; break; } }
+    if (!pct) continue;
+    const after = pct.index + pct[0].length;
+    if (CONTRAST_MARKERS.some((c) => { const i = s.indexOf(c); return i >= 0 && i >= after; })) return null;
+    return { index: found.n, value: readPct(pct), raw: pct[0].trim() };
+  }
+  return null;
+}
+
+/**
+ * 「미국 증시 요약」 포맷(씬마다 card 지시가 있다 — config/market-summary.json)은 수치가 곧
+ * 내용이다. 벤치마크(오선 「증시 요약」 427편)는 3분에 지수 셋·종목 등락·금리·유가를 다 읽는다.
+ * 쇼츠 훅용 상한(씬 3·전체 씬+1)을 그대로 걸면 모든 편이 Phase 8 에서 멈춘다.
+ */
+export const SUMMARY_SCENE_NUMBER_CAP = 6;
+export const SUMMARY_NUMBERS_PER_SCENE = 4;
+export const isSummaryScript = (scenes) => Array.isArray(scenes) && scenes.some((s) => s && typeof s.card === 'object' && s.card);
+
 export function validateScript(scenes) {
   const issues = [];
   if (!Array.isArray(scenes) || scenes.length === 0) return issues;
 
-  const totalCap = totalSpokenNumberCap(scenes.length);
+  const summary = isSummaryScript(scenes);
+  const totalCap = summary ? scenes.length * SUMMARY_NUMBERS_PER_SCENE : totalSpokenNumberCap(scenes.length);
+  const totalSeconds = scenes.reduce((n, sc) => n + (Number(sc.target_seconds) || 0), 0);
   let totalNumbers = 0;
   let totalHedges = 0;
   const seenNumbers = new Set();
@@ -138,13 +329,82 @@ export function validateScript(scenes) {
     totalNumbers += numbers.length;
     totalHedges += countHedges(narration);
 
-    const cap = spokenNumberCap(scene.target_seconds);
+    // narration 은 ElevenLabs 로 그대로 간다 — 아라비아 숫자는 S6a(validate-tts-policy --strict)가 막는데,
+    // 그때는 이미지·모션을 다 만든 뒤다. 2026-09-30 EP-2026-0198 이 씬 003 숫자 하나로 Phase 8 에서 죽었다.
+    // 여기서 error 로 잡으면 생성기의 재작성 루프가 고치고, 남으면 Phase 4 에서 멈춘다(비용 쓰기 전).
+    const digits = narration.match(/\d[\d.,]*/g);
+    if (digits) {
+      issues.push({
+        rule: 'narration-digits', severity: 'error', scene_id: id,
+        message: `씬 ${id}: narration 에 아라비아 숫자 ${digits.slice(0, 4).join(', ')} — TTS 가 영어로 읽는다`,
+        suggestion: '숫자는 한글 수사로 써라("3.4%" → "삼점사 퍼센트", "30년물" → "삼십년물"). 아라비아 숫자 표기는 subtitle_text 에만 둔다.',
+      });
+    }
+
+    const talk = processTalk(`${narration} ${scene.subtitle_text || ''}`);
+    if (talk.length) {
+      issues.push({
+        rule: 'process-talk', severity: 'error', scene_id: id,
+        message: `씬 ${id}: 제작 과정을 시청자에게 말했다 — "${talk.join('", "')}"`,
+        suggestion: '확인 못 한 사실은 문장째 빼라. 출처가 지목한 원인은 「○○는 …때문이라고 분석했습니다」, 해석은 「…라는 해석이 나옵니다」로 전한다. 본문 열람·검증 여부·스냅샷·자료 유무는 말하지 않는다.',
+      });
+    }
+
+    const cap = summary ? SUMMARY_SCENE_NUMBER_CAP : spokenNumberCap(scene.target_seconds);
     if (numbers.length > cap) {
       issues.push({
         rule: 'spoken-number-budget', severity: 'error', scene_id: id,
         message: `씬 ${id}: 말한 수치 ${numbers.length}개 (상한 ${cap}) — ${numbers.join(', ')}`,
         suggestion: '가장 중요한 수치 하나만 말하고 나머지는 subtitle_text 로 옮겨라. 남는 초는 그 수치가 왜 그런지에 써라.',
       });
+    }
+
+    if (role === 'hook' && Number(scene.target_seconds) > HOOK_MAX_SECONDS && totalSeconds <= HOOK_RULE_MAX_TOTAL_SECONDS) {
+      issues.push({
+        rule: 'hook-too-long', severity: 'warn', rewrite: true, scene_id: id,
+        message: `씬 ${id}(hook): ${scene.target_seconds}초 — 상한 ${HOOK_MAX_SECONDS}초`,
+        suggestion: '훅에서 배경 설명을 빼고 한 문장으로 줄여라. 시청자는 3~12초 안에 계속 볼지 정한다 — 그 구간을 훅 하나로 쓰면 다음 장면까지 못 간다.',
+      });
+    }
+
+    // 훅이 '무슨 일이 있었다'만 말하고 '왜 그게 중요한가'를 말하지 않으면 조회는 와도
+    // 구독으로 이어지지 않는다. 막지는 않되(severity=warn) 한 번 되돌린다 — 훅은
+    // 시청자가 3~12초 안에 채널을 판단하는 자리라 여기서 지수만 읊으면 다른 채널과 같아진다.
+    if (role === 'hook' && !hasMechanism(narration)
+        && !CONTRAST_MARKERS.some((m) => narration.includes(m))) {
+      issues.push({
+        rule: 'hook-no-why', severity: 'warn', rewrite: true, scene_id: id,
+        message: `씬 ${id}(hook): 인과도 반전도 없다 — 지수·사실 나열만으로 열었다`,
+        suggestion: '훅의 주어를 수치에서 "왜"로 바꿔라. 통념과 어긋난 것, 반대로 움직인 것, 숨은 원인 중 하나를 첫 문장에서 주장하라. 수치는 그 주장의 근거로 뒤에 붙이거나 subtitle_text 로 옮겨라.',
+      });
+    }
+
+    // 훅이 '지수가 몇 % 움직였다'로 열리면 이 채널이 파는 게 사라진다.
+    // 프롬프트 규칙(generate-script 10a/10b)만 있고 기계 검사가 없어서 확인이 안 됐다.
+    // 레벨 돌파·N년래 최고 같은 사건은 예외다 — 그건 등락률이 아니라 사건이다.
+    if (role === 'hook') {
+      const hit = findIndexMoveSubject(narration);
+      if (hit && hit.value !== null && hit.value < INDEX_MOVE_PCT_FLOOR) {
+        issues.push({
+          // 2026-09-21 운영자 지시로 warn → error. "기록하고 진행" 이 아니라 금지다.
+          rule: 'index-move-as-subject', severity: 'error', rewrite: true, scene_id: id,
+          message: `씬 ${id}(hook): ${hit.index} ${hit.value}% 로 열었다 — ${INDEX_MOVE_PCT_FLOOR}% 를 넘지 못한 지수 등락은 에피소드 주제가 될 수 없다`,
+          suggestion: '훅의 주어를 등락률에서 사건으로 바꿔라 — 누가 샀나/무엇이 통념과 달랐나/그래서 시청자에게 무슨 뜻인가. 지수 수치는 근거로 뒤에 붙이거나 subtitle_text 로 옮겨라. 오늘 레벨 돌파·N년래 최고·연속기록이 있으면 그쪽을 주어로 삼아라.',
+        });
+      }
+    }
+
+    // 분석 씬이 "왜"를 말할 자리에서 "나중에 확인하라"로 끝내면 회차가 껍데기가 된다.
+    // hook 은 제외한다 — 훅은 질문을 던지는 자리라 유보가 허용된다.
+    if (ANALYTIC_ROLES.includes(role)) {
+      const dodge = DODGE_PHRASES.filter((d) => narration.includes(d));
+      if (dodge.length) {
+        issues.push({
+          rule: 'dodge-in-analysis', severity: 'error', scene_id: id,
+          message: `씬 ${id}(${role}): 답할 자리에서 유보했다 — "${dodge[0]}"`,
+          suggestion: '근거가 있는 원인만 출처와 시점을 확인해 설명하라. 확인되지 않은 원인은 「해석」이라는 말만 붙여 남기지 말고, 관찰 범위를 좁히거나 원인 미확인을 분명히 하라. 시청자를 다른 곳으로 보내는 빈 결론은 쓰지 마라.',
+        });
+      }
     }
 
     const filler = FILLER_PHRASES.filter((p) => narration.includes(p));
@@ -200,6 +460,18 @@ export function validateScript(scenes) {
     });
   }
 
+  // 마시가 매 씬 같은 자세면 같은 그림을 다섯 번 보여 준다 — 2026-09-30 운영자 지적:
+  // EP-2026-0191~0197 35컷이 전부 "standing before … bracing its body". 막지는 않되 한 번 되돌린다.
+  const pose = poseRepeat(scenes.map((sc) => sc.image_prompt || ''));
+  if (pose.repeated) {
+    issues.push({
+      rule: 'pose-repeat', severity: 'warn', rewrite: true, scene_id: null,
+      message: `마시 자세가 ${pose.total}컷 중 ${pose.count}컷에서 같다 ("${pose.pose}")`,
+      suggestion: '씬마다 다른 전신 자세를 줘라 — stepping back from / kneeling beside / crouching under / '
+        + 'leaning against / sitting in front of / reaching up toward. 팔·손 동작도 바꿔라.',
+    });
+  }
+
   return issues;
 }
 
@@ -210,6 +482,10 @@ export function validateScript(scenes) {
 export function buildAnalystContractBlock(sceneCount) {
   return `
 RULE 4-CONTRACT — 분석 밀도 (machine-checked by validate-script-quality.js):
+
+0. 훅(씬 1)은 ${HOOK_MAX_SECONDS}초를 넘기지 마라. 시청자는 3~12초 안에 계속 볼지 정한다
+   (2026-09-10 실측: 훅 10초 이상 3편 시청률 56.5% vs 10초 미만 12편 70.4%).
+   배경 설명은 씬 2로 넘기고, 훅은 "무엇이 이상한가" 한 문장이면 된다.
 
 A. 말할 수치는 비싸다. narration 의 숫자는 한글 수사로 읽힌다 — "+0.26%" 는
    "영점이육 퍼센트" 여덟 음절이고, 60초 대본의 2%다. 같은 숫자가 subtitle_text 에는
@@ -223,14 +499,18 @@ B. ${ANALYTIC_ROLES.join('/')} 역할의 씬은 인과를 한 문장으로 주�
    - BAD:  "CPI 는 예상과 같았습니다. AI 인프라주가 강했습니다." (두 사실, 인과 없음)
    - GOOD: "물가가 예상대로 나오자 돈은 실적이 아니라 AI 수요 쪽으로 붙었습니다." (메커니즘)
 
-C. 확신이 낮을 때 두루뭉술하게 말하지 마라. 관찰을 좁게 단정하고, 해석은 해석이라고 말해라.
+C. 확신이 낮을 때 두루뭉술하게 말하지 마라. 관찰을 좁게 단정하고, 근거가 있는 해석만 해석이라고 말해라.
    - BAD:  "일부 대형주는 상대적으로 잠잠했습니다." (아무 말도 안 한 문장)
    - GOOD: "실적을 이기고도 5% 빠진 종목이 나왔습니다. 시장이 실적보다 AI 수요를 보고 있다는 뜻입니다."
-   관찰(빠졌다)은 근거가 있어 단정하고, 해석(뜻입니다)은 해석으로 표시했다. 둘 다 정확하다.
+   관찰(빠졌다)은 근거가 있어 단정한다. 해석은 관련 자료나 출처가 있을 때만 쓰며, 이 예문의 인과가 특정 종목에 적용되는지는 별도로 확인해야 한다.
 
 D. 리서치가 준 가장 흥미로운 사실을 버리지 마라. 통념과 어긋나는 사실, 반대 방향으로
    움직인 것, 전문가들 사이 이견 — 시청자가 다른 채널에서 못 듣는 건 이것뿐이다.
    지수 등락률은 어디에나 있다.
+   **지수·수치는 주어가 아니라 근거다.** 등락이 평소 폭을 넘지 못했으면 아예 말하지 마라.
+   넘었으면 그때도 "무엇이 그렇게 만들었나"를 주어로 놓고, 수치는 그 주장의 근거로 뒤에 붙여라.
+   2026-09-16 실측: 수치를 나열한 편은 조회는 받아도 구독/1k뷰가 0.63, 인과·반전으로 연 편은
+   2.12 였다(26편). 이 채널이 파는 건 숫자가 아니라 "그래서 왜"다.
 `;
 }
 

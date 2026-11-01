@@ -55,6 +55,27 @@ export function probe(videoPath) {
   };
 }
 
+/** Grok 두 브라우저 경로가 같은 원본 규격을 검사한다. UI 선택만으로는 부족하다. */
+export function verifyGrokClip(videoPath) {
+  let data;
+  try {
+    data = JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-show_entries',
+      'stream=codec_type,codec_name,width,height', '-show_entries', 'format=duration',
+      '-of', 'json', videoPath], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 30_000 }));
+  } catch { return { ok: false, why: 'ffprobe 실패' }; }
+  const video = data.streams?.find(s => s.codec_type === 'video') || {};
+  const { width = 0, height = 0 } = video;
+  const duration = Number(data.format?.duration);
+  if (video.codec_name !== 'h264' || width < 720 || height <= width || Math.abs(width / height - 9 / 16) > 0.02) {
+    return { ok: false, why: `Grok 영상 규격 불일치 (${video.codec_name || 'none'} ${width}x${height}; 720p 세로 필요)` };
+  }
+  if (!(duration >= 9 && duration <= 11)) return { ok: false, why: `Grok 길이 불일치 (${duration}s; 10초 필요)` };
+  if (!data.streams?.some(s => s.codec_type === 'audio' && s.codec_name === 'aac')) {
+    return { ok: false, why: 'AAC 오디오 없음 — Video audio 를 켜야 합니다' };
+  }
+  return { ok: true, info: `${width}x${height} ${duration.toFixed(2)}s` };
+}
+
 /**
  * 클립 안에서 실제로 화면이 변하는지 본다.
  * 앞뒤 10% 지점을 뜬다 — 0s/끝 프레임은 인코더 경계라 값이 튄다.

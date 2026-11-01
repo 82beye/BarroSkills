@@ -7,7 +7,7 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { execSync, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { getSecret } from './config-loader.js';
 
 const CONFIG_PATH = resolve(import.meta.dirname, '../../config/notifications.json');
@@ -26,33 +26,69 @@ function loadConfig() {
  * Telegram Bot API로 알림 전송
  */
 async function sendTelegram(botToken, chatId, message, parseMode = 'HTML') {
-  const text = formatTelegramMessage(message);
-  const payload = JSON.stringify({
+  return sendTelegramText(formatTelegramMessage(message), parseMode, { botToken, chatId });
+}
+
+export async function sendTelegramText(text, parseMode = 'HTML', {
+  botToken, chatId,
+} = {}) {
+  if (process.env.DRY_RUN === '1' || process.env.BT_NO_NOTIFY === '1') return false;
+  botToken ||= getSecret('TELEGRAM_BOT_TOKEN');
+  chatId ||= getSecret('TELEGRAM_CHAT_ID');
+  if (!/^\d+:[A-Za-z0-9_-]+$/.test(botToken || '') || !chatId) throw new Error('Telegram credentials missing or invalid');
+  await telegramRequest('sendMessage', {
     chat_id: chatId,
     text,
     parse_mode: parseMode,
     disable_web_page_preview: true,
-  });
+  }, botToken);
+  return true;
+}
+
+export async function telegramRequest(method, body, botToken) {
+  if (!['sendMessage', 'getUpdates'].includes(method) || !/^\d+:[A-Za-z0-9_-]+$/.test(botToken || '')) {
+    throw new Error('Invalid Telegram request');
+  }
+  const waitSec = method === 'getUpdates' ? 50 : 15;
 
   // fetch 가 아니라 curl 을 쓴다. api.telegram.org 는 A·AAAA 를 둘 다 주는데 이 네트워크의
   // IPv6 경로가 죽어 있고, undici 는 --dns-result-order=ipv4first 도 무시해 ETIMEDOUT 이
   // 난다(2026-08-14 실측: node fetch 실패 / curl 200 / curl -4 302). lib/guards.sh 의
   // notify_telegram 도 같은 이유로 curl 이다 — 두 경로를 같은 방식으로 맞춘다.
-  const out = execFileSync('curl', [
-    '-sS', '-4', '-m', '15', '-X', 'POST',
-    `https://api.telegram.org/bot${botToken}/sendMessage`,
-    '-H', 'Content-Type: application/json',
-    '--data-binary', '@-',
-  ], { input: payload, encoding: 'utf-8' });
+  // URL contains the bot credential: pass configuration on stdin, never argv/ps.
+  // 전송 실패는 대개 네트워크 순단이다. 한 번에 포기하면 그 경보는 영영 사라지는데,
+  // 하필 그 경보가 "파이프라인이 멈췄다" 인 경우가 있다 — 2026-09-18 08:14·08:37 에
+  // Grok 폴백 경보와 Phase 8 실패 경보가 연달아 그렇게 유실됐고, 운영자는 그날 회차가
+  // 죽은 걸 몰랐다. 경보 하나가 안 가면 나머지 감시가 전부 무의미해진다.
+  //
+  // 재시도는 sendMessage 에만 건다. getUpdates 는 봇 루프가 어차피 곧 다시 돈다.
+  // API 가 거절한 경우(4xx)는 재시도하지 않는다 — 같은 요청은 같은 답을 받는다.
+  const attempts = method === 'sendMessage' ? 3 : 1;
+  let out;
+  let transportError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (attempt > 1) await new Promise((r) => setTimeout(r, 2000 * (attempt - 1)));
+    try {
+      out = execFileSync('curl', ['-sS', '-4', '-m', String(waitSec), '--config', '-'], {
+        input: `url = ${JSON.stringify(`https://api.telegram.org/bot${botToken}/${method}`)}\nrequest = "POST"\nheader = "Content-Type: application/json"\ndata = ${JSON.stringify(JSON.stringify(body))}\n`,
+        encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: (waitSec + 5) * 1000,
+      });
+      transportError = null;
+      break;
+    } catch {
+      transportError = new Error(`Telegram transport failed (${attempt}/${attempts})`);
+    }
+  }
+  if (transportError) throw transportError;
 
   let result;
   try {
     result = JSON.parse(out);
   } catch {
-    throw new Error(`Telegram 응답을 파싱하지 못했다: ${out.slice(0, 160)}`);
+    throw new Error('Telegram 응답을 파싱하지 못했다');
   }
-  if (!result.ok) throw new Error(`Telegram API: ${JSON.stringify(result).slice(0, 160)}`);
-  return true;
+  if (result.ok !== true) throw new Error(`Telegram API rejected message (${result.error_code || 'unknown'})`);
+  return result;
 }
 
 /**
@@ -60,7 +96,7 @@ async function sendTelegram(botToken, chatId, message, parseMode = 'HTML') {
  */
 function formatTelegramMessage(message) {
   const timestamp = new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' });
-  const epInfo = message.episode_id || 'System';
+  const epInfo = escapeHtml(message.episode_id || 'System');
 
   return [
     `<b>${escapeHtml(message.title)}</b>`,
@@ -125,6 +161,7 @@ function buildMessage(type, data) {
  * 알림 전송 (메인 함수)
  */
 export async function notify(type, data) {
+  if (process.env.DRY_RUN === '1' || process.env.BT_NO_NOTIFY === '1') return false;
   const { notifications: config } = loadConfig();
   const message = buildMessage(type, data);
 
@@ -157,9 +194,7 @@ export async function notify(type, data) {
   // macOS 알림 (폴백)
   if (!sent && config.macos_notification?.enabled) {
     try {
-      execSync(
-        `osascript -e 'display notification "${message.body.slice(0, 200).replace(/"/g, '\\"')}" with title "BarroTube" subtitle "${message.title.replace(/"/g, '\\"')}"'`
-      );
+      execFileSync('osascript', ['-e', 'on run argv\n display notification (item 1 of argv) with title "BarroTube" subtitle (item 2 of argv)\nend run', '--', message.body.slice(0, 200), message.title]);
       console.log(`🔔 macOS notification sent: ${message.title}`);
       sent = true;
     } catch {

@@ -45,6 +45,7 @@ import { updateIssueStatus } from './register-paperclip-issue.js';
 import { resolvePaths, formatToPlatform } from './paths.js';
 import { getSecret } from './config-loader.js';
 import { acquireLock, releaseLock, heartbeat as lockHeartbeat } from './in-flight-lock.js';
+import { ensureCaricature } from './lib/ensure-caricature.js';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const LOGS = join(ROOT, 'logs');
@@ -313,6 +314,19 @@ async function main() {
         '--tts-dir', ttsDirArg,
       ]);
 
+    // 공인 인물 캐리커처 보강 — 이미지를 굽기 전에 (lib/ensure-caricature.js, 2026-09-29).
+    // auto-pipeline 도 Phase 7 전에 같은 것을 돌린다. 수동 실행(/barrotube)도 QA 에서 막히지 않게 하고,
+    // 이미 구운 씬이면 스틸·클립을 치워 다시 굽게 한다(QA 판정이 프롬프트 글자라 거짓 통과를 막는다).
+    if (!DRY_RUN) {
+      try {
+        const fix = ensureCaricature({ epDir: absEp, platform });
+        for (const c of fix.changes || []) console.log(`\n🎭 씬 ${c.sceneId}: ${c.figureId} 캐리커처 절 추가 — 정책 §2 CHARACTERIZE`);
+        if (fix.needed && !fix.resolved) console.warn('   ⚠ 캐리커처 보강 뒤에도 정책 §6.2.1 에 걸린다 — QA 가 막을 것이다');
+      } catch (e) {
+        console.warn(`   ⚠ 캐리커처 점검 건너뜀: ${e.message}`);
+      }
+    }
+
     // S6c Images — 기본: media-render(브라우저, PD 사전 생성) / 레거시: API(gemini|openai)
     const scriptFrontmatter = parseYAML(readFileSync(p.script, 'utf-8').match(/^---\n([\s\S]*?)\n---/)?.[1] || '') || {};
     const sceneIds = (scriptFrontmatter.scenes || []).map(scene => String(scene.scene_id).padStart(3, '0'));
@@ -366,6 +380,16 @@ async function main() {
               '--episode', relEp,
               '--platform', platform,
             ]);
+          // 편당 Grok 예산(lib/grok-budget.js)이 로컬로 배정한 씬은 Grok 이 정상 종료하면서
+          // 비워 둔다. 예전 폴백은 Grok 이 **실패**할 때만 돌아서 여기서 채우지 않으면
+          // 모션이 빈 채로 렌더에 간다. 계획분은 경보 대상이 아니다(_grok_plan.json 의 local).
+          if (!motionExists()) {
+            runTracked(absEp, episodeId, 'S6c', 'S6c Motion Clips (HyperFrames — Grok 예산 밖)', '08-image-generator',
+              'scripts/automation/generate-motion.js', [
+                '--episode', relEp,
+                '--platform', platform,
+              ]);
+          }
         }
       } catch (e) {
         // 엔진이 죽어도 스택만 던지고 끝내지 않는다 — "무엇을 하면 되는지"

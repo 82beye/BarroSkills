@@ -28,13 +28,11 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { parse as parseYAML } from 'yaml';
 import {
-  generateImageGemini,
   loadCharacterDna,
   loadChannelStylePrefix,
   parseFrontmatter,
 } from './generate-image-gemini.js';
 import { composeThumbnail } from './lib/thumbnail-composer.js';
-import { generateImageOpenAI } from './lib/image-engines/openai-gpt-image.js';
 import { resolveImageEngine } from './lib/image-engine-config.js';
 import { resolveBrandsForTitle } from './lib/brand-entities.js';
 import { getSecret } from './config-loader.js';
@@ -340,11 +338,11 @@ async function main() {
   // 이미지 엔진: 전역 resolver(SSOT)로 통일. --engine / BT_INTRO_ENGINE / BT_INTRO_FORCE_GEMINI(legacy)
   // / BT_IMAGE_ENGINE / config/image-engines.json 순으로 해석. (OpenAI는 isV2 v10 경로에서만 의미)
   const introEngine = resolveImageEngine('S6d_intro', { cliOverride: opts.engine });
-  const useOpenAI = introEngine.engine === 'openai';
-  if (introEngine.downgraded) console.warn('   ⚠ OpenAI 요청됐으나 OPENAI_API_KEY 없음 → Gemini 사용');
-  console.log(`   Engine: ${introEngine.engine === 'media-render' ? 'media-render (브라우저 ChatGPT)'
-    : introEngine.engine === 'codex' ? 'codex-imagegen'
-    : useOpenAI ? 'openai-gpt-image-1 (v10)' : 'gemini'} (source=${introEngine.source})`);
+  // 그림 엔진은 codex 하나뿐이다 (2026-09-18). introEngine 은 «media-render» 여부만 가른다 —
+  // 그건 엔진이 아니라 «PD 가 브라우저로 미리 만들어 뒀는지» 를 뜻한다.
+  console.log(`   Engine: ${introEngine.engine === 'media-render'
+    ? 'media-render (브라우저 ChatGPT — 산출물 존재만 확인)'
+    : 'codex-imagegen'} (source=${introEngine.source})`);
 
   // Debug: --print-prompt 또는 BT_PRINT_PROMPT=1 시 prompt만 출력하고 종료 (image gen skip).
   if (opts['print-prompt'] || process.env.BT_PRINT_PROMPT === '1') {
@@ -398,78 +396,29 @@ async function main() {
   try {
     if (isV2) {
       // 2026-05-16 v10: OpenAI 있으면 ALL-IN-ONE + verify retry loop (한글 정확도 보장).
-      // 폴백: Gemini base + composer (기존 v2). 엔진은 위 resolver가 결정(useOpenAI).
       // v10 은 헤드라인까지 이미지 모델이 그린다. 철자는 vision 으로 검증하지만 **그림의 뜻**은
       // 검증하지 않는다 — 2026-08-14 EP-0093: +2.42% 상승 회차인데 빨간 폭락 차트와 LED "N/A",
       // 지폐 인물까지 그려 놓고 "headline 철자 정확" 으로 통과했다.
       // BT_INTRO_V10=0 이면 그림만 모델에 맡기고 한글은 로컬 SVG 로 얹는다(오타 원천 차단).
-      const useV10 = useOpenAI && process.env.BT_INTRO_V10 !== '0';
-      if (useV10) {
-        const { generateIntroV10, resolveIntroHeadline } = await import('./lib/image-engines/intro-v10.js');
-        const introHeadline = resolveIntroHeadline({ briefThumb, topic: briefFM.topic || '' });
-        const introKeyword = briefThumb.intro_keyword_number || briefThumb.keyword_number || '';
-        console.log(`   🎬 v10 ALL-IN-ONE — headline="${introHeadline}", keyword="${introKeyword}"`);
-        // v10 은 프롬프트를 enrichPrompt 가 통째로 다시 쓰고, 그 시스템 프롬프트가
-        // "editorial photomontage realism / photoreal compositing" 을 강제한다. 거기에
-        // 공인 캐리커처를 밀어 넣으면 실사풍 인물이 나와 정책 §4.2(사칭·초상권) 위반이 된다.
-        // 그래서 v10 에서는 브랜드 블록을 태우지 않는다 — 조용히 빠지지 않게 알린다.
-        if (brands.brands.length) {
-          console.warn(`   ⚠ v10 경로는 브랜드 주입을 하지 않는다 (실사풍 강제 → 정책 §4.2 충돌).`);
-          console.warn(`     인물·CI 를 넣으려면 BT_INTRO_V10=0 으로 base+composer 경로를 쓴다.`);
-        }
-        const result = await generateIntroV10({
-          topic: briefFM.topic || '',
-          visualHint,
-          headline: introHeadline,
-          keyword: introKeyword,
-          outPath,
-          maxRetries: 2,
-          channel,   // 캐릭터시트 첨부 → 발행본 인트로처럼 마시가 들어간다
-
-          // 2026-06-27 B-2: long(16:9)은 가로 1536x1024, shorts(9:16)는 세로 1024x1536.
-          // (이전엔 intro-v10에 '1024x1536' 세로 하드코딩 → long 인트로가 세로로 나오는 버그)
-          size: aspectRatio === '16:9' ? '1536x1024' : '1024x1536',
-        });
-        console.log(`✅ Intro (v10${result.accurate ? ' ✓ accurate' : ' ⚠ partial accuracy'}, $${result.cost_usd.toFixed(4)}): ${outPath}`);
-      } else {
-        const baseOutPath = join(baseDir, '45_intro.base.png');
-        if (introEngine.engine === 'codex') {
-          // 씬 이미지와 같은 엔진 — 인트로 배경만 다른 화풍으로 새는 걸 막는다.
-          // 한글 타이포는 아래 로컬 SVG 합성이 얹으므로 렌더 오타는 원천적으로 없다.
-          const { generateImageCodex } = await import('./lib/image-engines/codex-imagegen.js');
-          generateImageCodex({ prompt, outPath: baseOutPath, channel });
-          console.log(`   📸 Base image (codex imagegen + 캐릭터시트): ${baseOutPath}`);
-        } else if (useOpenAI) {
-          // 씬 이미지와 같은 경로 — 캐릭터시트를 붙여 마시를 지킨다.
-          await generateImageOpenAI({
-            prompt, outPath: baseOutPath, channel,
-            size: aspectRatio === '16:9' ? '1536x1024' : '1024x1536', quality: 'high',
-            costContext: { episode: fm.episode_id || null, stage: 'S6d', note: 'intro_base_openai' },
-          });
-          console.log(`   📸 Base image (openai + 캐릭터시트): ${baseOutPath}`);
-        } else {
-          await generateImageGemini({
-            prompt,
-            outPath: baseOutPath,
-            aspectRatio,
-            resolution: '1K',
-            channel,
-            costContext: { episode: fm.episode_id || null, stage: 'S6d', note: 'intro_base_gemini' },
-          });
-          console.log(`   📸 Base image (Gemini fallback): ${baseOutPath}`);
-        }
-        const result = await composeThumbnail({ baseImagePath: baseOutPath, spec: v2spec, outPath });
-        console.log(`✅ Intro (v2 composer fallback, ${result.layers} layers): ${outPath}`);
-      }
+      // 인트로는 codex imagegen **하나만** 쓴다 (운영자 지시 2026-09-18).
+      // 걷어낸 것: ① v10(OpenAI GPT-Image-1 + 비전 OCR) — 유료 크레딧을 태우는 데다
+      //   철자만 검증하고 **그림의 뜻**은 안 봤다(2026-08-14 EP-0093: +2.42% 상승 회차에
+      //   빨간 폭락 차트와 LED «N/A» 를 그려 놓고 «철자 정확» 으로 통과). ② OpenAI·Gemini
+      //   폴백 — 인트로 배경만 다른 화풍으로 새게 만든다.
+      // 그림은 codex 가 그리고 한글 타이포는 로컬 SVG 합성이 얹는다(렌더 오타 원천 차단).
+      const baseOutPath = join(baseDir, '45_intro.base.png');
+        // 씬 이미지와 같은 엔진 — 인트로 배경만 다른 화풍으로 새는 걸 막는다.
+        // 한글 타이포는 아래 로컬 SVG 합성이 얹으므로 렌더 오타는 원천적으로 없다.
+        const { generateImageCodex } = await import('./lib/image-engines/codex-imagegen.js');
+        generateImageCodex({ prompt, outPath: baseOutPath, channel });
+        console.log(`   📸 Base image (codex imagegen + 캐릭터시트): ${baseOutPath}`);
+      const result = await composeThumbnail({ baseImagePath: baseOutPath, spec: v2spec, outPath });
+      console.log(`✅ Intro (v2 composer fallback, ${result.layers} layers): ${outPath}`);
     } else {
-      await generateImageGemini({
-        prompt,
-        outPath,
-        aspectRatio,
-        resolution: '1K',
-        costContext: { episode: fm.episode_id || null, stage: 'S6d', note: 'intro_card' },
-      });
-      console.log(`✅ Intro saved: ${outPath}`);
+      // v1 평면 레이아웃도 같은 엔진으로 — 레이아웃이 다르다고 화풍이 달라질 이유가 없다.
+      const { generateImageCodex: genCodexV1 } = await import('./lib/image-engines/codex-imagegen.js');
+      genCodexV1({ prompt, outPath, channel });
+      console.log(`✅ Intro saved (codex imagegen): ${outPath}`);
     }
   } catch (e) {
     console.error(`❌ Intro generation failed: ${e.message}`);

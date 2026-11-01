@@ -18,11 +18,25 @@ const ANALYSIS = {
 
 test('titleDirectives — positive 상위 2 + negative, 표본 10 미만 피처 제외', () => {
   const d = titleDirectives(ANALYSIS.patterns.title_features);
-  assert.equal(d.length, 3); // bracket, number, superlative (has_split 은 n_with=5 로 제외)
-  // 측정 regex 는 ^\[ (선두) — 처방도 '맨 앞'을 명시해야 한다 (리뷰 2026-08-31 오역 계열)
-  assert.ok(d[0].includes('맨 앞'));
   assert.ok(d.some((l) => l.includes('피하기') && l.includes('최상급')));
   assert.equal(titleDirectives(undefined).length, 0);
+});
+
+/**
+ * has_bracket 은 경쟁 채널 **조회** lift 로는 상위지만 처방하지 않는다.
+ * 2026-09-16 우리 채널 **구독** 실측(2026-08-25~09-16, 26편): 대괄호가 붙은 19편은
+ * 구독/1k뷰 0.77, 안 붙은 7편은 2.41. 태그가 제목 앞 8자를 먹으면서 '왜'를 말할 자리가
+ * 사라졌고(story 동반율 86%→16%) 주간 순증 구독이 11→2 가 됐다.
+ * 북극성이 weekly_net_subs 이므로 조회 처방과 충돌하면 구독 쪽을 따른다.
+ */
+test('titleDirectives — 대괄호는 경쟁 lift 가 높아도 쓰기 처방하지 않는다', () => {
+  const d = titleDirectives([
+    { feature: 'has_bracket', n_with: 120, n_without: 222, lift: 3.46, direction: 'positive' },
+    { feature: 'has_number', n_with: 177, n_without: 165, lift: 1.86, direction: 'positive' },
+  ]);
+  assert.equal(d.some((l) => l.includes('쓰기') && l.includes('대괄호')), false,
+    '대괄호를 쓰라고 처방하면 구독 전환이 무너진다');
+  assert.ok(d.some((l) => l.includes('쓰기') && l.includes('수치')), '다른 positive 는 그대로 나온다');
 });
 
 test('titleDirectives — has_split 문구는 측정 문자(콜론·파이프·슬래시)를 지목한다', () => {
@@ -69,6 +83,17 @@ test('buildDirective — 분석·KPI 전무여도 유효한 문서를 낸다 (�
   const md = buildDirective({ date: '2026-08-31', slot: 'kr-close', analysis: null, kpi: null, experiment: null });
   assert.ok(md.startsWith('# 성장 지시'));
   assert.ok(md.includes('왜곡'));
+});
+
+test('buildDirective — 옴니버스 결과 훅 처방과 질문 훅 실험을 함께 지시하지 않는다', () => {
+  const experiment = { id: 'EXP-03-hook-question', target: 'script', directive: '첫 씬(hook) 내레이션을 시청자에게 던지는 질문형으로 시작한다' };
+  const remedies = [{ remedy: 'R-AI-omni-short-hook', def: { label: '짧은 결과 훅', target: 'script', directive: '첫 문장에 결과를 말한다. 질문으로 열지 말고 과장하지 않는다.' } }];
+  const omni = buildDirective({ date: '2026-10-12', slot: 'omnibus', experiment, remedies });
+  assert.match(omni, /질문으로 열지/);
+  assert.doesNotMatch(omni, /질문형으로 시작/);
+  assert.match(omni, /충돌해 적용하지 않음/);
+  const us = buildDirective({ date: '2026-10-12', slot: 'us-close', experiment, remedies: [] });
+  assert.match(us, /질문형으로 시작/);
 });
 
 test('exhaustedTopics — 제목을 45자로 자른다', () => {

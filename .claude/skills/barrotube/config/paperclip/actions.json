@@ -1,0 +1,210 @@
+{
+  "version": 1,
+  "_comment": "페이퍼클립 → 로컬 실행 허용 목록. dispatch.js 는 여기 있는 액션만 돌린다 — 임의 명령·경로·브라우저·OAuth 동작은 받지 않는다(재도입 게이트 원칙, docs/barrotube-media-render-operations-architecture.md). 명령·로그 이름은 2026-10-07 까지 launchd plist 가 쓰던 것과 같다 — 로그 위치가 바뀌면 incident-analyze·doctor 가 길을 잃는다. idempotency: daily = 하루 한 번(같은 날 두 번째 요청은 건너뜀), twice-daily = 오전·오후 각 한 번, attempt = 요청마다 새 시도 번호, none = 매번 실행(테스트 전용). kind: production 은 데드맨(launchd 폴백)이 지켜보는 발행 경로다.",
+  "actions": {
+    "slot:us-close": {
+      "label": "미국 증시 마감 브리핑",
+      "cmd": [
+        "bash",
+        "lib/auto-pipeline.sh",
+        "--slot",
+        "us-close"
+      ],
+      "log": "us-close",
+      "idempotency": "daily",
+      "kind": "production",
+      "incidents": true
+    },
+    "slot:omnibus": {
+      "label": "점심 옴니버스",
+      "cmd": [
+        "bash",
+        "lib/auto-pipeline.sh",
+        "--slot",
+        "omnibus"
+      ],
+      "log": "omnibus",
+      "idempotency": "daily",
+      "kind": "production",
+      "incidents": true
+    },
+    "slot:realestate": {
+      "label": "주간 부동산 브리핑",
+      "cmd": [
+        "bash",
+        "lib/auto-pipeline.sh",
+        "--slot",
+        "realestate"
+      ],
+      "log": "realestate",
+      "idempotency": "daily",
+      "kind": "production",
+      "incidents": true
+    },
+    "slot:kr-close": {
+      "label": "국내 증시 마감 브리핑",
+      "cmd": [
+        "bash",
+        "lib/auto-pipeline.sh",
+        "--slot",
+        "kr-close"
+      ],
+      "log": "kr-close",
+      "idempotency": "daily",
+      "kind": "production",
+      "incidents": true
+    },
+    "resume": {
+      "label": "멈춘 회차 재개 (RESUME_EP)",
+      "_comment": "SRE 가 고친 뒤 이어서 돌린다. slot·ep 는 형식 검증 후에만 명령에 들어간다.",
+      "cmd": [
+        "bash",
+        "lib/auto-pipeline.sh",
+        "--slot",
+        "{slot}"
+      ],
+      "env": {
+        "RESUME_EP": "{ep}"
+      },
+      "params": [
+        "slot",
+        "ep"
+      ],
+      "log": "{slot}-resume-{epnum}",
+      "idempotency": "attempt",
+      "key": "resume-{ep}",
+      "kind": "production",
+      "incidents": true
+    },
+    "job:publish-resume": {
+      "label": "승인됐는데 미게시인 EP 회수",
+      "cmd": [
+        "bash",
+        "lib/publish-resume.sh"
+      ],
+      "log": "publish-resume",
+      "idempotency": "twice-daily",
+      "kind": "production"
+    },
+    "job:market-map": {
+      "label": "마켓맵 카드뉴스 (조간·석간)",
+      "cmd": [
+        "bash",
+        "lib/market-map-cron.sh"
+      ],
+      "log": "market-map",
+      "idempotency": "twice-daily",
+      "kind": "production"
+    },
+    "job:market-map-krclose": {
+      "label": "석간용 KRX 공식 종가 스냅샷",
+      "cmd": [
+        "bash",
+        "lib/market-map-krclose.sh"
+      ],
+      "log": "market-map-krclose",
+      "idempotency": "daily"
+    },
+    "job:competitor-scan": {
+      "label": "경쟁 인텔 수집→분석→핸드오프",
+      "cmd": [
+        "bash",
+        "lib/competitor-pipeline.sh"
+      ],
+      "log": "competitor-scan",
+      "idempotency": "twice-daily"
+    },
+    "job:growth": {
+      "label": "성장 루프 (자체 수집→KPI→진단→처방)",
+      "cmd": [
+        "bash",
+        "lib/growth-pipeline.sh"
+      ],
+      "log": "growth",
+      "idempotency": "twice-daily",
+      "after": "kpi-sync"
+    },
+    "job:growth-manager": {
+      "label": "성장 매니저 (LLM 1회, 가설·처방)",
+      "cmd": [
+        "bash",
+        "lib/run-node.sh",
+        "scripts/automation/growth-manager.js"
+      ],
+      "log": "growth-manager",
+      "idempotency": "daily",
+      "llm": true
+    },
+    "job:weekly-marketing": {
+      "label": "주간 마케팅 인텔리전스 수집",
+      "cmd": [
+        "bash",
+        "lib/run-node.sh",
+        "scripts/automation/marketing-fetch-local.js",
+        "--source",
+        "rss"
+      ],
+      "log": "weekly-marketing",
+      "idempotency": "daily"
+    },
+    "job:oauth-renew": {
+      "label": "YouTube refresh token 만료 점검",
+      "cmd": [
+        "node",
+        "scripts/automation/renew-youtube-oauth.js"
+      ],
+      "log": "oauth-renew",
+      "idempotency": "daily"
+    },
+    "job:doctor": {
+      "label": "자동 진단 (silent failure 탐지)",
+      "cmd": [
+        "bash",
+        "lib/doctor-cli.sh"
+      ],
+      "log": "doctor-daily",
+      "idempotency": "daily"
+    },
+    "job:token-report": {
+      "label": "토큰 일일 리포트",
+      "cmd": [
+        "node",
+        "scripts/automation/paperclip/token-governor.js",
+        "--report"
+      ],
+      "log": "token-governor",
+      "idempotency": "daily"
+    },
+    "test:ok": {
+      "label": "배선 시험 — 성공",
+      "cmd": [
+        "bash",
+        "-c",
+        "echo 'paperclip dispatch ok'; sleep 2; echo 'Phase 1 — 시험'"
+      ],
+      "log": "paperclip-test",
+      "idempotency": "none"
+    },
+    "test:fail": {
+      "label": "배선 시험 — 실패",
+      "cmd": [
+        "bash",
+        "-c",
+        "echo 'failing on purpose' >&2; exit 3"
+      ],
+      "log": "paperclip-test",
+      "idempotency": "none"
+    },
+    "test:chrome-automation": {
+      "label": "배선 시험 — 페이퍼클립 경로의 Chrome 자동화 권한(TCC)",
+      "_comment": "Grok 모션 단계는 실제 Chrome 을 AppleScript 로 조작한다. macOS 자동화 권한은 프로세스를 띄운 주체에 묶여, launchd(bash) 에서 되던 것이 페이퍼클립(node) 아래에서 막힐 수 있다. 창 개수만 읽는다.",
+      "cmd": [
+        "osascript",
+        "-e",
+        "tell application \"Google Chrome\" to count windows"
+      ],
+      "log": "paperclip-test",
+      "idempotency": "none"
+    }
+  }
+}

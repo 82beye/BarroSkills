@@ -25,7 +25,11 @@ const ROOT = resolve(import.meta.dirname, '../..');
 // Match hangul numerals followed by currency/unit — requires at least one
 // "counting" hangul digit (영-구,십,백,천) before the unit (만/억/조/경/원/달러/etc.)
 // to avoid false positives on "57.2조 원" (arabic+unit combos are fine).
-const HANGUL_NUM_RE = /(?<=[영일이삼사오육칠팔구십백천만억조경])(만|억|조|경)\s?(퍼센트|프로|원|달러)/g;
+// 「1조 6천억 원」은 표준 표기다 — 아라비아 숫자로 시작한 덩어리와 어림수(수천억·몇백억)는 뺀다.
+const HANGUL_NUM_RE = /(?<![\d.,수몇영일이삼사오육칠팔구십백천만억조경])[영일이삼사오육칠팔구십백천]+\s?[만억조경]\s?(퍼센트|프로|원|달러)/g;
+// 낭독문은 TTS 규칙상 한글 숫자로 쓴다. 장면이 머리말 밖으로 나간 뒤로 머리말 제거만으로는 빠지지 않아,
+// 「일조 육천억 원」이 HIGH 로 올라 QA 가 회차를 막았다 (2026-10-26 EP-0258·10-30 EP-0270).
+const NARRATION_RE = /^([ \t]*)narration:.*(?:\n\1[ \t]+\S.*)*/gm;
 const COMMA_MISSING_RE = /\b(?<!,)(\d{4,})\s?(원|달러|명|억|조)\b/g;
 const PCT_VS_PP = /(전\S{0,4}대비|YoY|MoM|QoQ).{0,15}[+\-]?\d+\.?\d*%(?!p|포인트)/g;
 const NONSTD_TERMS = [
@@ -55,10 +59,11 @@ function findQAReport(episodeId) {
   return candidates.find(existsSync);
 }
 
-function check(text) {
+export function check(text) {
   const findings = { hangul_number: [], comma_missing: [], pct_vs_pp: [], nonstd_term: [], arithmetic_suspect: [] };
   let m;
-  while ((m = HANGUL_NUM_RE.exec(text))) findings.hangul_number.push({ match: m[0], at: m.index });
+  const onScreen = text.replace(NARRATION_RE, (line) => ' '.repeat(line.length));
+  while ((m = HANGUL_NUM_RE.exec(onScreen))) findings.hangul_number.push({ match: m[0], at: m.index });
   HANGUL_NUM_RE.lastIndex = 0;
   while ((m = COMMA_MISSING_RE.exec(text))) findings.comma_missing.push({ match: m[0], at: m.index });
   COMMA_MISSING_RE.lastIndex = 0;
@@ -79,7 +84,7 @@ function check(text) {
   return findings;
 }
 
-function severity(findings) {
+export function severity(findings) {
   if (findings.hangul_number.length > 0) return 'HIGH';
   if (findings.arithmetic_suspect.length > 0) return 'HIGH';
   const total = findings.comma_missing.length + findings.pct_vs_pp.length + findings.nonstd_term.length;
@@ -154,4 +159,4 @@ async function main() {
   if (sev === 'HIGH') process.exit(10);
 }
 
-main().catch(e => { console.error('FATAL:', e.message); process.exit(1); });
+if (process.argv[1] === import.meta.filename) main().catch(e => { console.error('FATAL:', e.message); process.exit(1); });

@@ -186,6 +186,16 @@ async function main() {
       console.log(`     - ${e.url}: ${e.error}`);
     }
   }
+
+  // 0건은 성공이 아니다. 예전에는 여기서도 exit 0 이라, 2026-09-07·09-14 두 주 연속
+  // `items: 0` 짜리 빈 파일을 쓰고 조용히 지나갔다 — 마케팅 인텔이 몇 주째 비어 있어도
+  // 아무도 몰랐다. 원인은 매번 달랐다(매일경제 영구 403, 수면 중 네트워크 단절).
+  // 어느 쪽이든 "수집이 안 됐다"는 사실은 크론 종료코드로 드러나야 한다.
+  if (result.fetched_count === 0) {
+    console.error('\n❌ 수집 0건 — 인텔 파일이 비었습니다. 마케팅 루틴이 이대로 돌면 처방이 근거 없이 나갑니다.');
+    console.error('   확인: 피드 URL 생존 여부 · 네트워크(노트북 수면 중이었는지) · domain-whitelist.json 의 rss_feeds');
+    process.exitCode = 5;
+  }
 }
 
 main().catch(e => { console.error('❌', e.message); process.exit(1); });

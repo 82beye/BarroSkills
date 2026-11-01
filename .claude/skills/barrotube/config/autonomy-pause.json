@@ -5,7 +5,7 @@
   "updated_by": "operator-auto-approve-2026-08-24",
   "note": "BarroSkills 자율 운영 마스터 스위치. status=paused 시 auto-pipeline + 모든 routine cron 즉시 종료. 운영자가 수동 편집 또는 Telegram /pause·/resume으로 토글.",
   "guards": {
-    "max_episodes_per_day": 2,
+    "max_episodes_per_day": 3,
     "max_publish_per_day": 3,
     "max_new_series_per_day": 1,
     "publish_remains_human_only": false,
@@ -19,7 +19,9 @@
     "qa_min_score": 60,
     "serial_processing_enforced": true,
     "accept_new_issues": true,
-    "auto_approve_on_qa_pass": true
+    "auto_approve_on_qa_pass": true,
+    "_max_episodes_comment": "2026-09-16 운영자 환경에 맞춰 2→3. 하루 3회차 구조: 06시 생성→08시 공개(us-close) · 10시→12시(omnibus/금요일은 realestate) · 16시→18시(kr-close). 2 로 두면 세 번째 회차가 Phase 0 에서 막힌다.",
+    "_reject_window_note": "30분이 기본이다. 2026-09-16 21:30 마감 때문에 5분으로 임시 단축했다가 22:00 게시 완료 후 원복. 일과 중(08~18시) 회차는 운영자가 알림을 볼 수 없으므로 창을 줄이면 사실상 무검증 통과가 된다 — 단축은 운영자가 깨어 있는 시간대에, 그 회차 한정으로만."
   },
   "history": [
     {

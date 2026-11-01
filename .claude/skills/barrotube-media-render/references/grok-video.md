@@ -1,9 +1,10 @@
 # Grok Imagine video generation (browser, verified steps)
 
 Goal: produce one **9:16 / 720p / ~10s** MP4 from a still image and save it as
-`video/<slug>.mp4`. Use the user's logged-in grok.com session. Prefer Playwright
-MCP when it is already logged in; it can upload through hidden file inputs and
-save downloads directly with `download.saveAs()`.
+`video/<slug>.mp4`. Use the user's logged-in grok.com session. Scheduled BarroTube
+jobs first use `grok-motion-applescript.js`, which binds the regular Chrome PID and
+window/tab IDs. Playwright is an alternative only when its own profile is ready;
+an isolated Chrome does not inherit the user's login or Apple Events setting.
 
 ## Steps
 
@@ -11,15 +12,26 @@ save downloads directly with `download.saveAs()`.
    prompt bar is visible and an account is logged in. Note which account; it may
    differ from ChatGPT.
 
-2. **Set the option bar — then VERIFY.** Along the bottom of the prompt bar:
-   `이미지 | 비디오 | 에이전트` · `480p | 720p` · `6s | 10s` · `Video audio` · `9:16 ▾`.
-   - Select **비디오**, **720p**, **10s**, and aspect **9:16**.
-   - Set **Video audio ON**. Do not infer state from the icon: inspect the button and
-     require `aria-pressed="true"`. Click it only when false, then read the attribute again.
-   - **Zoom into the option bar and confirm** the chosen pills are filled white
-     (selected). The bar frequently already defaults to the right values — verify
-     instead of blindly toggling, so you don't accidentally turn a correct option off.
-   - To change aspect, click the `9:16 ▾` dropdown and pick 9:16.
+2. **Set the option bar — then VERIFY.** Two different kinds of control live here, and
+   mixing them up is what broke this step for four days.
+   - **Toggles** (still buttons): mode `비디오` carries `aria-checked`, `Video audio`
+     (`aria-label="비디오 오디오"`) carries `aria-pressed`. Click each **only when it is
+     false** — clicking an already-on toggle turns it off, and a submit click that lands
+     during that re-render is swallowed silently (2026-09-02 EP-0131, two cuts).
+   - **Dropdowns** (since the 2026-09-17 UI change): resolution, duration and aspect are
+     no longer pills. They are `button[aria-haspopup="menu"]` whose label shows the
+     **current value** (`720p`, `10s`, `9:16`), and the menu items are `role="menuitemradio"`.
+     Find the trigger by the shape of its text, not by the value you want — the trigger
+     reads `480p` when 480p is selected, so looking for a control labelled "720p" finds
+     nothing. **New accounts default to 480p.**
+   - They are Radix menus: a plain `click()` does not open them. Dispatch **`pointerdown`**,
+     then click the `menuitemradio` whose text equals the target value.
+   - Confirm the trigger's text afterwards. If it will not move to 720p/10s, or an upgrade
+     dialog appears, stop before attaching or generating — the attachment alone can start
+     a post. Never start a trial or purchase.
+   - Why this matters: the old pill-hunting code silently failed `--check` (exit 3) every
+     run, so the pipeline skipped Grok entirely and shipped EP-2026-0156~0159 as
+     HyperFrames pans. The failure looked like "logged out", which it never was.
 
 3. **Provide the input.**
    - **Image→video is required for BarroTube reel continuity.** Attach the ChatGPT
@@ -28,9 +40,9 @@ save downloads directly with `download.saveAs()`.
      `file_upload`.** The tool rejects the *path*, not the file — `~/BarroTubeData/...`
      is refused, a session-shared copy is accepted (verified 2026-08-17, 4/4 uploads).
      `find` the hidden input, then `file_upload(tabId, ref, ["<scratchpad>/scene_NNN.png"])`.
-   - **codex's Chrome surface cannot attach at all** — hidden-input injection, the
-     composer picker, and Cmd+V all fail there (measured twice, 2026-08-17). Do not
-     schedule sheet-dependent generation on the codex path; it will stop at the attach.
+   - **Check the actual browser surface.** The regular Chrome Apple Events path
+     successfully attached a local still through DataTransfer on 2026-09-14.
+     Earlier extension upload failures do not apply to every Codex environment.
    - Playwright MCP (when available) can still inject directly:
      `page.locator('input[type="file"]').first().setInputFiles(imagePath)`.
    - Wait for the `Remove image` button or attached thumbnail. The uploaded filename
@@ -39,7 +51,9 @@ save downloads directly with `download.saveAs()`.
 
 4. **Generate.** Record the current URL, then click send (↑). Wait for the new
    `/imagine/post/<id>` URL and that post's **"생성 중 NN%"** state (or its Download
-   button if it finishes unusually fast). Grok is an SPA: the submit call can return
+   button if it finishes unusually fast). The new ID must differ from the path just
+   before submission: attaching the image can already create a still-image post.
+   Grok is an SPA: the submit call can return
    while the URL still says `/imagine`. Do not treat that transient URL as failure, and
    do not query option-bar locators captured before navigation after the post opens.
 
@@ -49,12 +63,15 @@ save downloads directly with `download.saveAs()`.
 
 6. **Download.** Click **다운로드**. With Playwright MCP, wrap it in
    `page.waitForEvent('download')`, then `download.saveAs('/.../video/<slug>.mp4')`.
+   The Apple Events script fetches the same post's video through the authenticated
+   page and transfers it in chunks. Never select an older history-strip video.
 
 7. **Validate.** `ffprobe` must show H.264 portrait video, an MP4 duration near 10s,
    and an **AAC audio stream**. Grok commonly returns 720×1280 or 720×1264; both are
    accepted portrait outputs. If audio is absent, the cut is incomplete: verify
-   `Video audio aria-pressed="true"` and regenerate it. Some sessions return 6s despite
-   the UI showing 10s; keep it only if visually acceptable and compensate in the merge.
+   `Video audio aria-pressed="true"` and regenerate it. A 480p/6s result does not meet
+   the default requirement even when the UI previously showed 720p/10s. Keep it out
+   of completed scene assets and report the quality mismatch.
 
    ```bash
    ffprobe -v error \
@@ -68,15 +85,23 @@ save downloads directly with `download.saveAs()`.
 await page.goto('https://grok.com/imagine');
 await page.waitForTimeout(1500);
 
-for (const name of ['비디오', '720p', '10s']) {
-  const option = page.getByRole('radio', { name });
-  if (!(await option.isChecked())) await option.click();
-}
-const audio = page.locator('button[aria-label="Video audio"]');
+// Toggles: press only when off (pressing an on-toggle turns it off).
+const mode = page.locator('button[aria-label="비디오"], button[aria-label="Video"]').first();
+if (await mode.getAttribute('aria-checked') !== 'true') await mode.click();
+const audio = page.locator('button[aria-label="비디오 오디오"], button[aria-label="Video audio"]').first();
 if (await audio.getAttribute('aria-pressed') !== 'true') await audio.click();
 if (await audio.getAttribute('aria-pressed') !== 'true') throw new Error('Video audio is off');
 
-// If aspect shows 2:3, click the dropdown and choose "9:16 수직".
+// Dropdowns (Radix, since 2026-09-17): the trigger shows the CURRENT value, so match it
+// by shape. It opens on pointerdown, not click.
+for (const [shape, want] of [[/^\d{3,4}p$/, '720p'], [/^\d+s$/, '10s'], [/^\d+:\d+$/, '9:16']]) {
+  const trigger = page.locator('button[aria-haspopup="menu"]')
+    .filter({ hasText: shape }).first();
+  if ((await trigger.innerText()).trim() === want) continue;
+  await trigger.dispatchEvent('pointerdown');
+  await page.getByRole('menuitemradio', { name: want, exact: true }).click();
+  if ((await trigger.innerText()).trim() !== want) throw new Error(`${want} unavailable; check plan/quota`);
+}
 await page.locator('input[type="file"]').first().setInputFiles(imagePath);
 await page.getByRole('button', { name: 'Remove image' })
   .waitFor({ state: 'visible', timeout: 15000 });
@@ -86,8 +111,8 @@ await box.click();
 await page.keyboard.insertText(motionPrompt);
 const oldUrl = page.url();
 await box.press('Enter');
-await page.waitForURL(/\/imagine\/post\//, { timeout: 15000 });
-if (page.url() === oldUrl) throw new Error('Grok did not open a new post');
+await page.waitForURL(url => url.pathname.startsWith('/imagine/post/') && url.href !== oldUrl,
+  { timeout: 15000 });
 
 // Poll the new post until its own download control appears.
 const downloadButton = page.getByRole('button', { name: '다운로드' });

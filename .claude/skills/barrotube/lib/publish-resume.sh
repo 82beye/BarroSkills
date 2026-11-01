@@ -10,7 +10,7 @@
 # 사람의 확인은 그대로 남는다. 이 스크립트는 승인을 만들지 않고 **확인만** 한다.
 #
 # Usage:
-#   bash publish-resume.sh                 # 오늘자 EP 중 승인됐고 미게시인 것을 처리
+#   bash publish-resume.sh                 # 최근 5개 EP 중 승인됐고 미게시인 것을 처리
 #   DRY_RUN=1 bash publish-resume.sh       # 대상만 출력
 
 set -uo pipefail
@@ -18,7 +18,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export BARROTUBE_HOME="${BARROTUBE_HOME:-$(dirname "$SCRIPT_DIR")}"
 export PAPERCLIP_DISABLED=1
-cd "$BARROTUBE_HOME"
+cd "$BARROTUBE_HOME" || exit 1
 
 DRY_RUN="${DRY_RUN:-0}"
 source "${SCRIPT_DIR}/guards.sh"
@@ -29,9 +29,12 @@ EPISODES="${BARROTUBE_HOME}/workspace/episodes"
 [ -d "$EPISODES" ] || { echo "episodes 디렉토리 없음"; exit 0; }
 
 found=0
+failed=0
 # 최근 5개만 본다. 오래된 것을 되살려 올리는 사고를 막는다.
-for ep_dir in $(ls -d "$EPISODES"/EP-* 2>/dev/null | sort | tail -5); do
+EP_DIRS=$(printf '%s\n' "$EPISODES"/EP-* | sort | tail -5)
+while IFS= read -r ep_dir; do
   ep_id=$(basename "$ep_dir")
+  [[ "$ep_id" =~ ^EP-[0-9]{4}-[0-9]{4}$ ]] || continue
   for platform in shorts long; do
     base="${ep_dir}/platforms/${platform}"
     [ -d "$base" ] || continue
@@ -61,22 +64,54 @@ for ep_dir in $(ls -d "$EPISODES"/EP-* 2>/dev/null | sort | tail -5); do
     fi
 
     found=$((found + 1))
+    if [ -e "${result}.lock" ]; then
+      # 거부창이 닫힌 직후엔 파이프라인이 **지금** 올리는 중일 수 있다 — 그건 실패가 아니다.
+      # 2026-09-28 17:30:05: EP-2026-0192 를 17:28 부터 올리던 중인 락을 보고 exit 1 →
+      # 다음 날 doctor RED. 업로드는 17:30:59 에 정상 완료됐다. 락의 pid 가 살아 있고 실제로
+      # 게시 스크립트를 돌리는 중일 때만 건너뛴다. 죽은 pid 의 락은 예전대로 사람이 확인한다.
+      lock_pid=$(sed -n 's/.*"pid":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "${result}.lock" | head -1)
+      if [ -n "$lock_pid" ] && ps -p "$lock_pid" -o command= 2>/dev/null | grep -qE 'run-episode\.js|publish-youtube\.js'; then
+        echo "⏳  ${ep_id} (${platform}) — 업로드 진행 중 (pid ${lock_pid}) · 건너뜀"
+        audit "publish_resume_upload_in_progress" "INFO" "ep=$ep_id platform=$platform pid=$lock_pid"
+        continue
+      fi
+      echo "⏸  ${ep_id} (${platform}) — 기존 업로드 상태 확인 필요; 잠금 유지"
+      audit "publish_resume_pending_upload" "WARN" "ep=$ep_id platform=$platform"
+      failed=1
+      continue
+    fi
     echo "▶ ${ep_id} (${platform}) — 승인 완료·미게시"
     if [ "$DRY_RUN" = "1" ]; then
       echo "  [DRY_RUN] node scripts/automation/run-episode.js --episode ${ep_id} --platform ${platform} --from S11"
       continue
     fi
 
+    # Paperclip 의 publish-resume 은 auto-pipeline 의 Phase 4/8 을 거치지 않는다.
+    # 저장된 요약 대본·설명문이 현재 계약을 통과해야 승인 토큰을 게시에 쓴다.
+    if [ -s "${base}/30_script.md" ] && grep -q '^form: market-summary$' "${base}/30_script.md"; then
+      if ! node scripts/automation/validate-script-quality.js --file "${base}/30_script.md" --strict ||
+         ! node scripts/automation/generate-metadata.js --episode "$ep_dir" --platform "$platform" --validate; then
+        failed=1
+        audit "publish_resume_script_gate" "ERROR" "ep=$ep_id platform=$platform"
+        notify_telegram "🛑 <b>${ep_id}</b> 게시 재개 차단 — 요약 대본 또는 배포 문구 검수 실패"
+        continue
+      fi
+    fi
+
+    # 덮개가 닫힌 채 DarkWake 틈에 뜨면 네트워크가 없어 업로드가 "fetch failed" 로 끝난다
+    # (publish-resume.err 실측). 올릴 게 있을 때만, 올라올 때까지 기다린다.
+    wait_for_network 20 || echo "  ⚠ 네트워크 응답 없음 — 그대로 시도합니다"
     audit "publish_resume_start" "INFO" "ep=$ep_id platform=$platform"
-    if node scripts/automation/run-episode.js --episode "$ep_id" --platform "$platform" --from S11; then
+    if node scripts/automation/run-episode.js --episode "$ep_id" --platform "$platform" --from S11 && [ -s "$result" ]; then
       audit "publish_resume_done" "INFO" "ep=$ep_id platform=$platform"
       notify_telegram "📺 <b>${ep_id}</b> 예약 게시 완료 (승인 후 자동 재개)"
     else
+      failed=1
       audit "publish_resume_fail" "ERROR" "ep=$ep_id platform=$platform"
       notify_telegram "❌ <b>${ep_id}</b> 게시 재개 실패 — 로그 확인 필요"
     fi
   done
-done
+done <<< "$EP_DIRS"
 
 [ "$found" -eq 0 ] && echo "승인 대기 중이거나 이미 게시된 EP 뿐 — 할 일 없음"
-exit 0
+exit "$failed"

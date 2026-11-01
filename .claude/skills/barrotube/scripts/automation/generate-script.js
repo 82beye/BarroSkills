@@ -42,9 +42,10 @@ import {
   buildAllowlistContextBlock,
 } from './lib/public-figures.js';
 import { formatToPlatform } from './paths.js';
-import { TEMPLATE, BOUNDS, KNOWN_PALETTES, CANONICAL_TAIL, MASCOT_CLAUSE } from './lib/image-prompt-contract.js';
+import { TEMPLATE, BOUNDS, KNOWN_PALETTES, CANONICAL_TAIL, MASCOT_CLAUSE, checkEpisodePrompts } from './lib/image-prompt-contract.js';
 import { callClaudeCode, callCodex, resolveChain, runEngineChain } from './lib/text-engine.js';
-import { buildAnalystContractBlock, validateScript, formatIssue } from './lib/script-quality-contract.js';
+import { buildAnalystContractBlock, validateScript, formatIssue, INDEX_MOVE_PCT_FLOOR } from './lib/script-quality-contract.js';
+import { readActiveRemedies, closingCtaOf, ensureClosingCta, remediesApplied } from './lib/growth-remediation.js';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const DEFAULT_MODEL = process.env.GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
@@ -92,6 +93,13 @@ const FORMAT_SPECS = {
   },
 };
 
+export function formatSpecForBrief(format, targetSeconds) {
+  const requested = Number(targetSeconds);
+  return Number.isFinite(requested) && requested > 0
+    ? { ...FORMAT_SPECS[format], target_total_seconds: requested }
+    : FORMAT_SPECS[format];
+}
+
 /**
  * 채널 character-dna.md 의 첫 코드블록에서 마스코트 절을 뽑는다.
  * 그 블록은 이미 generate-image-gemini.js 가 이미지 생성 시 주입하는 SSOT인데,
@@ -137,7 +145,7 @@ function buildCaricatureBlock() {
   ].join('\n');
 }
 
-function buildImagePromptContractBlock(mascotClause) {
+export function buildImagePromptContractBlock(mascotClause) {
   const identity = mascotClause
     ? `The channel mascot clause you MUST use (verbatim, inside the parentheses form shown):\n${mascotClause}\n`
     : 'The channel has no character DNA on disk — describe the mascot inline and keep it identical across every scene.\n';
@@ -150,7 +158,11 @@ ${TEMPLATE}
 
 ${identity}
 1. The mascot MUST be the grammatical SUBJECT of the scene action, in ONE sentence:
-   "<mascot clause>, <emotion>, standing before <the single scene object> …".
+   "<mascot clause>, <emotion>, <full-body pose> <the single scene object> …".
+   Give the mascot a DIFFERENT full-body pose in EVERY scene — no two scenes may share the
+   same pose verb (e.g. stepping back from / kneeling beside / crouching under / leaning
+   against / sitting in front of / reaching up toward / standing before), and vary what its
+   arms and hands do. Every scene "standing before … bracing its body" draws the same picture five times.
    Do NOT describe the mascot in a separate sentence ("Masi is the protagonist, 40% of frame").
    Subject position is what makes the model draw it large and centred; a separate
    descriptive sentence makes it a corner sticker. This is the single most important rule.
@@ -166,8 +178,33 @@ ${identity}
 `;
 }
 
-function buildSystemPrompt(format, persona, seriesContext, publicFiguresInfo = null, mascotClause = null) {
-  const spec = FORMAT_SPECS[format];
+/**
+ * 슬롯 전용 씬 뼈대 → scene_roles 문자열.
+ *
+ * config/routines.json 의 slots.<slot>.scene_skeleton 이 정본인데, 이 스크립트가 --slot 을
+ * 안 받아서 **한 번도 쓰인 적이 없었다** (2026-09-18 확인). 그래서 부동산 회차가 포맷 기본
+ * 뼈대를 타고 «global cause chain / US watchlist» 로 미국 금리 3씬을 실었다 — EP-2026-0150
+ * 과 0163 이 모두 그랬다. 부동산 뼈대는 원래 전부 국내다:
+ *   수치 → 원인 → 반대 해석 → 공급·미분양·거래량 → 실수요자 영향.
+ *
+ * 씬 수가 포맷과 맞을 때만 덮어쓴다 — 안 맞으면 포맷 기본값을 그대로 둔다.
+ */
+function slotSceneRoles(slot, sceneCount) {
+  if (!slot) return null;
+  try {
+    const cfg = JSON.parse(readFileSync(join(ROOT, 'config', 'routines.json'), 'utf-8'));
+    const skeleton = cfg?.slots?.[slot]?.scene_skeleton;
+    if (!Array.isArray(skeleton) || skeleton.length !== sceneCount) return null;
+    return skeleton.map((step, i) => {
+      const role = typeof step === 'string' ? step : step.role;
+      const intent = typeof step === 'string' ? '' : (step.intent || step.desc || step.note || '');
+      return `${String(i + 1).padStart(3, '0')}=${role}${intent ? ` — ${intent}` : ''}`;
+    }).join('\n  ');
+  } catch { return null; }
+}
+
+export function buildSystemPrompt(format, persona, seriesContext, publicFiguresInfo = null, mascotClause = null, slot = null, targetSeconds = null) {
+  const spec = formatSpecForBrief(format, targetSeconds);
   const sceneCount = spec.scene_count;
 
   const seriesBlock = seriesContext
@@ -182,6 +219,7 @@ function buildSystemPrompt(format, persona, seriesContext, publicFiguresInfo = n
   const pfResolved = publicFiguresInfo?.resolved || [];
   const hasCharacterizeFigure = pfResolved.some(r => r.treatment === 'CHARACTERIZE');
   const sceneCap = format === 'shorts' ? 2 : 3;
+  const slotRoles = slotSceneRoles(slot, sceneCount);
 
   return `You are "Writer Agent" of BarroTube, a Korean economy YouTube channel.
 
@@ -190,7 +228,7 @@ FORMAT: ${format}
 - Target total duration: ~${spec.target_total_seconds} seconds
 - Narration length: ${spec.scene_chars_range}
 - Aspect: ${spec.aspect}
-- Scene roles (mandatory): ${spec.scene_roles}
+- Scene roles (mandatory):${slotRoles ? '\n  ' + slotRoles : ' ' + spec.scene_roles}
 ${spec.mid_hook ? '- MID-HOOK REQUIRED: 씬 4 마지막 부분 또는 75초 지점에 "재점화 Hook" (이탈 방지 질문/궁금증 유발 1문장) 포함\n' : ''}${seriesBlock}${personaBlock}
 RULES:
 1. Output MUST be a single JSON object. No markdown, no prose, no code fences.
@@ -204,8 +242,18 @@ ${buildAnalystContractBlock(sceneCount)}
 6. emphasis_tokens: 1~3 Korean keywords per scene.
 7. Target audience: 20~40대 한국 투자자.
 8. FORBIDDEN: specific stock buy/sell recommendations, "무조건/100%/확실/이것만 하면 부자", 정치 편향.
+8a. 대본의 중심 질문은 한 개다. 선정 사실 → 그 사실이 비용·수요·금리·환율·실적 등으로 옮겨 가는 경로 → 한국 시청자에게 중요한 조건부 결과 → 해석을 가를 다음 확인 신호를 각 씬에 자연스럽게 배분한다. 통념을 뒤집는 문구를 억지로 만들거나 매 씬 같은 문장을 반복하지 마라.
+8b. 출처가 확인한 사실과 제작자의 추론을 분리한다. 리서치가 원인을 확인하지 못하면 그 빈칸을 '시장에서는 ~ 때문이라고 봅니다' 같은 근거 없는 말로 채우지 마라. 사실만으로 경로를 설명할 수 없으면 범위를 좁히거나 해당 주제를 버려라. 다음 신호는 예측 목표치가 아니라 이 해석을 검증할 수 있는 발표·실적 항목·관측 변수다.
 9. CRITICAL — narration is FOR TTS ONLY. DO NOT include in narration: emojis (📚 🚨 etc), bracket tags ([1/5]), intro card text, subtitle overlays, or any text that appears as visual-only elements. Those belong to video/subtitle layers — not to spoken audio.
-10. CRITICAL — Hook scene (씬 001): speak AT MOST ONE number, and the same scene must say why it matters to the viewer. A hook that only recites a figure fails — index moves are on every channel (see RULE 4-CONTRACT D). Prefer opening on the counter-intuitive fact: what moved against expectations, who disagreed, what broke the usual pattern. Put the remaining figures in subtitle_text.
+10. CRITICAL — Hook scene (씬 001): speak AT MOST ONE number, and the same scene must say why it matters to the viewer. A hook that only recites a figure fails — index moves are on every channel (see RULE 4-CONTRACT D). Open on the counter-intuitive fact: what moved against expectations, who disagreed, what broke the usual pattern. Put the remaining figures in subtitle_text.
+10a. CRITICAL — A ROUTINE DAILY MOVE MAY NOT BE THE SUBJECT of the hook. "오늘 X% 올랐다/내렸다" is not news below index ${INDEX_MOVE_PCT_FLOOR}% / FX 1.0% / commodity 3.0% / rates 10bp / single name 5.0% (absolute). Below those, the hook's subject must be the mechanism, the disagreement, or the consequence to the viewer; the figure may appear later only as EVIDENCE ("…때문에" / "그 결과…"), never as the thing being announced.
+10b. CRITICAL — BUT THESE ARE ALWAYS HEADLINE-WORTHY regardless of how small the daily move is, and when one is present in the research it MUST be the episode's main subject:
+    * LEVEL BREACH — crossing a round psychological line (미 10년물 5%, 유가 100달러, 원/달러 1,400원, 코스피 7000선). A 5bp move that takes the 10-year through 5% is the story; the 5bp is not.
+    * MULTI-YEAR EXTREME — N년래 최고·최저 경신.
+    * PERIOD CUMULATIVE — 주·월·분기 누적이 평소를 크게 넘을 때 (유가, 9월에만 20% 급등).
+    * STREAK — 연속 기록의 시작·중단 (7일 연속 하락).
+    Priority when several compete: level breach > multi-year extreme > period cumulative > streak.
+10c. Even for 10b, the hook leads with WHAT MADE IT HAPPEN or WHAT IT MEANS, not with the bare figure. "국채금리가 5%를 뚫었습니다" is acceptable only if the same scene says why that line matters. Measured 2026-09-16: figure-reciting hooks get views but not subscribers — 구독/1k뷰 0.63 vs 2.12 for causal framing (n=26).
 11. CRITICAL — image_prompt MUST NOT contain any text/words/numbers/company-names/labels to be rendered as text in the image. The image model will literally draw any text you mention. Use visual metaphors only:
     - BAD:  "pie chart labeled '80% of market cap' with company names 'Apple, Microsoft, Amazon'"
     - GOOD: "pie chart with one large highlighted wedge, three small anonymous company building icons stacked beside it"
@@ -333,6 +381,7 @@ async function main() {
       platform: { type: 'string' },          // long | shorts — 명시 시 platforms/<platform>/00_brief.md 우선 + 출력 platforms/<platform>/30_script.md 강제
       brief: { type: 'string' },             // 명시 시 이 brief 파일을 우선 읽음 (--platform 보다 우선순위 높음)
       force: { type: 'boolean' },            // 기존 30_script.md 덮어쓰기 허용 (default: false → existing 보호)
+      slot: { type: 'string' },              // us-close | kr-close | realestate | omnibus — 슬롯 전용 씬 뼈대
     },
   });
   if (!values.episode) {
@@ -393,7 +442,9 @@ async function main() {
   if (platformOverride && fm.format && formatToPlatform(fm.format) !== values.platform) {
     console.warn(`⚠️  --platform=${values.platform} (format=${platformOverride}) overrides brief.format=${fm.format}`);
   }
-  const spec = FORMAT_SPECS[format];
+  // The brief is the episode's duration contract. A generic fallback from the
+  // summary writer must honor its 150s brief too.
+  const spec = formatSpecForBrief(format, fm.target_length_seconds);
 
   const persona = fm.persona || (format === 'long-3min' ? 'barro-teacher' : 'barro-alert');
 
@@ -440,7 +491,8 @@ async function main() {
   const mascotClause = loadMascotClause(channel);
   console.log(`   Mascot DNA: ${mascotClause ? `주입됨 (${mascotClause.length}자)` : '없음 — 인라인 서술 지시'}`);
 
-  const systemPrompt = buildSystemPrompt(format, persona, seriesContext, publicFiguresInfo, mascotClause);
+  const systemPrompt = buildSystemPrompt(format, persona, seriesContext, publicFiguresInfo, mascotClause,
+    values.slot || null, fm.target_length_seconds);
 
   const userPromptParts = [
     `[EPISODE BRIEF]`,
@@ -449,9 +501,12 @@ async function main() {
   ];
   if (research) userPromptParts.push(`[MARKET RESEARCH]`, research, '');
   if (strategy) userPromptParts.push(`[CONTENT STRATEGY]`, strategy, '');
-  if (deskBrief) userPromptParts.push(`[DESK BRIEFING — 기자단 원본 근거·출처]`, deskBrief, '');
+  // 데스크 브리핑은 사실·수치의 근거다. 그 안에 섞인 「오프닝 숫자」 같은 편집 제안은 대본 계약(10a)을 못 이긴다 —
+  // 2026-09-28 EP-2026-0192: 데스크가 「오프닝 숫자: 코스피 -2.70%」를 권했고, 생성기가 재작성 뒤에도 3% 미만
+  // 지수 등락을 훅 주제로 내 Phase 4 에서 멈췄다 (소급 분석 growth/incidents/IR-20261007-0726.md).
+  if (deskBrief) userPromptParts.push(`[DESK BRIEFING — 기자단 원본 근거·출처. 사실·수치의 근거로만 쓴다. 이 안의 「오프닝 숫자」·훅·첫 문장 같은 편집 제안은 대본 계약(10a: 지수 ${INDEX_MOVE_PCT_FLOOR}% 미만 등락은 훅의 주제가 될 수 없다)보다 아래다 — 충돌하면 계약을 따르고 그 수치는 근거로 뒤에 둔다]`, deskBrief, '');
   if (growthDirectives) userPromptParts.push(
-    `[GROWTH DIRECTIVES — 채널 성장 지시. 훅·소재 선택에만 반영하고, '이번 주 실험'은 적용 대상이 대본(훅)일 때만 따르라. 사실·수치의 근거는 DESK BRIEFING 이며, 이 지시로 사실을 왜곡하지 마라]`,
+    `[GROWTH DIRECTIVES — 채널 성장 지시. 훅·소재 선택에만 반영하고, '이번 주 실험'은 적용 대상이 대본(훅)일 때만 따르라. 단 '자동 처방' 중 적용 대상이 대본·마무리 문장인 것은 적힌 대로 반영하라(제목 대상은 무시). 사실·수치의 근거는 DESK BRIEFING 이며, 이 지시로 사실을 왜곡하지 마라]`,
     growthDirectives, '');
   if (refs) userPromptParts.push(`[NEWS REFERENCES]`, refs, '');
   if (brand) userPromptParts.push(`[CHANNEL BRAND]`, brand, '');
@@ -474,6 +529,7 @@ async function main() {
       : `- 뉴스 레퍼런스 중 가장 관련성 높은 것을 훅(hook)으로 활용하되, 운영자 의도(주제)가 우선.`,
     `- 페르소나 금기 표현 준수. 페르소나 위반은 품질 저하로 판정됨.`,
     `- 팩트 기반, 수치는 구어체.`,
+    `- [CONTENT STRATEGY]의 관찰·메커니즘·함의·반증을 원자료와 대조한 뒤 사용하라. fallback 전략에 경로가 비어 있으면 근거 없이 채우지 말고 확인된 관찰과 조건부 영향만 말하라. 시청자가 이후 뉴스를 읽을 때 무엇이 달라지면 해석을 바꿔야 하는지 구체적으로 남겨라.`,
     `- 특정 종목 매수 추천 X.`,
   );
 
@@ -493,25 +549,24 @@ async function main() {
                            used: values.model || DEFAULT_MODEL }),
   });
 
-  /**
-   * 품질 계약 위반은 한 번만 되돌려 준다.
-   *
-   * 두 번째도 실패하면 위반을 frontmatter 에 남기고 진행한다 — 주관이 섞인 지표로
-   * 매일 도는 파이프라인을 멈춰 세우면, 다음 사람이 게이트를 끄는 쪽을 택하게 된다.
-   * 남은 위반은 Board 승인 화면에서 사람이 본다.
-   */
-  let parsed, engineUsed, scenes, qualityIssues = [];
+  /** 품질 계약 위반은 한 번 되돌린다. 재시도 후 error 는 자산 생성 전에 차단한다. */
+  // 재작성에는 직전 응답을 함께 준다. 위반 목록만 주면 모델이 처음부터 다시 써서, 고친 컷 대신
+  // 다른 컷이 걸린다 — 2026-10-06 EP-2026-0212 는 Phase 5 재생성에서 003 이 그대로 남고 005 가 새로 걸려 멈췄다.
+  let parsed, engineUsed, scenes, qualityIssues = [], promptBlocks = [], previous = '';
   for (let attempt = 1; attempt <= 2; attempt++) {
     const prompt = attempt === 1
       ? userPrompt
       : [userPrompt, '', '## 재작성 지시 — 직전 응답이 RULE 4-CONTRACT 를 위반했다',
-         ...qualityIssues.map((i) => `- ${i.message}\n  → ${i.suggestion}`), '',
+         ...qualityIssues.map((i) => `- ${i.message}\n  → ${i.suggestion}`),
+         ...promptBlocks.map((v) => `- 씬 ${v.sceneId} image_prompt [${v.code}] ${v.message}`), '',
+         '## 직전 응답 — 이것을 고쳐 JSON 하나로 다시 내라', previous, '',
          '지적된 것만 고치고 나머지 계약(씬 수·target_seconds 합·image_prompt·TTS 한글 수사)은 그대로 지켜라.',
-         '수치를 덜어낸 자리는 비우지 말고, 오늘 이 뉴스에서만 할 수 있는 인과·함의로 채워라. 분량은 유지한다.',
+         '수치를 덜어낸 자리는 근거 있는 인과·함의로 채워라. 근거가 부족하면 범위를 좁히고 미확인이라고 밝혀라. 검수 통과를 위해 원인·전망을 지어내지 마라. 분량은 가능한 범위에서 유지한다.',
         ].join('\n');
 
     const got = await runEngineChain(chain, buildRunners(prompt));
     engineUsed = got.engineUsed;
+    previous = got.json;
 
     try {
       parsed = JSON.parse(got.json);
@@ -529,16 +584,38 @@ async function main() {
 
     qualityIssues = validateScript(scenes);
     qualityIssues.forEach((i) => console.error(`   ${formatIssue(i)}`));
+    // 씬별 image_prompt 계약 BLOCK 도 여기서 한 번 되돌린다. 예전에는 Phase 5 게이트만 봐서,
+    // 걸리면 위반 내용을 모르는 재생성 한 번이 전부였다(10-01·10-03·10-06 세 번 멈춤).
+    // 에피소드 단위 상한(캐리커처 씬 수)은 운영자 토큰이 있는 게이트에 맡긴다.
+    promptBlocks = checkEpisodePrompts(scenes.map((s, i) => ({ sceneId: String(s.scene_id ?? i + 1), prompt: s.image_prompt })))
+      .violations.filter((v) => v.severity === 'BLOCK' && v.sceneId);
+    promptBlocks.forEach((v) => console.error(`   ⛔ [${v.code}] ${v.sceneId} image_prompt`));
     // error 는 게이트, rewrite 는 '막지는 않되 한 번 되돌린다'. 후자가 없던 동안
     // no-mechanism(사실 나열) 경고가 매 회차 기록만 되고 그대로 나갔다 (2026-09-05).
-    if (!qualityIssues.some((i) => i.severity === 'error' || i.rewrite)) break;
+    if (!qualityIssues.some((i) => i.severity === 'error' || i.rewrite) && !promptBlocks.length) break;
 
     if (attempt === 2) {
+      // Every error is a contract failure; leaving some in frontmatter still shipped weak
+      // analysis and overlong numeric recitals. Warnings remain reviewable, not blocking.
+      const blocking = qualityIssues.filter((i) => i.severity === 'error');
+      if (blocking.length) {
+        for (const issue of blocking) console.error(`❌ ${issue.message}\n   → ${issue.suggestion}`);
+        console.error('   재작성 2회 후에도 대본 품질 오류가 남아 자산 생성을 보류합니다.');
+        process.exit(1);
+      }
       console.warn('   ⚠ 재작성 후에도 품질 계약 위반이 남았다 — frontmatter 에 기록하고 진행한다');
       break;
     }
     console.warn('   ↻ 품질 계약 위반 — 위반 목록을 붙여 한 번 재작성한다');
   }
+
+  // KPI 진단이 켠 마무리 처방(좋아요 요청 등)은 결정론으로 넣는다 — 모델이 지시를 빼먹어도
+  // 처방이 실제 회차에 반영돼야 효과를 잴 수 있다(growth-diagnose.js 가 이후 발행분으로 판정).
+  const remedies = readActiveRemedies(ROOT, { slot: values.slot });
+  const closingCta = closingCtaOf(remedies);
+  if (ensureClosingCta(scenes, closingCta)) console.log(`   🩹 자동 처방 마무리 문장 반영: 「${closingCta}」`);
+  // 처방 판정은 이 기록이 있는 회차만 센다 — 지시가 프롬프트에 들어간 대본 처방과 실제로 넣은 마무리 문장
+  const growthRemedies = remediesApplied(remedies, { targets: ['script', 'closing'], prompt: growthDirectives, scenes });
 
   const total = scenes.reduce((a, s) => a + (s.target_seconds || (spec.target_total_seconds / spec.scene_count)), 0);
 
@@ -564,6 +641,7 @@ async function main() {
   if (qualityIssues.length) {
     outFM.quality_issues = qualityIssues.map((i) => `${i.severity}: ${i.rule} ${i.message}`);
   }
+  if (growthRemedies.length) outFM.growth_remedies = growthRemedies;
   outFM.scenes = scenes;
 
   const scriptBody = [

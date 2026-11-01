@@ -134,6 +134,14 @@ test('데스크 산출물이 대본·팩트체크까지 닿는다', () => {
   assert.ok(defIdx > 0 && defIdx < useIdx, 'DESK_BRIEF_MD 는 Phase 3 사용 지점보다 앞에서 정의돼야 한다');
   assert.ok(!/^\s{2}DESK_BRIEF_MD=/m.test(pipeline), 'Phase 2 블록 안쪽(들여쓰기) 정의가 남아 있으면 RESUME 에서 unbound 로 죽는다');
 
+  // 슬롯별 파일은 Phase 2a 가 만든다. 그보다 앞에서 [ -f ] 로 이름을 고르면 아직 없어서
+  // 예전 이름으로 떨어지고, Phase 3 의 [ -s ] 가 설치를 조용히 건너뛴다.
+  // 2026-09-28 발견: 08-31 부터 4주 동안 05_desk_briefing.md 가 한 번도 설치되지 않았다.
+  const deskRunIdx = pipeline.indexOf('node scripts/automation/desk-briefing.js --slot');
+  const pickIdx = pipeline.search(/\[ -f "\$DESK_(BRIEF_MD|TOPIC_JSON)" \]/);
+  assert.ok(pickIdx === -1 || pickIdx > deskRunIdx,
+    '데스크가 돌기 전에 파일 존재로 경로를 고르면 설치가 매번 빠진다');
+
   assert.match(read('scripts/automation/generate-script.js'), /05_desk_briefing\.md/, '대본이 근거를 봐야 한다');
   assert.match(read('scripts/automation/run-factcheck.js'), /05_desk_briefing\.md/, '팩트체크가 출처를 봐야 한다');
 });
@@ -175,4 +183,20 @@ test('오늘 실제로 데스크 산출물이 나왔다면 규격을 지킨다',
     assert.match(fm[1], /heat:\s*\d+/, `${f}: heat 가 숫자가 아니다`);
     assert.match(fm[1], /headline:\s*\S/, `${f}: headline 이 비었다`);
   }
+});
+
+test('리서치가 죽어도 데스크가 고른 토픽은 살아남는다', () => {
+  // 결정론적 폴백은 "리서치 LLM 이 죽었을 때" 도는 경로다. 그렇다고 데스크까지
+  // 죽은 것은 아닌데, 예전에는 무조건 첫 뉴스 헤드라인을 토픽으로 썼다.
+  // 그 헤드라인은 기사 제목이 아니라 사이트 섹션 문구일 때가 있다
+  // (2026-09-01 kr-close: 데스크가 이란·유가·금 토픽을 뽑아 뒀는데도
+  //  "뉴스로 보는 증시일정" 으로 덮여 EP-2026-0130 이 그대로 대본까지 갔다).
+  const src = read('scripts/automation/research-brief.js');
+  const fb = src.slice(src.indexOf('function writeFallbackAnalysis'));
+  assert.match(fb, /desk-topic-\$\{slotName\}\.json/, '폴백이 슬롯별 desk-topic 을 읽어야 한다');
+  assert.match(fb, /deskUsable \? cleanHeadline\(desk\.topic\) : picked\.topic/,
+    '근거가 유효한 데스크 토픽은 일반 헤드라인보다 앞서야 한다');
+  assert.match(fb, /topic_source/, '어느 출처에서 왔는지 산출물에 남겨야 한다');
+  // 스코프 사고 방지: pick() 은 다른 함수의 지역 변수라 여기서 쓰면 ReferenceError 다.
+  assert.doesNotMatch(fb, /pick\(/, 'writeFallbackAnalysis 안에서는 pick() 을 쓸 수 없다');
 });

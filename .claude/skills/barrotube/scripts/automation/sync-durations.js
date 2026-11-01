@@ -52,7 +52,13 @@ for (const scene of fm.scenes) {
 }
 
 fm.target_total_seconds = Math.round(total * 10) / 10;
-fm.revision = (fm.revision || 1) + 1;
+// revision 은 **주장이 바뀐 횟수**다 — 여기서 올리면 안 된다.
+// 이 단계는 target_seconds 만 TTS 실측에 맞추고 narration 은 한 글자도 건드리지 않는다.
+// 그런데 올려 버리면 35_factcheck.md 의 script_revision 과 어긋나고, Phase 6 의
+// 판본 불일치 가드가 "고친 대본을 옛 리포트로 심사하려 한다"로 오독해 헛halt한다
+// (2026-09-15 EP-2026-0155: 팩트체크는 revision 3 에서 정상 통과했는데 Phase 8 의
+//  이 줄이 4로 올려놔서, RESUME 재개가 Phase 6 에서 막혔다).
+// 이 단계가 돌았다는 기록은 synced_at 하나로 충분하다.
 fm.synced_at = new Date().toISOString();
 
 const newFrontmatter = '---\n' + stringifyYAML(fm) + '---';

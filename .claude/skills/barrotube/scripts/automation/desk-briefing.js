@@ -29,6 +29,8 @@ import { existsSync, readFileSync, mkdirSync, writeFileSync, realpathSync } from
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { spawnSync } from 'node:child_process';
+import { parseClaudeEnvelope, recordLlmUsage } from './lib/llm-ledger.js';
+import { directiveBlock, readOperatorDirective } from './lib/operator-directive.js';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const DEFAULT_TIMEOUT_SEC = Number(process.env.BT_DESK_TIMEOUT || 420);
@@ -102,7 +104,20 @@ export function quoteTable(snapshot, symbols) {
   }).join('\n');
 }
 
-export function buildDeskPrompt({ reporter, slot, date, snapshot, outDir, newsPath, competitorPath, social }) {
+/**
+ * 검색어에 장 날짜를 붙이라는 지시. 2026-10-15 금리 데스크: 「CME FedWatch」「rate hike odds」만으로
+ * 검색해 일반 페이지·지난 기사만 받고 「당일 마감 기사를 찾지 못했다」고 썼다. 같은 날 날짜를 붙인
+ * 검색은 Reuters 「Hot September CPI sends rate-hike bets soaring」를 바로 돌려줬다 — 그날의 주제였다.
+ */
+export function sessionSearchLine(snapshot) {
+  const day = snapshot?.expected_session_date;
+  if (!day) return '';
+  const en = new Date(`${day}T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+  return `   검색어에는 장 날짜를 붙여라 (예: "stock market today ${en}", "<주제> ${en}") — 날짜 없는 검색은 지난 기사를 돌려준다.\n`
+    + '   통신사·경제지 마감 시황(Reuters·AP·CNBC·Yahoo Finance)을 먼저 찾아 그날 시장이 스스로 지목한 원인부터 확인해라.';
+}
+
+export function buildDeskPrompt({ reporter, slot, date, snapshot, outDir, newsPath, competitorPath, social, directive = '' }) {
   const table = quoteTable(snapshot, reporter.symbols || []);
   const hints = (reporter.search_hints || []).map((h) => `"${h}"`).join(', ');
   const caveats = [reporter.unit_caveat, reporter.scope_caveat].filter(Boolean)
@@ -112,7 +127,7 @@ export function buildDeskPrompt({ reporter, slot, date, snapshot, outDir, newsPa
 
 ## 네 담당 (beat)
 ${reporter.beat}
-
+${directiveBlock(directive, '기자: 네 영역에서 이 주제를 설명·증명하는 사실을 먼저 조사하라. heat 는 이 주제와 닿는 정도로 정직하게 매겨라.')}
 ## 오늘 네 영역의 시세 (스냅샷 실측값 — 이 숫자만 쓴다. 지어내지 마라)
 ${table}
 
@@ -125,6 +140,7 @@ ${reporter.question}
 
 ## 조사 방법
 1. WebSearch 로 오늘 네 영역의 핵심 사건을 찾아라. 검색어 예: ${hints}
+${sessionSearchLine(snapshot)}
 ${social}
 3. **인과를 하나 짚어라.** 나열이 아니라 "A 때문에 B 가 움직였다" 를 찾는 게 네 일이다.
 ${caveats ? `\n## 이 데스크의 주의사항\n${caveats}` : ''}
@@ -169,6 +185,7 @@ function runClaude({ prompt, cwd, timeoutSec, addDirs = [] }) {
     '--model', MODEL,
     '--permission-mode', PERMISSION_MODE,
     '--allowed-tools', ALLOWED_TOOLS,
+    '--output-format', 'json',
   ];
   // workspace/ 는 ~/BarroTubeData 로 나가는 심볼릭이다. 실경로를 명시하지 않으면
   // 쓰기가 "민감 파일"로 차단된다 — 모델은 리포트를 다 써놓고 저장만 못 한 채
@@ -181,9 +198,12 @@ function runClaude({ prompt, cwd, timeoutSec, addDirs = [] }) {
     env: { ...process.env, BT_DESK_CHILD: '1' },
   });
   const sec = Math.round((Date.now() - started) / 1000);
+  // --output-format json 봉투: 토큰·환산 비용은 장부로, 진단용 꼬리는 응답 텍스트에서 (2026-10-07).
+  const env = parseClaudeEnvelope(res.stdout || '');
+  recordLlmUsage({ engine: 'claude', model: env.model ?? MODEL, input: env.input, cached: env.cached, output: env.output, costUsd: env.costUsd, ms: Date.now() - started, ok: res.status === 0 && !env.isError, caller: 'desk-briefing' });
   // 모델이 파일을 안 쓰고 끝내는 경우가 있다 — 그때 이유는 stdout 에만 있다.
   // 버리면 "산출물 없음" 이라는 결과만 남아 원인을 못 찾는다 (2026-08-25 실측).
-  const tail = String(res.stdout || '').trim().slice(-600);
+  const tail = env.text.trim().slice(-600);
   if (res.error) return { ok: false, sec, why: res.error.message, tail };
   if (res.status !== 0) return { ok: false, sec, why: `exit ${res.status}: ${String(res.stderr || '').slice(-300)}`, tail };
   return { ok: true, sec, tail };
@@ -259,6 +279,9 @@ function main() {
   // 데스크마다 doctor 를 돌리면 6번 나가고, 붙는 채널은 어차피 같다.
   const channels = values['dry-run'] ? { ok: [], dead: [], available: false } : detectSocialChannels();
   const social = socialBlock(channels);
+  // 운영자가 오늘 이 회차의 주제를 정했으면 기자·에디터 모두 그 주제로 간다 (lib/operator-directive.js).
+  const directive = readOperatorDirective(ROOT, date, values.slot);
+  if (directive) console.log(`   운영자 지시: ${directive.split('\n')[0].slice(0, 80)}`);
   console.log(`   소셜: ${channels.available ? channels.ok.map((c) => c.id).join(', ') : '없음 (WebSearch 만)'}`);
   console.log(`   경쟁 인텔: ${existsSync(competitorPath) ? competitorPath.split('/').pop() : '없음'}\n`);
 
@@ -273,7 +296,7 @@ function main() {
   for (const r of reporters) {
     const outFile = join(outDir, `desk-${r.id}.md`);
     process.stdout.write(`  ▶ ${r.label} … `);
-    const prompt = buildDeskPrompt({ reporter: r, slot, date, snapshot, outDir, newsPath, competitorPath, social });
+    const prompt = buildDeskPrompt({ reporter: r, slot, date, snapshot, outDir, newsPath, competitorPath, social, directive });
     const run = runClaude({ prompt, cwd: ROOT, timeoutSec, addDirs: [outDir, dataRoot] });
     if (!run.ok || !existsSync(outFile)) {
       console.log(`❌ ${run.why || '산출물 없음'} (${run.sec}s)`);
@@ -308,7 +331,7 @@ ${deskLines}
 ${failLines ? `\n## 실패한 데스크\n${failLines}` : ''}
 
 ## 각 리포트를 **직접 읽어라** (경로가 위에 있다)
-
+${directiveBlock(directive, '에디터: topic 은 이 지시의 주제로 정한다. heat 순위와 선정 기준은 이 주제 안에서 각도를 고르는 데만 쓴다.')}
 ## 선정 기준
 ${ed.selection_criteria.map((c, i) => `${i + 1}. ${c}`).join('\n')}
 

@@ -20,7 +20,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, statSync } from 'node:fs';
-import { join, resolve, dirname } from 'node:path';
+import { join, resolve, dirname, basename } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { parseArgs } from 'node:util';
@@ -30,6 +30,7 @@ import {
   formatPolicySection,
 } from './lib/qa-policy-detect.js';
 import { checkEpisodePrompts } from './lib/image-prompt-contract.js';
+import { checkMany as checkManyImages } from './lib/image-quality.js';
 import { matchIntroOutro } from './lib/qa-frame-match.js';
 import { verifyMotionClip } from './lib/motion-verify.js';
 import { buildMotionContactSheet, FRAMES_PER_CLIP } from './lib/motion-contact-sheet.js';
@@ -355,6 +356,36 @@ async function main() {
     mark: imgCount === scenes.length ? OK : FAIL,
     val: `${imgCount}/${scenes.length}`,
   });
+
+  /**
+   * 픽셀 QA — 파일이 있는 것과 그림이 규격인 것은 다르다.
+   *
+   * 여기까지 이미지 검사는 두 가지였다: image_prompt 계약(프롬프트만 본다)과 위의
+   * existsSync(있는지만 본다). 그 사이에서 2:3 로 구워진 컷·720p 컷·단색 렌더가
+   * 전부 통과했다(2026-09-25 실측 468컷 중 12컷). 비율·해상도·평면·노출을 여기서 센다.
+   *
+   * 캐릭터 규격(미튼 손·캡슐 몸통)은 **여기서 못 잡는다** — 그림을 봐야 한다.
+   * 그 방어선은 60_qa_frames.png 육안 검수뿐이라는 사실을 리포트에 같이 적는다.
+   */
+  const scenePngs = scenes
+    .map(s => join(imagesDir, `scene_${s.scene_id}.png`))
+    .filter(p => existsSync(p));
+  if (scenePngs.length) {
+    const { results } = await checkManyImages(scenePngs, {
+      cachePath: join(epDir, '..', '..', 'assets', 'image-qa-cache.json'),
+    });
+    const bad = [];
+    for (const [path, r] of results) {
+      if (r.verdict !== 'PASS') bad.push(`${basename(path)} — ${r.verdict} ${(r.codes || []).join(',')} (${r.width}x${r.height}, 휘도 ${r.mean}, 편차 ${r.sd})`);
+    }
+    checks.push({
+      item: 'Image pixels',
+      mark: bad.some(b => b.includes('FAIL')) ? FAIL : bad.length ? WARN : OK,
+      val: bad.length
+        ? `${scenePngs.length - bad.length}/${scenePngs.length} PASS · ${bad.join(' / ')}`
+        : `${scenePngs.length}/${scenePngs.length} PASS`,
+    });
+  }
 
   // Motion clips are required for every scene in the media-render pipeline.
   const videosDir = join(assetsDir, 'videos');

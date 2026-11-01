@@ -1,6 +1,6 @@
 ---
 name: barrotube
-description: BarroTube YouTube 자동 회사 — 마케팅 분석부터 에피소드 산출·YouTube 업로드까지 corework 자동화. 에이전트 hub-and-spoke 위임. Paperclip 의존 없음.
+description: BarroTube YouTube 자동 회사 — 마케팅 분석부터 에피소드 산출·YouTube 업로드까지 corework 자동화. 에이전트 hub-and-spoke 위임. 생산은 결정론 파이프라인, 정기 실행·토큰 관제·장애 수리·주간 성장은 페이퍼클립 관제(references/PAPERCLIP.md).
 ---
 
 # /barrotube — BarroTube Standalone Skill
@@ -74,6 +74,22 @@ args가 있으면 곧장 해당 흐름으로:
 Phase 7 worker의 로그인 판정은 참고값이다. 사용자가 로그인을 확인했거나 기존 탭이 있으면
 PD가 같은 브라우저에서 프로필+composer를 한 번 직접 확인하고, 로그인 상태면 누락 자산만
 완성한다. 완료 정본은 응답 문구가 아니라 이미지 5+영상 5+인트로+썸네일의 12/12 게이트다.
+
+### 「미국 증시 요약」 포맷 (us-close · 2026-10-01)
+
+오선 「증시 요약」 427편 벤치마크(`workspace/intel/benchmarks/futuresnow-summary/REPORT.md`)로 만든
+세로 약 2.5분(7씬·150초) 데일리 요약. 정본은 `config/market-summary.json`, 슬롯 `form: market-summary`.
+화~토 중 전날 미국 종가가 실제로 있는 날만 적용하고(Phase 1b 판정), 일·월요일·미국 휴장 다음 날·수집 실패일은 기존 쇼츠로 간다.
+
+| 단계 | 스크립트 | 비고 |
+|---|---|---|
+| 1b 데이터 | `fetch-econ-calendar.js` · `collect-summary-data.js` · `research-movers.js` | 일정(무과금)·84종목 등락·시간외·종목 이유(출처 URL) → `daily-news/<날짜>/summary-us.json` |
+| 4 대본 | `generate-summary-script.js` | 통신사 브리핑체, 질문·권유 금지. 씬 1 `card: indices`, 씬 2~7 `slot` + **범용** `image_prompt`(회사명·숫자·로고 없이 슬롯 상징물 — 재활용용) |
+| 6b 화면 | `render-summary-cards.js` · `summary-assets.js` | 씬 1 지수 카드 1장. 마시 컷은 **라이브러리 먼저**(`reuse-scene-assets.js mode=primary`), 약한 매칭만 Phase 7 이 굽는다 |
+| 9 메타 | `generate-metadata.js` | 제목 `【미국 증시 요약】 <훅 25자> \| YY.MM.DD(요일) #Shorts` |
+
+라이브러리 재고 목표는 `lib/scene-slot-taxonomy.js` GRADE_TARGET(A10·B6·C4·R10), 부족분은
+`backfill-library.js` 가 범용 객체(`lib/backfill-prompt.js` THEME_SCENES)로 채운다.
 
 ### Step 3 — 모드별 흐름
 
@@ -265,14 +281,24 @@ export PAPERCLIP_DISABLED=1
 bash $BARROTUBE_HOME/lib/install-cron.sh install us-close "06:00"
 bash $BARROTUBE_HOME/lib/install-cron.sh install kr-close "16:00"
 
-# 주간 부동산 브리핑 (목 17:00 — 한국부동산원 주간지수 발표 후)
-bash $BARROTUBE_HOME/lib/install-cron.sh install realestate "Thu 17:00"
+# 점심 옴니버스 (금요일은 realestate 가 그 자리를 쓴다)
+bash $BARROTUBE_HOME/lib/install-cron.sh install omnibus "Mon-Thu,Sat,Sun 10:00"
+
+# 주간 부동산 브리핑 (금 10:00 — 목요일 한국부동산원 주간지수 발표 다음날)
+bash $BARROTUBE_HOME/lib/install-cron.sh install realestate "Fri 10:00"
+
+# 마켓맵 카드뉴스 (조간·석간)
+bash $BARROTUBE_HOME/lib/install-cron.sh install market-map "08:00,18:00"
+
+# 승인 후 미게시 EP 회수
+bash $BARROTUBE_HOME/lib/install-cron.sh install publish-resume "07:30,17:30"
 
 # 주간 마케팅 분석 (월요일 09:00)
 bash $BARROTUBE_HOME/lib/install-cron.sh install weekly-marketing "Mon 09:00"
 
-# 현재 설치된 cron 목록
+# 현재 설치된 cron 목록 / 기상 예약 점검
 bash $BARROTUBE_HOME/lib/install-cron.sh list
+bash $BARROTUBE_HOME/lib/install-cron.sh wake
 
 # 제거
 bash $BARROTUBE_HOME/lib/install-cron.sh uninstall us-close
@@ -296,7 +322,9 @@ bash $BARROTUBE_HOME/lib/install-cron.sh uninstall us-close
    (운영자 명시 요청, 2026-08-24 활성화). 이때도 Phase 11 텔레그램 거부창 30분과
    private+publishAt 예약이 남아 공개 전까지 되돌릴 수 있다. 수동 승인으로 복귀하려면 false.
    **이 플래그와 무관하게, 수동 실행(`/barrotube`)에서는 자동 승인하지 않는다.**
-8. **Paperclip 비활성화**: `PAPERCLIP_DISABLED=1` 환경 변수 필수. 미설정 시 register-paperclip-issue.js가 외부 호출 시도 → 시간 낭비.
+8. **Paperclip**: `PAPERCLIP_DISABLED=1` 은 계속 필수 — 4~5월 체제의 옛 연동(register-paperclip-issue.js·`_legacy_paperclip/`)을 끈다.
+   2026-10-07 부터 정기 실행·토큰 관제·장애 수리·주간 성장은 **새 페이퍼클립 관제**(`scripts/automation/paperclip/`, 정본 `config/paperclip/`)가 맡는다 —
+   구조·편성·운영 명령·되돌리기는 `references/PAPERCLIP.md`. 정기 회차를 손으로 돌릴 때도 `dispatch.js --direct` 를 쓰면 같은 회차 마커를 공유해 중복 실행이 없다.
 9. **채널 활성화 게이트**: `channel.yaml`의 상태가 `active`이고 migration conflict가 모두 해소된 채널만 제작·발행 액션을 실행할 수 있다. `needs_review` 채널은 상태·자산·설정 조회만 허용한다.
 10. **승인 무결성**: S10 승인은 영상·metadata·QA·선택 썸네일과 채널 revision·YouTube 목적지·최종 공개 설정에 결속된다. 승인 후 어느 값이든 바뀌면 새 승인을 발급한다.
 11. **승인 신뢰 모델**: 승인 JSON은 로컬 운영 체크포인트이며 동일 OS 사용자/저장소 쓰기 권한자를 막는 암호학적 경계가 아니다. 보드 세션 토큰과 OS 파일 권한을 보호한다.
@@ -363,6 +391,7 @@ npm run channel:document -- --channel today.myo # 읽기 전용 HTML snapshot �
 
 ## Reference Files
 
+- `references/PAPERCLIP.md` — 페이퍼클립 관제 (2026-10-07~): 에이전트 7명·루틴 16개·토큰 거버너·장애 수리·주간 성장·되돌리기
 - `references/ROUTINES.md` — 정기 증시 브리핑 2슬롯 (06:00→08:00 / 16:00→18:00) 운영
 - `references/REALESTATE.md` — 부동산 섹션 (realestate 슬롯·중립 애널리스트 데스크·공공 API 키)
 - `references/PIPELINE.md` — S0~S12 단계별 상세 (입출력·비용·시간)

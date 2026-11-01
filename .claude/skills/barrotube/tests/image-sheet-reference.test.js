@@ -7,8 +7,10 @@ const ROOT = join(import.meta.dirname, '..');
 const OPENAI = readFileSync(join(ROOT, 'scripts/automation/lib/image-engines/openai-gpt-image.js'), 'utf-8');
 const SCENE = readFileSync(join(ROOT, 'scripts/automation/generate-image-gemini.js'), 'utf-8');
 const INTRO_V10 = readFileSync(join(ROOT, 'scripts/automation/lib/image-engines/intro-v10.js'), 'utf-8');
+const INTRO = readFileSync(join(ROOT, 'scripts/automation/generate-intro.js'), 'utf-8');
+const THUMB = readFileSync(join(ROOT, 'scripts/automation/generate-thumbnail.js'), 'utf-8');
 
-test('OpenAI 경로도 캐릭터시트를 참조 이미지로 붙인다', () => {
+test('이미지 엔진은 codex 하나뿐이고 캐릭터시트를 받는다', () => {
   // 2026-08-14 실측: 시트를 붙이면 몸통/머리 0.64(발행본 밴드 0.57~0.68), 안 붙이면
   // 0.85~1.0 으로 뚱뚱해진다. 프롬프트 문구를 다섯 번 고쳐도 안 잡히던 값이다.
   // gemini 분기에는 시트가 있었고 openai 분기에만 없었다 — 엔진을 바꾸면 조용히 드리프트했다.
@@ -16,24 +18,22 @@ test('OpenAI 경로도 캐릭터시트를 참조 이미지로 붙인다', () => 
   assert.match(OPENAI, /form\.append\('image\[\]'/, '시트를 멀티파트로 실어야 한다');
   assert.match(OPENAI, /export function sheetPath/);
 
-  // 모든 분기가 같은 채널 인자를 받아야 한다 — 하나라도 빠지면 엔진 전환이 곧 드리프트다.
-  const start = SCENE.indexOf('generateImageOpenAI({');
-  assert.ok(start > 0, '씬 생성기가 openai 엔진을 호출해야 한다');
-  const openaiCall = SCENE.slice(start, start + 600);
-  assert.match(openaiCall, /channel: meta\.channel_id/, 'openai 분기에도 channel 을 넘겨야 한다');
+  // 2026-09-18: 씬·인트로·썸네일에서 OpenAI/Gemini 폴백을 **삭제**했다. 유료 크레딧을
+  // 태우는 데다(EP-0162 가 429 로 죽었다) 엔진이 바뀌면 캐릭터가 드리프트했고, 오류 라벨이
+  // 전부 «Gemini image gen failed» 라 오진을 불렀다. 이제 엔진은 codex 하나뿐이다.
+  // 지켜야 할 불변식은 그대로다 — **유일한 엔진이 캐릭터시트 채널을 받아야 한다.**
+  assert.match(SCENE, /generateImageCodex\(\{/, '씬 생성기가 codex 엔진을 호출해야 한다');
+  // 씬 루프의 호출은 brief 의 channel_id 를 넘겨야 시트가 붙는다. (같은 파일의 --prompt
+  // 수동 경로는 opts.channel 을 쓰므로 여기서 구분해 겨눈다.)
+  assert.match(SCENE, /generateImageCodex\(\{[\s\S]{0,200}?channel: meta\.channel_id/,
+    '씬 루프 codex 호출에 channel: meta.channel_id 를 넘겨야 한다');
 
-  // 2026-08-20: codex(내장 imagegen) 분기 추가 → 3개.
-  const codexStart = SCENE.indexOf('generateImageCodex({');
-  assert.ok(codexStart > 0, '씬 생성기가 codex 엔진을 호출해야 한다');
-  assert.match(SCENE.slice(codexStart, codexStart + 400), /channel: meta\.channel_id/,
-    'codex 분기에도 channel 을 넘겨야 한다');
-
-  // 2026-08-26: codex 실패 시 Gemini 폴백 분기가 추가되어 4개가 됐다. 그 폴백에도 시트가
-  // 붙어야 한다 — Gemini 는 텍스트 DNA 만 쓰면 드리프트가 크고, 폴백은 조용히 타는
-  // 경로라 여기서 빠지면 아무도 모른다 (EP-0114 가 5컷 전부 Gemini 로 나간 적이 있다).
-  assert.equal(
-    (SCENE.match(/channel: meta\.channel_id/g) || []).length, 4,
-    'gemini·openai·codex·codex→gemini 폴백 네 분기 모두에 있어야 한다');
+  // 폴백이 되살아나면 여기서 잡힌다.
+  assert.doesNotMatch(SCENE, /generateImageOpenAI\(/, '씬 경로에 OpenAI 폴백이 남으면 안 된다');
+  for (const [name, src] of [['인트로', INTRO], ['썸네일', THUMB]]) {
+    assert.doesNotMatch(src, /generateImageOpenAI\(/, `${name} 경로에 OpenAI 호출이 남으면 안 된다`);
+    assert.doesNotMatch(src, /await generateImageGemini\(/, `${name} 경로에 Gemini 폴백이 남으면 안 된다`);
+  }
 });
 
 test('codex 어댑터가 캐릭터·노출 고정 블록을 매 호출에 붙인다', async () => {

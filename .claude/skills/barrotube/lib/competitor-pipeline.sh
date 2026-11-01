@@ -43,6 +43,9 @@ run_step() {
 
 echo "📡 경쟁 인텔 루틴 — ${DATE}"
 
+# 덮개가 닫힌 채 DarkWake 틈에 뜨면 네트워크가 없어 채널 수집이 전부 fetch failed 로 끝난다.
+[ "${DRY_RUN:-0}" = "1" ] || wait_for_network 20 || echo "  ⚠️  네트워크 응답 없음 — 그대로 시도합니다"
+
 # guard_master_switch 를 여기 두지 않는다.
 #
 # autonomy-pause 는 "자동 발행"을 막는 스위치다. 수집·분석은 읽기 전용이고

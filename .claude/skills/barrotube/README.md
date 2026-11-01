@@ -1,6 +1,7 @@
 # BarroTube — Independent Skill
 
-> Claude Code Skill로 패키징된 BarroTube YouTube 자동화 회사. Paperclip 0% 의존, 호출 한 번으로 마케팅 분석 → EP 산출 → YouTube 업로드까지 완주.
+> Claude Code Skill로 패키징된 BarroTube YouTube 자동화 회사. 호출 한 번으로 마케팅 분석 → EP 산출 → YouTube 업로드까지 완주.
+> 2026-10-07 부터 정기 실행·토큰 관제·장애 수리·주간 성장은 페이퍼클립 관제가 맡는다 — [references/PAPERCLIP.md](references/PAPERCLIP.md). 생산 단계 자체는 그대로 결정론 스크립트다.
 
 ## 5초 요약
 

@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { resolveContentMode } from '../scripts/automation/fetch-market-snapshot.js';
-import { parseFactcheckFindings } from '../scripts/automation/revise-script-factcheck.js';
+import { introducedErrors, numberGrowth, parseFactcheckFindings, sceneNumberCap, suggestionAllowance } from '../scripts/automation/revise-script-factcheck.js';
+import { summaryDataText } from '../scripts/automation/run-factcheck.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const AUTO = join(ROOT, 'lib', 'auto-pipeline.sh');
@@ -34,8 +35,11 @@ test('cron pipeline keeps browser assets, render, and publish in fail-closed ord
     '기본 모션 엔진은 Grok(옵션 0)이어야 한다');
   assert.match(source, /local motion_engine="\$\{BT_MOTION_ENGINE:-grok\}"/,
     'media_assets_ready 의 기본값도 같아야 한다 — 어긋나면 게이트가 엇갈린다');
-  assert.ok(source.includes('2. 위 이미지가 모두 저장된 뒤에만 Chrome의 Grok'),
-    'grok 을 명시 지정했을 때의 브라우저 절차는 남아 있어야 한다');
+  // 2026-09-28 운영자 결정(편당 Grok 예산): 브라우저 에이전트는 스틸만 만든다. Grok 영상은
+  // grok-motion-applescript.js 가 lib/grok-budget.js 의 편당 상한 안에서만 만든다 — 에이전트가
+  // 영상 N개를 만들면 주간 한도를 원장 밖에서 쓴다.
+  assert.ok(source.includes('Grok 영상은 다음 단계 스크립트가 편당 예산 안에서 만든다'),
+    'grok 모드에서도 브라우저는 Grok 을 열지 않아야 한다');
   // 브라우저에 클립을 요구하는 건 grok 을 명시했을 때뿐이다. wan 이 기본인데 여기가
   // != local-only 로 남아 있으면, 브라우저가 만들지도 않을 클립을 기다리다 멈춘다.
   assert.ok(!/if \[ "\$MOTION_ENGINE" != "local-only" \]/.test(source),
@@ -52,8 +56,9 @@ test('cron pipeline keeps browser assets, render, and publish in fail-closed ord
     '-select_streams a:0',
     'shasum -a 256',
     'duplicate bytes',
-    'Video audio 버튼이 aria-pressed=true',
-    'Remove image/thumbnail',
+    // 'Video audio 버튼이 aria-pressed=true'·'Remove image/thumbnail' 은 브라우저 Grok 절차의
+    // 문구였다. 그 절차를 뺀 뒤로 오디오는 grok-motion-applescript.js 의 requireVideoOptions 가,
+    // AAC 는 위 media_assets_ready 의 ffprobe(-select_streams a:0) 게이트가 본다.
     // 저장 방법은 "폴백"이 아니라 정본이다 — ChatGPT 미디어 뷰어에 다운로드 버튼이 없어서
     // 버튼을 찾던 에이전트가 marker 만 반복 생성하며 루프에 빠졌다(2026-08-17 EP-0097).
     "i.alt))",
@@ -139,6 +144,129 @@ test('factcheck findings drive a rewrite loop before a human is paged', () => {
   // 고칠 대상이 없어 루프가 상한까지 헛돈다.
   const reviser = readFileSync(join(ROOT, 'scripts', 'automation', 'revise-script-factcheck.js'), 'utf8');
   assert.match(reviser, /FIXABLE_VERDICTS = \['부정확', '미확인'\]/);
+});
+
+test('팩트체크 재작성은 원래 대본의 위반이 아니라 수정이 새로 만든 위반만 막는다', () => {
+  // 2026-09-29 EP-2026-0195: Phase 4 가 기록만 하고 넘긴 씬 002 의 수치 초과 때문에
+  // 씬 003·004 수정본이 매번 버려져 kr-close 가 Phase 6 에서 멈췄다. 이 단계는 지적된 씬만
+  // 고칠 수 있으니, 씬 002 위반으로 막으면 몇 번을 돌아도 같은 이유로 실패한다.
+  const mk = (id, role, narration) => ({ scene_id: id, role, narration, target_seconds: 12 });
+  const original = [
+    mk('001', 'hook', '유가가 오르자 금리가 먼저 움직였습니다. 그래서 외국인이 팔았습니다.'),
+    mk('002', 'context', '미국 십 년 금리는 오점이 퍼센트, 이천칠 년 이후 가장 높습니다.'),
+    mk('003', 'insight', '전쟁 날에도 금값은 제자리였습니다.'),
+  ];
+  const fixed = original.map((s) => (s.scene_id === '003'
+    ? { ...s, narration: '금리가 오르면 이자 없는 금의 매력이 줄어듭니다. 그래서 금은 제자리였습니다.' } : s));
+  assert.deepEqual(introducedErrors(original, fixed), [], '씬 002 의 기존 위반은 수정본 탓이 아니다');
+
+  const worse = original.map((s) => (s.scene_id === '003'
+    ? { ...s, narration: '금은 삼 퍼센트, 은은 육 퍼센트, 구리는 이 퍼센트 움직였습니다.' } : s));
+  assert.deepEqual(introducedErrors(original, worse).map((i) => [i.rule, i.scene_id]),
+    [['spoken-number-budget', '003'], ['spoken-number-total', null]], '수정이 새로 만든 위반은 그대로 막는다');
+});
+
+test('재작성 한 번의 계약 실패로 회차를 접지 않는다 — 남은 재작성 예산으로 다시 돈다', () => {
+  // 2026-10-07 EP-2026-0214: 재작성 1/3 이 수치 초과로 실패하자 「Phase 6 재작성」 halt 로 곧장
+  // 사람을 불러 08:00 편이 빠졌다. 상한(FC_MAX_REWRITES)에 닿기 전엔 멈추지 않아야 한다.
+  const source = readFileSync(AUTO, 'utf8');
+  assert.doesNotMatch(source, /halt_for_human "Phase 6 재작성"/, '재작성 실패가 단독 halt 경로여서는 안 된다');
+  const loopStart = source.indexOf('while factcheck_gate_blocks; do');
+  const loopEnd = source.indexOf('\n  done', loopStart);
+  const revise = source.indexOf('if ! node scripts/automation/revise-script-factcheck.js', loopStart);
+  assert.ok(revise > loopStart && revise < loopEnd, '재작성 호출은 루프 안에서 실패를 받아야 한다');
+  assert.match(source.slice(revise, loopEnd), /auto_pipeline_factcheck_rewrite_rejected[\s\S]{0,90}\n\s*continue/);
+});
+
+test('접지 재시도는 같은 엔진을 반복하지 않는다 — 재실행마다 엔진 순서를 돌린다', () => {
+  // 2026-09-26 EP-2026-0186: claude 가 URL 대신 출처명을 내 미접지 → 같은 claude 로 두 번 재실행 → 재작성 예산 소진.
+  const source = readFileSync(AUTO, 'utf8');
+  const fn = source.slice(source.indexOf('fc_rotate() {'), source.indexOf('\n}', source.indexOf('fc_rotate() {')) + 2);
+  const run = (n) => spawnSync('/bin/bash', ['-c', `${fn}\nfc_rotate "claude,gemini,codex" ${n}`], { encoding: 'utf8' }).stdout.trim();
+  assert.deepEqual([0, 1, 2, 3].map(run), ['claude,gemini,codex', 'gemini,codex,claude', 'codex,claude,gemini', 'claude,gemini,codex']);
+  const reground = source.slice(source.indexOf('auto_pipeline_factcheck_reground'), source.indexOf('continue', source.indexOf('auto_pipeline_factcheck_reground')));
+  assert.match(reground, /FC_CHAIN="\$\(fc_rotate "\$\{BT_FACTCHECK_ENGINE_CHAIN:-claude,gemini,codex\}" "\$FC_REGROUNDS"\)"/);
+  assert.match(reground, /BT_FACTCHECK_ENGINE_CHAIN="\$FC_CHAIN" node scripts\/automation\/run-factcheck\.js/);
+});
+
+test('재개는 실패한 팩트체크 리포트를 캐시로 다시 쓰지 않는다', () => {
+  // run-factcheck 는 --force 가 없으면 있는 리포트(pass:false 포함)를 그대로 돌려준다.
+  // 2026-10-07 EP-2026-0214: 검사기를 고친 뒤 재개해도 옛 HIGH 판정이 게이트에 다시 걸릴 뻔했다.
+  const source = readFileSync(AUTO, 'utf8');
+  const keep = source.indexOf("RESUME: 기존 PASS 팩트체크 유지");
+  const call = source.indexOf('run-factcheck.js "${FC_ARGS[@]}"', keep);
+  assert.ok(keep > 0 && call > keep, 'PASS 가 아닌 재개 경로에서 팩트체크를 다시 불러야 한다');
+  assert.match(source.slice(keep, call), /if \[ -n "\$RESUME_EP" \] && \[ -s "\$FACTCHECK_PATH" \]; then FC_ARGS\+=\(--force\); fi/);
+});
+
+test('재작성은 말한 수치를 늘리지 못한다 — 미확인을 새 수치로 「보강」한 수정본은 버린다', () => {
+  // 2026-10-07 EP-2026-0214 씬 006: 미확인 유가 문장을 고치라 했더니 검색한 숫자를 보태 5개 → 10개.
+  const sc = (id, narration, extra = {}) => ({ scene_id: id, role: 'context', target_seconds: 18, narration, ...extra });
+  const before = [sc('006', '유가는 팔십구점 구사 달러로 올랐고, 금은 사천백구십일 달러로 영점 팔삼 퍼센트 올랐습니다. 비트코인은 내렸습니다.')];
+  const trimmed = [sc('006', '금은 사천백구십일 달러로 영점 팔삼 퍼센트 올랐습니다. 비트코인은 내렸습니다.')];
+  const padded = [sc('006', '유가는 팔십구점 구사 달러, 브렌트는 구십삼점 일 달러로 올랐고, 금은 사천백구십일 달러로 영점 팔삼 퍼센트, 은은 일점 이 퍼센트 올랐습니다.')];
+  assert.deepEqual(numberGrowth(before, trimmed, ['006']), [], '수치를 빼는 수정은 통과');
+  const grown = numberGrowth(before, padded, ['006']);
+  assert.equal(grown.length, 1);
+  assert.ok(grown[0].after > grown[0].before, `늘어난 수치를 잡아야 한다: ${JSON.stringify(grown)}`);
+
+  // 아라비아 숫자를 한글 수사로 고친 것은 늘어난 게 아니다.
+  const digits = [sc('006', '금은 4,191달러로 0.83% 올랐습니다.')];
+  const spoken = [sc('006', '금은 사천백구십일 달러로 영점 팔삼 퍼센트 올랐습니다.')];
+  assert.deepEqual(numberGrowth(digits, spoken, ['006']), []);
+  // 팩트체커가 수정 제안에 적어 준 수치만큼은 늘어도 된다 — 그 수치는 검증된 것이다.
+  const vague = [sc('004', '델이 크게 올랐습니다.')];
+  const fixedDell = [sc('004', '델은 삼점 구삼 퍼센트 올랐습니다.')];
+  const allow = suggestionAllowance([{ scene_id: '004', suggestion: '델은 삼점 구삼 퍼센트 올랐습니다.' }]);
+  assert.deepEqual(numberGrowth(vague, fixedDell, ['004'], allow), []);
+  assert.equal(numberGrowth(vague, fixedDell, ['004']).length, 1, '제안 없이 보탠 수치는 막는다');
+
+  // 씬 헤더의 상한은 검증기와 같은 기준이어야 한다 — 요약 포맷(card 씬)은 6, 일반은 2~3.
+  const summary = [sc('001', '지수', { card: { kind: 'indices' } }), sc('006', '거시')];
+  assert.equal(sceneNumberCap(summary, summary[1]), 6);
+  assert.equal(sceneNumberCap(before, before[0]), 2);
+});
+
+test('요약 포맷 팩트체크는 대본이 숫자를 가져온 summary-us.json 을 함께 받는다', () => {
+  // 2026-10-07 EP-2026-0214: 업종 평균(리테일 1.96%)·종목 사유(미즈호 650달러)는 이 파일에만 있었는데
+  // 프롬프트에 없어 HIGH 미확인 6건 → 재작성 → halt. 일반 포맷은 리서치에 숫자가 있으므로 그대로 둔다.
+  const root = mkdtempSync(join(tmpdir(), 'bt-fc-snap-'));
+  try {
+    const ep = join(root, 'workspace', 'episodes', 'EP-2026-9999');
+    const day = join(root, 'workspace', 'daily-news', '2026-10-07');
+    mkdirSync(ep, { recursive: true });
+    mkdirSync(day, { recursive: true });
+    writeFileSync(join(day, 'summary-us.json'), JSON.stringify({
+      date: '2026-10-07', us_session: '2026-10-06', indices: [], macro: [{ name: 'WTI 유가', value: '$89.94', pct: 0.57 }],
+      sectors: [{ sec: '리테일', pct: 1.9582230740984459 }], movers: { up: [], down: [] },
+      reasons: { DELL: { why: '미즈호 목표주가 650달러로 상향', url: 'https://example.com/dell' } },
+      stocks: [{ t: 'DELL', name: '델', sec: '하드웨어', price: 574, pct: 3.9309058646725523 }],
+      after_hours: [], calendar: [],
+    }));
+    const text = summaryDataText({ form: 'market-summary', summary_date: '2026-10-07' }, ep);
+    const d = JSON.parse(text);
+    assert.equal(d.sectors[0].pct, 1.96, '업종 평균은 대본이 말하는 자릿수로 반올림');
+    assert.equal(d.stocks[0].pct, 3.93);
+    assert.match(text, /미즈호 목표주가 650달러/);
+    assert.match(text, /\$89\.94/);
+    assert.equal(summaryDataText({ form: 'shorts', summary_date: '2026-10-07' }, ep), '', '요약 포맷이 아니면 붙이지 않는다');
+    assert.equal(summaryDataText({ form: 'market-summary', summary_date: '2026-01-01' }, ep), '', '파일이 없으면 빈 값');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+  const src = readFileSync(FACTCHECK, 'utf8');
+  assert.match(src, /PIPELINE DATA SNAPSHOT/, '프롬프트에 원자료 블록이 들어가야 한다');
+  assert.match(src, /7a\. EXCEPTION/, '원자료와 맞는 수치는 검색 실패를 이유로 HIGH 가 되면 안 된다');
+});
+
+test('팩트체크는 claude·Gemini 가 함께 막혀도 codex 웹검색으로 넘어간다', () => {
+  // 2026-09-30 us-close(EP-2026-0196): claude 세션 한도 + Gemini 선불 크레딧 소진(402)이 겹쳐
+  // Phase 6 에서 회차가 멈췄다. 대본·메타데이터 체인엔 codex 가 있는데 팩트체크에만 없었다.
+  const src = readFileSync(FACTCHECK, 'utf8');
+  assert.match(src, /BT_FACTCHECK_ENGINE_CHAIN \|\| 'claude,gemini,codex'/, '기본 체인 끝에 codex 가 있어야 한다');
+  assert.match(src, /case 'codex':\s*\n\s*return callCodexFactcheck\(/);
+  // 읽기 전용이어야 모델이 리포트를 직접 써서 게이트를 우회하지 못한다. 검색이 임무라 --search 는 켠다.
+  assert.match(src, /\['-a', 'never', '-s', 'read-only', '--search', 'exec'/);
 });
 
 test('the browser pass pins the logged-in Chrome extension, not the runtime default', () => {
@@ -291,7 +419,12 @@ test('a browser pass that runs out of context is topped up scene by scene', () =
 
   // 무진전이면 멈춰야 한다 — 같은 씬에 codex 를 무한히 던지면 타임아웃까지 태운다.
   assert.match(source, /TOPUP_STALLED" -lt 2/);
-  assert.match(source, /BT_CHATGPT_TOPUP_MAX:-6/);
+  // 상한은 씬 수에서 나와야 한다. 6 으로 고정돼 있던 동안 7씬 슬롯은 완주가 산술적으로
+  // 불가능했다 — 첫 패스가 0장이면 남은 6회로 7장을 못 채운다 (2026-09-10 EP-2026-0147:
+  // 1/6~6/6 을 다 쓰고 5/7 에서 멈췄다).
+  assert.match(source, /BT_CHATGPT_TOPUP_MAX:-\$\(\( SLOT_SCENES \+ 2 \)\)/,
+    'top-up 상한은 SLOT_SCENES 에서 파생돼야 한다');
+  assert.ok(!/BT_CHATGPT_TOPUP_MAX:-\d/.test(source), '고정 숫자 상한은 7씬 슬롯을 막는다');
   // 한 번에 한 씬만. 프롬프트가 다시 커지면 같은 소진에 빠진다.
   assert.match(source, /씬 \$\{NEXT_SCENE\} 이미지 한 장만/);
 });
@@ -313,7 +446,8 @@ test('every autonomy guard is either read by the live pipeline or classified', (
   // Paperclip 전용. PAPERCLIP_DISABLED=1 이라 현행 크론 경로에서는 죽은 노브다.
   const legacyOnly = ['max_publish_per_day', 'max_new_series_per_day', 'accept_new_issues'];
 
-  const unclassified = guards.filter((k) =>
+  // '_' 로 시작하는 키는 사람용 주석이다 — 읽는 코드가 있을 리 없다.
+  const unclassified = guards.filter((k) => !k.startsWith('_')).filter((k) =>
     !live.includes(k) && !(k in hardcodedOn) && !legacyOnly.includes(k));
   assert.deepEqual(unclassified, [],
     `guard 가 늘었는데 읽는 코드도 분류도 없다: ${unclassified.join(', ')}`);
@@ -385,10 +519,12 @@ test('research fallback always creates S2 and S3 inputs from collected data', ()
   try {
     writeFileSync(join(outDir, 'market-us-close.json'), JSON.stringify({
       content_mode: 'closed_market_issue',
+      fetched_at: '2026-08-08T06:00:00Z',
       quotes: [{ symbol: '.INX', name: 'S&P 500', price_text: '1,234.56', change_pct: 0.5, traded_at: '2026-08-07' }],
     }));
     writeFileSync(join(outDir, 'news.json'), JSON.stringify({
-      sources: [{ items: [{ title: 'Weekend market issue', link: 'https://example.com/issue', description: 'A sourced summary.' }] }],
+      sources: [{ items: [{ title: 'Weekend market issue: oil prices and stocks', link: 'https://example.com/issue',
+        pubDate: '2026-08-07T12:00:00Z', description: 'A sourced stock market summary.' }] }],
     }));
 
     const result = spawnSync('node', [RESEARCH, '--slot', 'us-close', '--date', '2026-08-08', '--out-dir', outDir, '--fallback'], { encoding: 'utf8' });
@@ -416,13 +552,17 @@ test('market snapshot resolves weekends and exchange holidays without a calendar
   const quotes = (date) => required.map((symbol) => ({ symbol, traded_at: `${date}T16:00:00-04:00` }));
 
   assert.equal(resolveContentMode('us-close', '2026-08-08', quotes('2026-08-07'), required).content_mode, 'closed_market_issue');
-  assert.equal(resolveContentMode('us-close', '2026-08-09', quotes('2026-08-07'), required).content_mode, 'sunday_preopen');
+  // 일요일 us-close 는 한 주 결산 — 월요일이 이번 주 준비를 맡으므로 다음 주 전망을 두 번 내지 않는다(2026-09-28).
+  assert.equal(resolveContentMode('us-close', '2026-08-09', quotes('2026-08-07'), required).content_mode, 'weekly_recap');
+  // 다른 슬롯의 일요일은 그대로 sunday_preopen (지금은 주말에 돌지 않지만 수동 실행·휴장 대비).
+  assert.equal(resolveContentMode('kr-close', '2026-08-09', [], ['KOSPI']).content_mode, 'sunday_preopen');
   assert.equal(resolveContentMode('us-close', '2026-08-11', quotes('2026-08-10'), required).content_mode, 'market_close');
   assert.equal(resolveContentMode('us-close', '2026-09-08', quotes('2026-09-04'), required).content_mode, 'closed_market_issue');
 
   // 월요일 06:00 KST 는 직전 세션이 일요일 — 새 종가가 없다. 금요일 종가는 토요일 편이 이미 썼다.
   // 여기서 market_close 로 새면 대본이 이틀 묵은 수치를 "오늘"이라 쓴다 (EP-2026-0096).
-  assert.equal(resolveContentMode('us-close', '2026-08-17', quotes('2026-08-14'), required).content_mode, 'closed_market_issue');
+  // 그래서 월요일은 이번 주 준비 — 주말 이슈가 이번 주에 미칠 영향 + 이번 주 일정 (2026-09-28 운영자 요청).
+  assert.equal(resolveContentMode('us-close', '2026-08-17', quotes('2026-08-14'), required).content_mode, 'weekly_preview');
   assert.equal(resolveContentMode('us-close', '2026-08-18', quotes('2026-08-17'), required).content_mode, 'market_close');
   assert.equal(resolveContentMode('kr-close', '2026-08-17', [
     { symbol: 'KOSPI', traded_at: '2026-08-14T18:59:00+09:00' },
@@ -539,16 +679,68 @@ test('quota target accounts for the twice-daily cadence', () => {
   assert.ok(perDay < policy.quota.daily_cap_units, 'routine cost must stay under the self-imposed cap');
 });
 
-test('publishing cadence is 2 on weekdays and 1 on weekends', () => {
+/**
+ * 2026-09-16 운영자 환경에 맞춰 하루 3편으로 재편.
+ * 08~18시 일과 중 손을 못 대므로 생성 시각과 공개 시각을 떼어 놓는다:
+ *   06시 생성 → 08시 공개 (us-close)
+ *   10시 생성 → 12시 공개 (omnibus · 금요일은 realestate 가 그 자리를 쓴다)
+ *   16시 생성 → 18시 공개 (kr-close)
+ * 일과 중 두 회차는 기계가 잠들어 있으므로 pmset 기상 예약 + caffeinate 가 함께 있어야 한다.
+ */
+test('하루 3편 — 생성 06·10·16시, 공개 08·12·18시', () => {
   const routines = JSON.parse(readFileSync(ROUTINES, 'utf8'));
-  assert.deepEqual(
-    { weekday: routines.publishing_cadence?.weekday, weekend: routines.publishing_cadence?.weekend },
-    { weekday: 2, weekend: 1 });
+  const s = routines.slots;
+  assert.equal(s['us-close'].cron, '06:00');
+  assert.equal(s['us-close'].publish_at, '08:00');
+  assert.equal(s.omnibus.publish_at, '12:00');
+  // 주말은 us-close 1편만 (2026-09-28 운영자 결정) — 토·일은 한국장이 없어 16시 회차에 새 정보가 없다.
+  assert.equal(s['kr-close'].cron, 'Mon-Fri 16:00');
+  assert.equal(s['kr-close'].publish_at, '18:00');
+  // 금요일 10:00 은 realestate 가 쓰므로 omnibus 는 그날을 빼야 한다 — 겹치면 락에서 뒤쪽이 죽는다.
+  assert.equal(s.omnibus.cron, 'Mon-Thu 10:00', '주말 점심 회차는 없다');
+  assert.match(s.realestate.cron, /Fri 10:00/);
+  assert.equal(s.realestate.publish_at, '12:00');
+});
 
-  // us-close 는 매일 (토=금요일 미국장, 일=sunday_preopen)
-  assert.equal(routines.slots['us-close'].cron, '06:00');
-  // kr-close 는 평일만 — 토요일 16:00 은 이미 하루 지난 금요일 종가라 새 정보가 없다
-  assert.equal(routines.slots['kr-close'].cron, 'Mon-Fri 16:00');
+test('일일 에피소드 상한이 3편 구조를 막지 않는다', () => {
+  const a = JSON.parse(readFileSync(join(ROOT, 'config', 'autonomy-pause.json'), 'utf8'));
+  assert.ok(a.guards.max_episodes_per_day >= 3,
+    `상한 ${a.guards.max_episodes_per_day} — 3 미만이면 세 번째 회차가 Phase 0 에서 막힌다`);
+});
+
+test('파이프라인이 스스로 슬립을 막는다 — 래퍼에 의존하지 않는다', () => {
+  // install-schedule.js 가 만드는 래퍼에 caffeinate 가 있었지만(FR-S-002) 설치된 launchd 는
+  // auto-pipeline.sh 를 직접 불러서 한 번도 적용되지 않았다 (2026-09-16 EP-0156: 08:05 수면
+  // → 13:09 업로드, 10:00 예약이 3시간 전이 돼 즉시 공개).
+  const src = readFileSync(join(ROOT, 'lib', 'auto-pipeline.sh'), 'utf8');
+  assert.match(src, /caffeinate -i -w \$\$/, '파이프라인 자체가 caffeinate 를 걸어야 한다');
+  assert.match(src, /BT_NO_CAFFEINATE/, '끄는 스위치도 있어야 한다');
+});
+
+test('잠에서 막 깬 회차는 네트워크가 닿을 때까지 기다렸다가 수집한다', (t) => {
+  // 2026-09-28 점심 옴니버스: 덮개가 닫힌 채 DarkWake 틈에 시작해 시세 0/18·뉴스 0건으로
+  // 진행했고, 리서치 폴백이 "값 없음" 뿐인 문서를 만들었다. 실제로 깨어난 건 42분 뒤였다.
+  const dir = mkdtempSync(join(tmpdir(), 'bt-net-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const bin = join(dir, 'bin');
+  mkdirSync(bin);
+  const count = join(dir, 'count');
+  // 처음 두 번은 연결 실패, 세 번째에 닿는 curl. sleep 은 곧바로 돌아온다.
+  writeFileSync(join(bin, 'curl'), `#!/bin/bash\nn=$(( $(cat "${count}" 2>/dev/null || echo 0) + 1 ))\necho "$n" > "${count}"\n[ "$n" -ge 3 ]\n`, { mode: 0o755 });
+  writeFileSync(join(bin, 'sleep'), '#!/bin/bash\nexit 0\n', { mode: 0o755 });
+  const run = (tries) => spawnSync('/bin/bash', ['-c', `source "${join(ROOT, 'lib', 'guards.sh')}"\nwait_for_network ${tries}`], {
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, BARROTUBE_HOME: dir }, encoding: 'utf8', timeout: 10_000,
+  });
+  assert.equal(run(5).status, 0, '세 번째 시도에 닿으면 통과');
+  assert.equal(readFileSync(count, 'utf8').trim(), '3', '닿은 뒤에는 더 두드리지 않는다');
+  rmSync(count);
+  assert.equal(run(2).status, 1, '시도를 다 쓰면 1 — 진행 여부는 호출자가 정한다');
+
+  const src = readFileSync(AUTO, 'utf8');
+  const waitAt = src.indexOf('wait_for_network');
+  assert.ok(waitAt > 0, '파이프라인이 수집 전에 기다려야 한다');
+  assert.ok(waitAt < src.indexOf('notify_telegram "🤖 <b>${SLOT_LABEL} 시작</b>'), '시작 알림보다 앞이어야 한다');
+  assert.ok(waitAt < src.indexOf('node scripts/automation/fetch-market-snapshot.js'), '시세 수집보다 앞이어야 한다');
 });
 
 test('install-cron expands a weekday range without bash 4 associative arrays', () => {
@@ -601,4 +793,397 @@ test('the pipeline survives a bare launchd PATH', () => {
   assert.equal(r.status, 0, `must exit 0 under a bare PATH: ${r.stderr}`);
   assert.match(r.stdout, /경쟁 인텔 루틴/);
   assert.doesNotMatch(r.stdout + r.stderr, /node: command not found|node 를 찾을 수 없습니다/);
+});
+
+
+test('시드 대화 판정 전에 지연 렌더를 기다린다', () => {
+  // ChatGPT 는 대화 본문을 늦게 그린다. 열자마자 판정하면 멀쩡한 시드를 「없음」 으로 버린다
+  // (2026-09-10: 재시드해 정상 동작하던 대화를 두 슬롯이 모두 "시드 대화 없음" 으로 처리).
+  const source = readFileSync(AUTO, 'utf8');
+  // **두 프롬프트 모두** 알아야 한다. 2026-09-11 실측: top-up 에만 넣었더니
+  // 「시드 대화 없음」 이 메인 패스에서 그대로 3건씩 재발했다 — 그 문구를 내는 곳이
+  // 둘인데 한쪽만 고쳤던 것이다.
+  const seedVerdicts = source.match(/「시드 대화 없음」/g) ?? [];
+  const waitNotices = source.match(/지연 렌더/g) ?? [];
+  assert.ok(seedVerdicts.length >= 2, '시드 판정 지점이 둘 이상이라는 전제');
+  assert.equal(waitNotices.length, seedVerdicts.length,
+    '「시드 대화 없음」 을 지시하는 모든 곳에 지연 렌더 대기가 붙어야 한다');
+  assert.match(source, /최소 20초/, '판정 전 대기 시간이 명시돼야 한다');
+  assert.match(source, /새로고침해 다시/, '한 번은 새로고침하고 다시 기다려야 한다');
+});
+
+test('슬롯 스케줄이 서로 겹치지 않는다 — in-flight 락은 겹치면 뒤쪽을 죽인다', () => {
+  // 락은 설계대로 직렬화하지만, 겹치게 짜면 뒤에 온 쪽이 이미 만든 자산을 버리고 exit 2 로 죽는다.
+  // 2026-09-10 실측: kr-close(16:00, 3.5h)가 이미지 5/5 를 끝내고 Phase 8 에서
+  // realestate(17:00)가 쥔 락에 막혀 종료. 목요일 2회 모두 두 슬롯 동반 실패했다.
+  const routines = JSON.parse(readFileSync(join(ROOT, 'config', 'routines.json'), 'utf8'));
+  const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const RUN_HOURS = 4;   // 실측 최장 3.5h + 여유
+
+  const windows = [];
+  for (const [name, slot] of Object.entries(routines.slots ?? {})) {
+    const cron = String(slot.cron ?? '');
+    const hm = cron.match(/(\d{1,2}):(\d{2})/);
+    if (!hm) continue;
+    const start = Number(hm[1]) + Number(hm[2]) / 60;
+    // "Mon-Thu,Sat,Sun 10:00" 처럼 범위와 단일 요일이 섞인 표기를 그대로 편다.
+    const daySpec = cron.includes(' ') ? cron.split(' ')[0] : '';
+    let days = DAYS;
+    if (daySpec) {
+      days = [];
+      for (const tok of daySpec.split(',')) {
+        const range = tok.match(/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)-(Mon|Tue|Wed|Thu|Fri|Sat|Sun)$/);
+        if (range) {
+          const a = DAYS.indexOf(range[1]); const b = DAYS.indexOf(range[2]);
+          for (let k = a; k <= b; k += 1) days.push(DAYS[k]);
+        } else if (DAYS.includes(tok)) days.push(tok);
+      }
+      if (!days.length) days = DAYS;
+    }
+    for (const d of days) windows.push({ name, day: d, start, end: start + RUN_HOURS });
+  }
+
+  for (let i = 0; i < windows.length; i++) {
+    for (let j = i + 1; j < windows.length; j++) {
+      const a = windows[i]; const b = windows[j];
+      if (a.name === b.name || a.day !== b.day) continue;
+      const overlap = a.start < b.end && b.start < a.end;
+      assert.ok(!overlap,
+        `${a.day}: ${a.name}(${a.start}시~) 와 ${b.name}(${b.start}시~) 가 겹친다 — 뒤쪽이 락에 막혀 죽는다`);
+    }
+  }
+});
+
+/**
+ * 일일 발행 쿼터 가드는 **날짜를 못 읽는 옛 기록 하나로 전체를 막아서는 안 된다.**
+ *
+ * 2026-09-16 실측: EP-2026-0062(2026-07-12 게시)가 publishedAt 없이 uploadedAt 만
+ * 갖고 있어 Phase 0 이 `ValueError: publish timestamp missing` 로 죽었고,
+ * 새 회차가 한 편도 시작되지 못했다. 두 달 전 파일 하나가 영구 정지를 만든 것이다.
+ * 그렇다고 조용히 건너뛰면 오늘치 발행을 놓칠 수 있으므로, 파일 수정 시각을 상한으로 쓴다.
+ */
+test('발행 쿼터 가드는 uploadedAt 을 인정하고, 날짜 미상 옛 기록에 죽지 않는다', () => {
+  const src = readFileSync(new URL('../lib/guards.sh', import.meta.url), 'utf8');
+  const guard = src.slice(src.indexOf('guard_daily_quota'), src.indexOf('PY_CHECK\n  )'));
+
+  assert.match(guard, /uploadedAt/, '옛 필드명 uploadedAt 도 같은 사건으로 읽어야 한다');
+  assert.match(guard, /st_mtime/, '타임스탬프가 없으면 파일 수정 시각을 상한으로 써야 한다');
+  assert.match(guard, /\n\s*continue\n/, '오늘 것이 아니면 막지 말고 건너뛰어야 한다');
+  // 오늘 쓰인 파일에 타임스탬프가 없는 건 진짜 이상 상황이라 여전히 막는다.
+  assert.match(guard, /written today/, '오늘 쓰인 파일은 여전히 에러로 막아야 한다');
+});
+
+/**
+ * 회차가 끝난 뒤 **다음 작업이 시작할 때까지** 슬립을 막는다.
+ *
+ * launchd 는 잠든 기계를 깨우지 못한다. 예전에는 pmset 기상 예약이 root 를 요구해
+ * 무인으로 걸 수 없었고(2026-09-16 실측: `pmset: This operation must be run as root`),
+ * 그래서 이미 깨어 있는 회차가 다음 회차까지 버티는 것이 유일한 수단이었다.
+ * 그 시절엔 16:00 회차에 다리를 안 걸었다 — 오전 회차가 5시간을 더 깨워 두면 가방 속에서
+ * 배터리·발열을 태우기 때문이다.
+ *
+ * 2026-09-21 운영자가 `pmset repeat wakeorpoweron ... 15:55` 를 직접 걸면서 전제가 바뀌었다.
+ * 기상은 이제 pmset 이 맡고, 다리는 '깨우기' 가 아니라 '다음 작업까지 잠들지 않기' 만 한다.
+ * 그래서 16:00 회차에도 다리를 건다 — 마켓맵 석간판까지다(2026-09-28 20:00 → 18:00). 저녁
+ * 시간대라 대개 전원에 연결돼 있어, 다리를 안 걸던 이유(일과 중 가방 속 발열)가 적용되지 않는다.
+ */
+test('각 회차가 다음 작업까지 슬립을 막는다', () => {
+  const r = JSON.parse(readFileSync(ROUTINES, 'utf8'));
+  assert.equal(r.slots['us-close'].keep_awake_until, '10:05',
+    '10:00 점심 회차 직후까지 — 정확히 10:00 이면 경계에서 놓칠 수 있다');
+  assert.equal(r.slots['kr-close'].keep_awake_until, '18:05',
+    '18:00 마켓맵 석간판 직후까지 (2026-09-28 석간을 18시로 당김)');
+  // 석간 시각의 정본은 lib/market-map.js 의 EDITIONS 다 — 둘이 어긋나면 다리가 엉뚱한 시각에 끊긴다.
+  const mapLib = readFileSync(join(ROOT, 'scripts', 'automation', 'lib', 'market-map.js'), 'utf8');
+  assert.match(mapLib, /evening: \{ label: '석간', at: '18:00'/, '마켓맵 석간 시각과 다리가 같은 시각을 봐야 한다');
+
+  // 다리는 다음 작업을 **넘겨야** 의미가 있고, 하루를 통째로 깨워 두면 안 된다.
+  const toMin = (s) => Number(s.slice(0, 2)) * 60 + Number(s.slice(3, 5));
+  for (const [slot, nextJob] of [['us-close', '10:00'], ['kr-close', '18:00']]) {
+    const until = toMin(r.slots[slot].keep_awake_until);
+    const start = toMin(String(r.slots[slot].cron).slice(-5));
+    assert.ok(until > toMin(nextJob), `${slot} 다리가 다음 작업(${nextJob}) 전에 끊긴다`);
+    assert.ok(until - start < 12 * 60, `${slot} 다리가 12시간 상한을 넘는다`);
+  }
+});
+
+test('깨움 다리는 SLOT·ROUTINES 가 정해진 뒤에 걸린다', () => {
+  const src = readFileSync(join(ROOT, 'lib', 'auto-pipeline.sh'), 'utf8');
+  const routinesAt = src.indexOf('ROUTINES="${BARROTUBE_HOME}/config/routines.json"');
+  const bridgeAt = src.indexOf('keep_awake_until');
+  assert.ok(routinesAt > 0 && bridgeAt > routinesAt,
+    'ROUTINES 정의보다 앞서면 빈 문자열을 읽어 다리가 안 걸린다');
+  // 12시간 상한 — 역전된 시각을 만나면 하루치를 통째로 깨워 두게 된다.
+  assert.match(src, /43200/, '12시간 상한이 있어야 한다');
+});
+
+/**
+ * 슬롯 이름의 정본은 routines.json 하나여야 한다.
+ *
+ * 2026-09-16 에 omnibus 를 추가할 때 routines.json·install-cron.sh·generate-script.js 는
+ * 고쳤는데 auto-pipeline.sh 의 `case "$SLOT" in ''|us-close|kr-close|realestate)` 만 남아서,
+ * 09-17·19·20 세 번의 점심 회차가 Phase 0 에 닿지도 못하고 "Invalid slot" exit 2 로 죽었다
+ * (logs/cron/omnibus.log 0바이트, doctor 는 그동안 all GREEN). 설정에 있는 슬롯은
+ * 반드시 파이프라인 입구를 통과해야 한다 — 그것을 **실행해서** 확인한다.
+ */
+test('routines.json 의 모든 슬롯이 파이프라인 입구를 통과한다', () => {
+  const slots = Object.keys(JSON.parse(readFileSync(ROUTINES, 'utf8')).slots);
+  assert.ok(slots.length >= 3, '슬롯이 최소 3개는 있어야 이 계약이 의미가 있다');
+
+  const home = mkdtempSync(join(tmpdir(), 'bt-slot-'));
+  try {
+    mkdirSync(join(home, 'config'), { recursive: true });
+    mkdirSync(join(home, 'logs', 'audit'), { recursive: true });
+    // 입구만 보려고 마스터 스위치를 꺼 둔다 — Phase 0 에서 즉시 멈춘다(비용 0).
+    writeFileSync(join(home, 'config', 'autonomy-pause.json'),
+      JSON.stringify({ status: 'paused', guards: { auto_pipeline_enabled: true } }));
+    writeFileSync(join(home, 'config', 'routines.json'), JSON.stringify({
+      slots: Object.fromEntries(slots.map((k) => [k, { label: k, news_sources: [], publish_at: '08:00' }])),
+    }));
+    const run = (slot) => spawnSync('bash', [AUTO, '--slot', slot], {
+      cwd: ROOT, encoding: 'utf8', timeout: 60_000,
+      // BT_NO_CAFFEINATE: keep_awake_until 이 있는 슬롯은 몇 시간짜리 caffeinate 를 띄운다.
+      env: { ...process.env, BARROTUBE_HOME: home, BT_NO_CAFFEINATE: '1', BT_NO_NOTIFY: '1', DRY_RUN: '1' },
+    });
+
+    for (const slot of slots) {
+      const r = run(slot);
+      const out = (r.stdout || '') + (r.stderr || '');
+      assert.doesNotMatch(out, /Invalid slot/,
+        `${slot} 이 입구에서 거부됐다 — routines.json 에 있는 슬롯은 통과해야 한다`);
+      assert.doesNotMatch(out, /알 수 없는 슬롯/, `${slot} 을 routines.json 조회가 못 찾았다`);
+      assert.match(out, /Autonomy paused/, `${slot} 이 Phase 0 까지 도달하지 못했다`);
+    }
+
+    // 반대 방향도 지킨다 — 아무 이름이나 통과시키면 오타가 조용히 돈다.
+    const unknown = run('definitely-not-a-slot');
+    assert.equal(unknown.status, 2);
+    assert.match((unknown.stdout || '') + (unknown.stderr || ''), /알 수 없는 슬롯/,
+      '모르는 슬롯은 이름을 찍어 거부해야 한다');
+    const malformed = spawnSync('bash', [AUTO, '--slot', 'bad slot'], {
+      cwd: ROOT, encoding: 'utf8', timeout: 60_000,
+      env: { ...process.env, BARROTUBE_HOME: home, BT_NO_CAFFEINATE: '1', BT_NO_NOTIFY: '1', DRY_RUN: '1' },
+    });
+    assert.equal(malformed.status, 2);
+    assert.match(malformed.stderr, /Invalid slot/, '형식이 틀린 값은 형식 오류로 거부한다');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('슬롯 목록을 손으로 적은 곳이 남아 있지 않다', () => {
+  // 같은 고장이 다른 파일에서 반복됐다: growth-directives.js 의 SLOTS 배열에도 omnibus 가
+  // 없어서 그 회차만 성장 처방 없이 돌 뻔했다. 정본은 routines.json 이다.
+  const auto = readFileSync(AUTO, 'utf8');
+  assert.doesNotMatch(auto, /case "\$SLOT" in\s*''\|us-close/,
+    'auto-pipeline 은 고정 슬롯 목록을 두지 않는다');
+  assert.match(auto, /routines\.json/, '슬롯 유효성은 routines.json 으로 판정한다');
+
+  const directives = readFileSync(join(ROOT, 'scripts', 'automation', 'growth-directives.js'), 'utf8');
+  assert.doesNotMatch(directives, /const SLOTS = \['us-close'/,
+    'growth-directives 도 routines.json 에서 슬롯을 읽어야 한다');
+  assert.match(directives, /routines\.json/);
+});
+
+/**
+ * doctor 는 이 시스템의 유일한 감시자다. 감시 목록을 손으로 적으면 새 루틴이 늘 때마다
+ * 사각지대가 생기고, 그 사각지대에서 난 고장은 아무도 모른다 — omnibus 가 3일간,
+ * 비공개 방치가 5일간 그랬다. 목록은 설치된 plist 에서 스스로 나와야 한다.
+ */
+test('doctor 는 설치된 plist 를 열거하고, 파이프라인이 남긴 RED 를 읽는다', () => {
+  const src = readFileSync(join(ROOT, 'lib', 'doctor-cli.sh'), 'utf8');
+  assert.doesNotMatch(src, /for routine in \('us-close', 'kr-close'/,
+    '감시 목록을 손으로 적으면 새 루틴이 조용히 빠진다');
+  assert.match(src, /LaunchAgents/, '설치된 plist 에서 목록을 만든다');
+  assert.match(src, /com\.barroskills\.barrotube\.\*\.plist/);
+
+  // 파이프라인이 이미 적어 둔 실패를 doctor 가 읽지 않으면 감시가 성립하지 않는다.
+  for (const signal of ['publish_left_private', 'publish_private_backlog',
+    'motion_fallback', 'telegram_delivery', 'stale_episodes', 'power_wake_schedule']) {
+    assert.match(src, new RegExp(signal), `doctor 가 ${signal} 를 보지 않는다`);
+  }
+  // 자기 종료코드를 자기가 감시하면 한 번 RED 가 난 뒤 영원히 RED 가 된다.
+  assert.match(src, /SELF = 'doctor-daily'/, 'doctor 는 자신을 감시 대상에서 뺀다');
+
+  // 비공개 잔고는 업로드 시점 기록이 아니라 지금 상태로 센다 — 사람이 나중에 공개한 편을
+  // 7일 내내 RED 로 세던 오탐(2026-09-29 EP-0176·0177, 실제 공개).
+  const backlog = src.slice(src.indexOf('backlog = []') - 900, src.indexOf("emit('publish_private_backlog'"));
+  assert.match(backlog, /youtube-state\.json/, '방금 동기화한 실제 상태를 봐야 한다');
+  assert.match(backlog, /now_privacy != 'private'[\s\S]{0,40}continue/);
+});
+
+/**
+ * launchd 의 last exit code 는 그 라벨이 다시 돌 때까지 남는다. 2026-10-02 07:10 doctor 가
+ * 전날 16:00 kr-close 실패로 RED 를 울렸다 — 그 슬롯은 20:06 재실행으로 이미 발행돼 있었고,
+ * 메시지에 회차 시각이 없어 아침에 받은 운영자는 방금 끝난 미국장 회차가 깨진 줄 알았다.
+ */
+test('doctor 는 남은 실패 종료코드에 회차를 적고, 발행으로 복구된 회차로는 RED 를 울리지 않는다', () => {
+  const src = readFileSync(join(ROOT, 'lib', 'doctor-cli.sh'), 'utf8');
+  const py = src.slice(src.indexOf("<<'PY'\n") + "<<'PY'\n".length, src.indexOf('\nPY\n'));
+  const tmp = mkdtempSync(join(tmpdir(), 'bt-doctor-cron-'));
+  try {
+    // 가짜 launchctl — kr-close 의 마지막 회차는 exit 1 로 끝났다.
+    const bin = join(tmp, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'launchctl'),
+      '#!/bin/sh\nprintf "\\tstate = not running\\n\\truns = 4\\n\\tlast exit code = 1\\n"\n', { mode: 0o755 });
+    // 매일 3시간 전 정시에 도는 회차 — 마지막 회차가 그 시각 하나로 정해진다.
+    const fired = new Date(Date.now() - 3 * 3600_000);
+    fired.setSeconds(0, 0);
+    const agents = join(tmp, 'home', 'Library', 'LaunchAgents');
+    mkdirSync(agents, { recursive: true });
+    writeFileSync(join(agents, 'com.barroskills.barrotube.kr-close.plist'),
+      '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>'
+      + '<key>Label</key><string>com.barroskills.barrotube.kr-close</string><key>StartCalendarInterval</key>'
+      + `<dict><key>Hour</key><integer>${fired.getHours()}</integer><key>Minute</key><integer>${fired.getMinutes()}</integer></dict>`
+      + '</dict></plist>');
+
+    const krClose = (events) => {
+      const audit = join(tmp, 'root', 'logs', 'audit');
+      rmSync(audit, { recursive: true, force: true });
+      mkdirSync(audit, { recursive: true });
+      for (const [min, ev] of events) {
+        const at = new Date(fired.getTime() + min * 60_000);
+        const day = new Date(at.getTime() + 9 * 3600_000).toISOString().slice(0, 10);   // 감사 로그는 KST 날짜별
+        writeFileSync(join(audit, `${day}.jsonl`), JSON.stringify({ at: at.toISOString(), ...ev }) + '\n', { flag: 'a' });
+      }
+      const r = spawnSync('python3', ['-', join(tmp, 'root')], {
+        input: py, encoding: 'utf8', timeout: 60_000,
+        env: { ...process.env, HOME: join(tmp, 'home'), PATH: `${bin}:${process.env.PATH}` },
+      });
+      assert.equal(r.status, 0, r.stderr);
+      const line = r.stdout.split('\n').find((l) => l.startsWith('"cron_kr-close"'));
+      return JSON.parse(`{${line}}`)['cron_kr-close'];
+    };
+    const hhmm = `${String(fired.getHours()).padStart(2, '0')}:${String(fired.getMinutes()).padStart(2, '0')}`;
+    const failed = [10, { event: 'auto_pipeline_fail', detail: 'slot=kr-close ep=EP-2099-0001 stage=Phase 6 factcheck detail=run-factcheck.js 실패' }];
+    const rerun = [60, { event: 'auto_pipeline_ep_created', detail: 'slot=kr-close ep=EP-2099-0002 topic=재실행' }];
+    const published = [120, { action: 'published', episode_id: 'EP-2099-0002' }];   // RESUME 을 손으로 이어 붙인 발행
+
+    // 복구 안 된 회차: RED 그대로, 다만 어느 회차인지 적는다.
+    let c = krClose([failed]);
+    assert.equal(c.status, 'RED', c.detail);
+    assert.match(c.detail, new RegExp(`${hhmm} 회차 Phase 6 factcheck 실패`));
+
+    // 같은 슬롯이 그 뒤 발행까지 갔으면 알림(RED) 대상이 아니다.
+    c = krClose([failed, rerun, published]);
+    assert.equal(c.status, 'YELLOW', c.detail);
+    assert.match(c.detail, /EP-2099-0002 .*발행으로 복구됨/);
+
+    // 발행 뒤에 다시 깨졌으면 복구가 아니다.
+    c = krClose([failed, rerun, published,
+      [150, { event: 'auto_pipeline_fail', detail: 'slot=kr-close ep=EP-2099-0003 stage=Phase 8 produce detail=x' }]]);
+    assert.equal(c.status, 'RED', c.detail);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('노드 루틴은 잠에서 막 깬 틈에도 네트워크를 기다린 뒤 돈다', () => {
+  // 2026-09-28 weekly-marketing(월 09:00): DarkWake 틈에 RSS 가 전부 fetch failed → 0건 → exit 5.
+  const src = readFileSync(join(ROOT, 'lib', 'run-node.sh'), 'utf8');
+  assert.ok(src.indexOf('wait_for_network') > 0 && src.indexOf('wait_for_network') < src.indexOf('exec node'),
+    'run-node.sh 가 node 를 띄우기 전에 네트워크를 기다려야 한다');
+});
+
+test('수집·게시하는 셸 루틴은 모두 네트워크를 기다린 뒤 첫 요청을 낸다', () => {
+  // 2026-09-29: 덮개가 닫힌 채 DarkWake 틈에 뜬 growth 15:40 회차가 fetch timeout 으로 빠졌다.
+  // auto-pipeline·run-node·krclose 에만 대기가 있었고, 셸 루틴 넷은 곧바로 요청을 냈다.
+  const cases = [
+    ['growth-pipeline.sh', 'run_step "fetch"'],
+    ['competitor-pipeline.sh', 'check-oauth-expiry.js'],
+    ['publish-resume.sh', 'node scripts/automation/run-episode.js --episode "$ep_id"'],
+    ['market-map-cron.sh', 'node scripts/automation/market-map.js'],
+  ];
+  for (const [file, firstRequest] of cases) {
+    const src = readFileSync(join(ROOT, 'lib', file), 'utf8');
+    const wait = src.indexOf('wait_for_network');
+    assert.ok(wait > 0, `${file}: 네트워크 대기가 없다`);
+    assert.ok(src.indexOf(firstRequest) > wait, `${file}: 첫 요청보다 대기가 앞이어야 한다`);
+  }
+  assert.match(readFileSync(join(ROOT, 'lib', 'market-map-cron.sh'), 'utf8'), /source "\$\{BARROTUBE_HOME\}\/lib\/guards\.sh"/,
+    'market-map-cron 은 guards.sh 를 불러야 wait_for_network 를 쓸 수 있다');
+});
+
+test('실패 알림이 안내하는 로그 경로가 크론이 실제로 쓰는 파일이다', () => {
+  // 2026-09-30 kr-close 알림: "tail -50 …/logs/cron/routine-kr-close.log" — 없는 파일이었다.
+  // install-cron 은 plist StandardOutPath 에 logs/cron/<routine>.log 를 박는다.
+  const install = readFileSync(INSTALL, 'utf8');
+  assert.match(install, /logs\/cron\/\$\{routine\}\.log/, 'install-cron 의 로그 이름 규칙');
+  const src = readFileSync(AUTO, 'utf8');
+  assert.match(src, /CRON_LOG_NAME="\$\{SLOT\}"/, '슬롯 회차의 알림 로그 이름은 루틴 이름과 같아야 한다');
+  assert.match(src, /logs\/cron\/\$\{CRON_LOG_NAME\}\.log/);
+});
+
+test('install-cron 이 문서·코드가 가리키는 wake 하위명령을 실제로 갖는다', () => {
+  // auto-pipeline.sh 주석과 doctor 메시지가 `lib/install-cron.sh wake` 를 안내하는데
+  // 그런 하위명령이 없었다 — 없는 명령을 알려 주면 운영자가 두 번 헤맨다.
+  const r = spawnSync('bash', [INSTALL, 'wake'], { cwd: ROOT, encoding: 'utf8', timeout: 30_000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /pmset repeat wakeorpoweron/, '설정 명령을 그대로 찍어 줘야 한다');
+});
+
+/**
+ * 2026-09-21 EP-2026-0169 회귀 — 같은 그림이 두 씬에 박혀도 게이트가 통과시켰다.
+ *
+ * media_assets_ready 는 **영상**에는 SHA-256 중복 검사를 걸어 두고 **이미지**에는
+ * 존재 검사만 했다. 브라우저 워커가 blob 다운로드에 실패하면 $TMPDIR/browser-use/assets 를
+ * -mmin -20 으로 뒤져 직전 씬이 남긴 자산을 복사하는 폴백이 있는데, 그때 워커는
+ * "생성·검수해 저장했습니다" 라고 보고한다. 그날 씬 002·005 가 각각 그렇게 만들어졌고
+ * 사람이 md5 를 손으로 재서야 발견했다. 하류 어디에도 이미지 중복 검사는 없었다.
+ */
+test('media_assets_ready 가 같은 바이트의 씬 스틸을 중복으로 잡는다', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bt-dup-'));
+  try {
+    const imgs = join(dir, '40_assets', 'images');
+    mkdirSync(imgs, { recursive: true });
+    for (let i = 1; i <= 5; i += 1) {
+      writeFileSync(join(imgs, `scene_00${i}.png`), `unique-${i}`.padEnd(64, 'x'));
+    }
+    // 함수만 떼어 내 부른다 — auto-pipeline 을 통째로 source 하면 파이프라인이 돈다.
+    const fn = readFileSync(AUTO, 'utf8').match(/^media_assets_ready\(\) \{[\s\S]*?\n\}/m);
+    assert.ok(fn, 'media_assets_ready 를 찾지 못했다');
+    const call = (base) => spawnSync('bash', ['-c',
+      `${fn[0]}\nmedia_assets_ready "${base}" stills; echo "MISSING=$MEDIA_ASSETS_MISSING"`],
+      { encoding: 'utf8', timeout: 30_000 });
+
+    assert.match(call(dir).stdout, /MISSING=$/m, '5장이 전부 다르면 통과해야 한다');
+
+    // 씬 002 를 씬 001 의 바이트 복사본으로 — 그날 실제로 일어난 일이다.
+    writeFileSync(join(imgs, 'scene_002.png'), readFileSync(join(imgs, 'scene_001.png')));
+    const dup = call(dir).stdout;
+    assert.match(dup, /images\/scene_002\.png\(duplicate bytes\)/,
+      '같은 바이트의 스틸은 missing 으로 잡혀 top-up 이 다시 만들어야 한다');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('중복으로 걸린 스틸은 재생성 전에 지운다', () => {
+  // 파일을 남겨 두면 덮어쓰기 실패 시 중복이 그대로 발행되고, 워커가 "이미 있음" 으로
+  // 판단할 여지도 남는다. 2026-09-21 에는 사람이 손으로 지워야 재생성이 돌았다.
+  const src = readFileSync(AUTO, 'utf8');
+  // NEXT_SCENE 을 고른 직후 구간을 본다 — 제거는 워커를 부르기 **전에** 일어나야 한다.
+  const at = src.indexOf("NEXT_SCENE=$(printf");
+  assert.ok(at > 0, 'top-up 루프의 NEXT_SCENE 선택부를 찾지 못했다');
+  const window = src.slice(at, src.indexOf('run_with_timeout 900 codex', at));
+  assert.match(window, /duplicate bytes/, 'top-up 루프가 중복 표기를 읽어야 한다');
+  assert.match(window, /rm -f "\$\{MEDIA_BASE\}\/40_assets\/images\/scene_\$\{NEXT_SCENE\}\.png"/,
+    '중복 스틸을 지우고 다시 만들어야 한다');
+});
+
+test('us-close 주말·월요일 모드 — 리서치·파이프라인·설정이 같은 이름을 쓴다 (2026-09-28)', () => {
+  const research = readFileSync(join(ROOT, 'scripts/automation/research-brief.js'), 'utf8');
+  const pipeline = readFileSync(join(ROOT, 'lib/auto-pipeline.sh'), 'utf8');
+  const cfg = JSON.parse(readFileSync(join(ROOT, 'config/routines.json'), 'utf8'));
+  for (const mode of ['weekly_recap', 'weekly_preview']) {
+    assert.ok(research.includes(`${mode}(`), `리서치 프롬프트에 ${mode} 정의`);
+    assert.ok(pipeline.includes(`${mode})`), `파이프라인이 ${mode} 토픽 접두어를 단다`);
+    assert.ok(cfg.slots['us-close'].closed_market_policy.includes(mode), `us-close 정책에 ${mode}`);
+  }
+  assert.match(research, /주말\(토·일\)에 나온 뉴스를 반드시 검색/, '월요일은 주말 이슈를 확인한다');
+  assert.match(research, /이번 주 주요 일정/, '월요일은 이번 주 일정을 정리한다');
+  assert.match(pipeline, /us-close:1\) CONTENT_MODE="weekly_preview"/);
+  assert.match(pipeline, /us-close:7\) CONTENT_MODE="weekly_recap"/);
+  assert.equal(cfg.publishing_cadence.weekend, 1);
 });

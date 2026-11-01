@@ -105,6 +105,9 @@ Regenerate platform distribution with the CapCut export as source:
 
 Timing step ids: `distribution_package` and `final_qa`.
 
+이 경로는 **단독(릴/Instagram) 모드** 것이다. barrotube EP 모드는 같은 이름의 스크립트를
+스킬 안에 갖는다: `../barrotube/scripts/automation/build-distribution.js`.
+
 ```bash
 node ~/youtube-co/scripts/automation/build-distribution.js \
   --episode <reel> \

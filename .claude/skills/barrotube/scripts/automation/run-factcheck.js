@@ -30,7 +30,8 @@
  * 판정 근거는 lib/evidence-verify.js 헤더 참조.
  */
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
@@ -53,7 +54,7 @@ const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
  * Phase 6 이 통째로 멈춘 전력이 있다. Gemini 는 groundingMetadata 라는
  * 더 강한 증거를 주므로 뒤에 남겨 폴백으로 쓴다.
  */
-const ENGINE_CHAIN = (process.env.BT_FACTCHECK_ENGINE_CHAIN || 'claude,gemini')
+const ENGINE_CHAIN = (process.env.BT_FACTCHECK_ENGINE_CHAIN || 'claude,gemini,codex')
   .split(',').map((e) => e.trim()).filter(Boolean);
 
 function buildSystemPrompt(searchTool) {
@@ -71,14 +72,33 @@ RULES:
    - MED: 맥락 누락, 과장 표현, 불완전한 인용
    - LOW: 사소한 표현 차이, 최신 데이터와 미세 차이
 5. For HIGH/MED, always provide "suggested_revision" (corrected Korean sentence, same 스타일/길이).
-6. Cite "evidence" with source URL or official document name. Min 2 independent sources for HIGH.
+   The suggestion is read aloud to viewers. Never put verification notes in it — no 「스냅샷 기준」, 「확인되지 않았습니다」, 「검증되지 않았습니다」, 「본문을 확인하지 못해」, 「추정입니다」.
+   If a fact cannot be supported, suggest the sentence without that fact (narrow it or drop the clause); if a cause is only reported, attribute it to the outlet (「<매체>는 …라고 전했습니다」).
+6. Cite "evidence" with the source URL itself. When the source is in the attached pipeline research, copy its URL exactly as written there — a markdown link's target in parentheses IS the URL; a name like "FXStreet(09-28)" alone is not a citation. Use an official document name only when no URL exists. Min 2 independent sources for HIGH.
 7. If a claim cannot be verified via search, mark HIGH with risk_reason="unverifiable".
+7a. EXCEPTION — a claim whose figures match the attached PIPELINE DATA SNAPSHOT for the same instrument and session
+    (index/sector/stock change, price, macro value, calendar time, or a stock reason with its URL) is verified BY THAT
+    SNAPSHOT: verdict=사실, risk=LOW, evidence="pipeline snapshot summary-us.json: <field>=<value>" plus the reason URL
+    when the snapshot gives one. A sector figure is the snapshot's own weighted average, so search cannot confirm it
+    and must not be asked to. Rule 7 applies only when neither the snapshot nor search supports the claim.
 8. Bind every market claim to the exact date and traded_at in the attached pipeline research. Never substitute the previous trading day's close.
 9. Treat pipeline snapshots as primary dated evidence, then corroborate them by searching the exact YYYY-MM-DD plus the quoted value. If search results conflict, explain the date mismatch instead of silently choosing another session.
-9a. SAME INSTRUMENT, SAME DAY, DIFFERENT TIMESTAMPS — decide by this order, do not re-decide per run:
-    (a) the official session close (KRX 15:30 for KOSPI/KOSDAQ/FX, US 16:00 ET for US indices) is canonical for a close-briefing episode;
+9a. SAME INSTRUMENT, SAME DAY, DIFFERENT TIMESTAMPS — decide by this order, do not re-decide per run.
+    FIRST fix which session the episode covers, from the slot and the attached research date:
+      * us-close  = the overnight US session that ended this morning KST. Its reference is the pipeline
+        snapshot taken after the US close (typically 05:00-06:00 KST today), NOT yesterday's KRX 15:30 close.
+      * kr-close   = today's domestic session. Its reference is the KRX 15:30 close.
+    A close from a DIFFERENT day or a DIFFERENT session is not evidence against the script — it is a
+    different measurement. Check the article's own date before using it to contradict a number.
+    Within the session the episode covers:
+    (a) the official close of THAT session is canonical;
     (b) an intraday or post-close snapshot is NOT a substitute for the close — it may only be cited as an intraday high/low, and only if labelled as such.
     When the pipeline snapshot and same-day market-wrap reporting disagree on a close value, cite the official close and require the script to state the basis (예: "15:30 종가 기준"). Never flip between the two across runs; name the basis explicitly in "evidence".
+9c. A number that matches the attached pipeline snapshot is NOT 부정확 just because search did not confirm it.
+    Absence of confirmation is 미확인 (LOW/MED), never 부정확. Rate it 부정확 only when a source CONTRADICTS it
+    for the same instrument, the same session, and the same measure (close vs intraday high vs open) — and name
+    which of those three differs. Rewrites are budgeted (3 per episode); a false 부정확 makes the reviser replace
+    a correct number with a wrong one and burns the budget the real defects needed.
 9b. CAUSATION MUST BE DATED. A cause that happened on an earlier date cannot be presented as the same-day trigger. When a script attributes a same-day move, search that day's market-wrap articles and check which trigger they name. If the script's cause predates the move, verdict=부정확 and the suggested_revision must use the trigger the same-day reporting identifies.
 10. EVERY URL you put in "evidence" is fetched and checked by the pipeline after you answer. A URL that returns 404 or whose domain does not resolve is treated as a fabricated citation and escalates that claim to HIGH. Only cite a URL you actually retrieved from search results — never reconstruct or guess one from a pattern. Cite the specific document, not a section or homepage.
 
@@ -102,6 +122,37 @@ OUTPUT SCHEMA:
 const SYSTEM_PROMPT = buildSystemPrompt('google_search');
 
 function readIfExists(p) { return existsSync(p) ? readFileSync(p, 'utf-8') : ''; }
+
+/**
+ * 「미국 증시 요약」 대본이 숫자를 가져온 원자료(summary-us.json)를 프롬프트용 문자열로 돌려준다.
+ *
+ * 이 포맷의 업종 평균·종목 등락률·종목 사유는 리서치(10_)·데스크(05_)가 아니라 이 파일에서
+ * 바로 온다. 파일을 안 주면 팩트체커는 맞는 숫자를 「검색으로 확인 못 함」 = HIGH 미확인으로
+ * 잡고, 재작성기가 그걸 고치려다 수치를 덧붙여 계약을 깨 회차가 멈춘다 — 2026-10-07
+ * EP-2026-0214: 리테일 1.96%·WTI 89.94달러·델(미즈호 목표가 650달러)이 전부 이 파일에 있었는데
+ * HIGH 6건으로 막혔다. 요약 포맷이 아니거나 파일이 없으면 빈 문자열.
+ */
+export function summaryDataText(fm, episodeDir) {
+  if (fm?.form !== 'market-summary' || !fm.summary_date) return '';
+  const p = join(episodeDir, '..', '..', 'daily-news', String(fm.summary_date), 'summary-us.json');
+  if (!existsSync(p)) return '';
+  let d;
+  try { d = JSON.parse(readFileSync(p, 'utf-8')); } catch { return ''; }
+  const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : v ?? null);
+  return JSON.stringify({
+    source: 'summary-us.json (Yahoo Finance 종가 시세 · 업종 = 종목 등락률의 가중 평균 · reasons = 종목 사유와 출처 URL)',
+    date: d.date,
+    us_session: d.us_session,
+    indices: d.indices,
+    macro: d.macro,
+    sectors: (d.sectors || []).map((s) => ({ sec: s.sec, pct: r2(s.pct) })),
+    movers: d.movers,
+    reasons: d.reasons,
+    after_hours: d.after_hours,
+    calendar: d.calendar,
+    stocks: (d.stocks || []).map((s) => ({ t: s.t, name: s.name, sec: s.sec, price: s.price, pct: r2(s.pct) })),
+  });
+}
 
 function parseScriptFrontmatter(scriptText) {
   const m = scriptText.match(/^---\n([\s\S]*?)\n---\n/);
@@ -166,6 +217,55 @@ function callClaudeFactcheck(userPrompt, model = 'sonnet', timeoutSec = 900) {
     attempts: 1,
     retried: false,
   };
+}
+
+/**
+ * codex exec --search 로 같은 JSON 을 받는다 — claude 와 gemini 가 함께 막힌 날의 마지막 폴백.
+ *
+ * 2026-09-30 us-close(EP-2026-0196): claude 세션 한도와 Gemini 선불 크레딧 소진(402)이 겹쳐
+ * Phase 6 에서 회차가 통째로 멈췄다. 대본·메타데이터 체인에는 codex 가 있는데 여기만 없었다.
+ * 읽기 전용 샌드박스라 모델이 35_factcheck.md 를 직접 쓸 수 없고, grounded 는 claude 경로와
+ * 똑같이 호출자가 인용 URL 실존 검증으로 확정한다.
+ */
+function callCodexFactcheck(userPrompt, timeoutSec = 900) {
+  const prompt = [
+    buildSystemPrompt('web search'),
+    '', '───────────────', '',
+    userPrompt,
+    '', '───────────────',
+    '출력 규칙: JSON 객체 **하나만** 출력해라. 코드펜스·머리말·요약을 붙이지 마라.',
+    '파일을 쓰지 마라. 최종 답변에 JSON 만 낸다.',
+  ].join('\n');
+  const outFile = join(tmpdir(), `bt-factcheck-codex-${process.pid}-${Date.now()}.txt`);
+  try {
+    const r = spawnSync('codex', ['-a', 'never', '-s', 'read-only', '--search', 'exec', '--ephemeral', '-o', outFile, prompt], {
+      cwd: resolve(import.meta.dirname, '../..'),
+      encoding: 'utf-8',
+      timeout: timeoutSec * 1000,
+      maxBuffer: 10 * 1024 * 1024,
+      env: process.env,
+    });
+    if (r.error?.code === 'ENOENT') throw new Error('codex CLI 를 찾을 수 없다 (launchd PATH 확인)');
+    if (r.signal === 'SIGTERM') throw new Error(`codex 타임아웃 (${timeoutSec}s)`);
+    if (r.status !== 0) throw new Error(`codex 종료코드 ${r.status}: ${(r.stderr || '').slice(-300)}`);
+    const text = existsSync(outFile) ? readFileSync(outFile, 'utf-8').trim() : '';
+    if (!text) throw new Error('codex 응답이 비었다');
+    return {
+      text,
+      backend: 'codex-websearch',
+      groundingMeta: null,
+      webSearchQueries: [],
+      evidenceUrls: extractEvidenceUrls(text),
+      groundedByChunks: false,
+      groundedByQueries: false,
+      grounded: false,            // URL 실존 검증 후 호출자가 확정한다
+      usage: null,
+      attempts: 1,
+      retried: false,
+    };
+  } finally {
+    try { unlinkSync(outFile); } catch { /* 없으면 그만 */ }
+  }
 }
 
 async function callGeminiWithSearch(userPrompt, model, opts = {}) {
@@ -242,6 +342,45 @@ async function callGeminiWithGroundingEnforced(userPrompt, model) {
   return { ...second, attempts: 2, retried: true, retried_grounded: second.grounded };
 }
 
+/**
+ * 모델이 한글을 \u 이스케이프로 뱉다가 흘리는 오타를 고친다.
+ *
+ * 2026-09-14 EP-2026-0154: "6억\uub2ec\ub7ec" — 달러(\ub2ec\ub7ec)를 쓰면서 u 가 하나
+ * 더 붙었다. JSON.parse 는 여기서 죽고, run-factcheck 는 그대로 종료했다. 그 결과
+ * 35_factcheck.md 가 **직전 판(script_revision 4)으로 남았고**, 손으로 고친 대본
+ * (revision 5)이 옛 리포트로 심사받을 뻔했다. 한 글자 오타로 회차 하나가 멈춘다.
+ */
+function repairJSONEscapes(raw) {
+  return raw
+    // \uu ub2ec → \ub2ec (u 중복)
+    .replace(/\\u{2,}(?=[0-9a-fA-F]{4})/g, '\\u')
+    // 그래도 4자리 hex 가 아니면 이스케이프가 아니다 — 리터럴로 낮춰 파싱은 살린다
+    .replace(/\\u(?![0-9a-fA-F]{4})/g, '\\\\u');
+}
+
+/**
+ * 파싱 실패 시 같은 엔진으로 몇 번까지 다시 부를지. 1 은 재시도 없음.
+ * 2 인 이유: 2026-09-23 실측에서 한 번 더 부르니 통과했고, 세 번째까지 끌면
+ * 팩트체크가 회차 예산을 먹는다.
+ */
+const PARSE_ATTEMPTS = Number(process.env.BT_FACTCHECK_PARSE_ATTEMPTS || 2);
+
+/**
+ * 깨진 응답을 통째로 파일에 남긴다.
+ *
+ * 로그에는 1000자만 찍혔는데 정작 문제는 3106번째 문자였다 — 사후에 원인을 볼 수 없었다.
+ * 다음 번에는 파일을 열면 된다.
+ */
+function dumpRawOutput(episodeId, engine, attempt, err) {
+  try {
+    const dir = resolve(import.meta.dirname, '..', '..', 'logs', 'factcheck-raw');
+    mkdirSync(dir, { recursive: true });
+    const f = join(dir, `${episodeId}-${engine}-${attempt}-${Date.now()}.txt`);
+    writeFileSync(f, `// ${err.message}\n\n${err.rawText ?? ''}`);
+    console.error(`   📄 깨진 응답 전문: ${f}`);
+  } catch { /* 진단용이라 실패해도 본류를 막지 않는다 */ }
+}
+
 function extractJSON(text) {
   const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   const candidate = (fence ? fence[1] : text).trim();
@@ -250,7 +389,18 @@ function extractJSON(text) {
   if (first === -1 || last === -1 || last <= first) {
     throw new Error(`Unable to locate JSON object in model output:\n${text.slice(0, 500)}`);
   }
-  return JSON.parse(candidate.slice(first, last + 1));
+  const body = candidate.slice(first, last + 1);
+  try { return JSON.parse(body); }
+  catch (e) {
+    const repaired = repairJSONEscapes(body);
+    // 덤프가 원문을 볼 수 있게 에러에 실어 보낸다.
+    if (repaired === body) { e.rawText = text; throw e; }
+    let out;
+    try { out = JSON.parse(repaired); }
+    catch (e2) { e2.rawText = text; throw e2; }
+    console.error('   ⚠ JSON 이스케이프 오타를 고쳐서 파싱했다 (\\u 중복)');
+    return out;
+  }
 }
 
 function classify(claims) {
@@ -395,7 +545,7 @@ async function main() {
   const { values } = parseArgs({
     options: {
       episode: { type: 'string', short: 'e' },
-      engine: { type: 'string' },              // claude | gemini | auto(기본)
+      engine: { type: 'string' },              // claude | gemini | codex | auto(기본)
       force: { type: 'boolean', default: false },
       model: { type: 'string', short: 'm' },
       platform: { type: 'string', short: 'p' },
@@ -403,7 +553,7 @@ async function main() {
     },
   });
   if (!values.episode) {
-    console.error('Usage: run-factcheck.js --episode <EP-YYYY-NNNN> [--platform shorts|long] [--engine claude|gemini] [--force] [--model <model>]');
+    console.error('Usage: run-factcheck.js --episode <EP-YYYY-NNNN> [--platform shorts|long] [--engine claude|gemini|codex] [--force] [--model <model>]');
     process.exit(1);
   }
 
@@ -454,11 +604,13 @@ async function main() {
   const episodeId = fm.episode_id || 'EP-UNKNOWN';
   const channelId = fm.channel_id || 'econ-daily';
   const scriptRevision = fm.revision ?? 1;
+  const summaryData = summaryDataText(fm, absEp);
 
   const userPrompt = [
     '[AUTHORITATIVE PIPELINE MARKET RESEARCH]',
     researchText || '(not available)',
     ...(deskText ? ['', '[DESK BRIEFING — 기자단 원본 근거·출처 URL]', deskText] : []),
+    ...(summaryData ? ['', '[PIPELINE DATA SNAPSHOT — 이 대본의 지수·업종·종목 수치와 종목 사유는 이 데이터에서 왔다]', summaryData] : []),
     '',
     '[CONTENT STRATEGY AND FACT BOUNDARIES]',
     strategyText || '(not available)',
@@ -480,26 +632,53 @@ async function main() {
         return callClaudeFactcheck(userPrompt, values.model || 'sonnet');
       case 'gemini':
         return callGeminiWithGroundingEnforced(userPrompt, values.model || DEFAULT_MODEL);
+      case 'codex':
+        return callCodexFactcheck(userPrompt);
       default:
-        throw new Error(`알 수 없는 엔진: ${name} (가능: claude | gemini)`);
+        throw new Error(`알 수 없는 엔진: ${name} (가능: claude | gemini | codex)`);
     }
   };
 
   let factcheckResp;
+  let result;
   const failures = [];
   for (const [i, name] of chain.entries()) {
-    try {
-      console.error(`🔍 Factcheck: ${episodeId} (engine=${name}${i > 0 ? `, 폴백 ${i}/${chain.length - 1}` : ''}, force_grounding=${FORCE_GROUNDING})`);
-      factcheckResp = await runEngine(name);
-      break;
-    } catch (e) {
-      failures.push(`${name}: ${String(e.message).slice(0, 120)}`);
-      if (i === chain.length - 1) {
-        console.error(`❌ 모든 엔진 실패:\n${failures.map((f) => `   - ${f}`).join('\n')}`);
-        throw e;
+    let lastErr = null;
+    // **파싱까지 성공해야 이 엔진이 성공한 것이다.**
+    //
+    // 예전에는 JSON 파싱이 이 루프 밖에 있었다. 모델이 깨진 JSON 을 한 번 뱉으면
+    // 폴백 엔진으로 넘어가지도, 다시 부르지도 못하고 그대로 exit(2) → 파이프라인이
+    // 회차 전체를 접었다. 2026-09-23 us-close(EP-2026-0175)가 그렇게 죽었다:
+    // "Expected double-quoted property name at position 3106". 같은 대본으로 다시
+    // 부르니 한 번에 통과했다 — 체계적 결함이 아니라 산발적 불량 응답이다.
+    for (let attempt = 1; attempt <= PARSE_ATTEMPTS; attempt += 1) {
+      try {
+        console.error(`🔍 Factcheck: ${episodeId} (engine=${name}${i > 0 ? `, 폴백 ${i}/${chain.length - 1}` : ''}${attempt > 1 ? `, 재시도 ${attempt - 1}/${PARSE_ATTEMPTS - 1}` : ''}, force_grounding=${FORCE_GROUNDING})`);
+        const resp = await runEngine(name);
+        result = extractJSON(resp.text);
+        factcheckResp = resp;
+        lastErr = null;
+        break;
+      } catch (e) {
+        lastErr = e;
+        if (/JSON|parse/i.test(String(e.message))) {
+          dumpRawOutput(episodeId, name, attempt, e);
+          if (attempt < PARSE_ATTEMPTS) {
+            console.error(`   ⚠ 응답 JSON 이 깨졌다 — 같은 엔진으로 다시 부른다 (${attempt}/${PARSE_ATTEMPTS - 1})`);
+            continue;
+          }
+        }
+        break;   // 파싱 외 실패이거나 재시도 소진 — 다음 엔진으로
       }
-      console.error(`   ⚠ ${failures.at(-1)} → 다음 엔진`);
     }
+    if (!lastErr) break;
+
+    failures.push(`${name}: ${String(lastErr.message).slice(0, 120)}`);
+    if (i === chain.length - 1) {
+      console.error(`❌ 모든 엔진 실패:\n${failures.map((f) => `   - ${f}`).join('\n')}`);
+      throw lastErr;
+    }
+    console.error(`   ⚠ ${failures.at(-1)} → 다음 엔진`);
   }
 
   const {
@@ -515,15 +694,7 @@ async function main() {
     groundedByQueries = false,
   } = factcheckResp;
 
-  let result;
-  try { result = extractJSON(text); }
-  catch (e) {
-    console.error(`❌ JSON parse failed: ${e.message}`);
-    console.error('--- raw output ---');
-    console.error(text.slice(0, 1000));
-    process.exit(2);
-  }
-
+  // 파싱은 엔진 루프 안에서 끝났다 (result 는 거기서 채워진다).
   if (!Array.isArray(result.claims)) {
     console.error(`❌ result.claims is not an array`);
     process.exit(2);
